@@ -9,11 +9,14 @@ import { fileURLToPath } from 'node:url';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+const publicDir = path.resolve(__dirname, 'public');
 
 const app = express();
 const port = safeInteger(process.env.PORT, 3000, 1, 65535);
 const isProduction = process.env.NODE_ENV === 'production';
-const siteUrl = normalizeSiteUrl(process.env.SITE_URL || `http://localhost:${port}`);
+const launchMode = clean(process.env.LAUNCH_MODE || (isProduction ? 'staging' : 'development'), 20).toLowerCase();
+const isLiveLaunch = launchMode === 'live';
+const siteUrl = normalizeSiteUrl(process.env.SITE_URL || process.env.RENDER_EXTERNAL_URL || `http://localhost:${port}`);
 const priceCents = safeInteger(process.env.AUDIT_PRICE_CENTS, 14900, 50, 10000000);
 const storageDir = path.resolve(process.env.STORAGE_DIR || path.join(__dirname, 'data'));
 const contactEmail = clean(process.env.CONTACT_EMAIL || '', 320);
@@ -28,6 +31,7 @@ const stripe = process.env.STRIPE_SECRET_KEY
   : null;
 
 validateProductionConfig();
+verifyPublicAssets();
 fs.mkdirSync(storageDir, { recursive: true });
 
 const rateBuckets = new Map();
@@ -119,31 +123,31 @@ app.use(express.urlencoded({ extended: false, limit: '50kb' }));
 
 // Dynamic HTML routes allow production metadata/legal values to come from environment config.
 for (const route of ['/', '/index.html']) {
-  app.get(route, (_req, res) => sendHtml(res, 'index.html'));
+  app.get(route, (req, res) => {
+    if (launchMode !== 'live') console.log(`Homepage request: ${req.method} ${req.originalUrl}`);
+    sendHtml(res, 'index.html');
+  });
 }
 app.get('/privacy.html', (_req, res) => sendHtml(res, 'privacy.html'));
 app.get('/terms.html', (_req, res) => sendHtml(res, 'terms.html'));
 app.get('/refund.html', (_req, res) => sendHtml(res, 'refund.html'));
 app.get('/success.html', (_req, res) => sendHtml(res, 'success.html'));
 
-app.use(express.static(pubPath(), {
-  extensions: ['html'],
-  maxAge: isProduction ? '1d' : 0,
-  etag: true,
-  setHeaders(res, filePath) {
-    if (/\.(css|js|png|svg|woff2?)$/i.test(filePath)) {
-      res.setHeader('Cache-Control', isProduction ? 'public, max-age=86400' : 'no-cache');
-    }
-  }
-}));
 
 
+
+app.use('/api/admin', (_req, res, next) => {
+  res.setHeader('Cache-Control', 'no-store');
+  next();
+});
 
 app.get('/admin', (_req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
   res.sendFile(path.join(pubPath(), 'admin.html'));
 });
 
 app.post('/api/admin/login',
+  requireSameSiteMutation,
   rateLimit({ windowMs: 15 * 60 * 1000, max: 12 }),
   (req, res) => {
     if (!adminPassword || !adminSessionSecret) {
@@ -165,7 +169,7 @@ app.post('/api/admin/login',
   }
 );
 
-app.post('/api/admin/logout', (req, res) => {
+app.post('/api/admin/logout', requireSameSiteMutation, (req, res) => {
   const session = getAdminSession(req);
   if (session) adminSessions.delete(session.key);
   res.setHeader('Set-Cookie',
@@ -211,25 +215,29 @@ app.get('/api/admin/dashboard', requireAdmin, (_req, res) => {
   });
 });
 
-app.patch('/api/admin/leads/:id', requireAdmin, (req, res) => {
+app.patch('/api/admin/leads/:id', requireAdmin, requireSameSiteMutation, (req, res) => {
   const id = clean(req.params.id, 120);
   const allowed = ['new','reviewing','preview_sent','follow_up','won','lost','closed'];
   const status = clean(req.body?.status || '', 40);
   const note = clean(req.body?.adminNote || '', 2000);
   if (status && !allowed.includes(status)) return res.status(400).json({ error: 'Invalid lead status.' });
+  const exists = readNdjson('preview-requests.ndjson').some(item => item.id === id);
+  if (!exists) return res.status(404).json({ error: 'Lead not found.' });
   const state = updateEntityState('lead', id, { status: status || undefined, adminNote: note });
-  logAdminEvent('lead_updated', { entityId:id, status:state.status, adminNote:state.adminNote });
+  logAdminEvent('lead_updated', { entityId:id, status:state.status });
   res.json({ ok:true, state });
 });
 
-app.patch('/api/admin/orders/:id', requireAdmin, (req, res) => {
+app.patch('/api/admin/orders/:id', requireAdmin, requireSameSiteMutation, (req, res) => {
   const id = clean(req.params.id, 200);
   const allowed = ['paid','queued','in_progress','ready','delivered','refunded','cancelled'];
   const status = clean(req.body?.status || '', 40);
   const note = clean(req.body?.adminNote || '', 2000);
   if (status && !allowed.includes(status)) return res.status(400).json({ error: 'Invalid order status.' });
+  const exists = readNdjson('orders.ndjson').some(item => item.sessionId === id);
+  if (!exists) return res.status(404).json({ error: 'Order not found.' });
   const state = updateEntityState('order', id, { status: status || undefined, adminNote: note });
-  logAdminEvent('order_updated', { entityId:id, status:state.status, adminNote:state.adminNote });
+  logAdminEvent('order_updated', { entityId:id, status:state.status });
   res.json({ ok:true, state });
 });
 
@@ -255,7 +263,7 @@ app.get('/api/admin/settings', requireAdmin, (_req, res) => {
   });
 });
 
-app.patch('/api/admin/settings', requireAdmin, (req, res) => {
+app.patch('/api/admin/settings', requireAdmin, requireSameSiteMutation, (req, res) => {
   const current = readAdminSettings();
   const next = {
     ownerDisplayName: clean(req.body?.ownerDisplayName ?? current.ownerDisplayName ?? '', 120),
@@ -265,8 +273,12 @@ app.patch('/api/admin/settings', requireAdmin, (req, res) => {
     defaultOrderStatus: clean(req.body?.defaultOrderStatus ?? current.defaultOrderStatus ?? 'paid', 40),
     updatedAt: new Date().toISOString()
   };
+  const leadStatuses = ['new','reviewing','preview_sent','follow_up'];
+  const orderStatuses = ['paid','queued','in_progress'];
   if (next.domainEmail && !isValidEmail(next.domainEmail)) return res.status(400).json({ error:'Invalid domain email.' });
   if (next.notificationEmail && !isValidEmail(next.notificationEmail)) return res.status(400).json({ error:'Invalid notification email.' });
+  if (!leadStatuses.includes(next.defaultLeadStatus)) return res.status(400).json({ error:'Invalid default lead status.' });
+  if (!orderStatuses.includes(next.defaultOrderStatus)) return res.status(400).json({ error:'Invalid default order status.' });
   writeJsonAtomic('admin-settings.json', next);
   logAdminEvent('settings_updated', {
     ownerDisplayName: next.ownerDisplayName,
@@ -316,8 +328,10 @@ app.get('/sitemap.xml', (_req, res) => {
 app.get('/health', (_req, res) => res.json({
   ok: true,
   environment: isProduction ? 'production' : 'development',
+  launchMode,
   stripeConfigured: Boolean(stripe),
-  storageConfigured: Boolean(storageDir)
+  storageConfigured: Boolean(storageDir),
+  publicIndexAvailable: fs.existsSync(path.join(publicDir, 'index.html'))
 }));
 
 app.post('/api/preview-request',
@@ -429,7 +443,37 @@ app.get('/api/checkout-session-status',
   }
 );
 
+// Serve public assets only after explicit dynamic/admin/SEO/API routes.
+// This prevents /admin, /robots.txt and /sitemap.xml from being intercepted
+// by express.static before their dedicated handlers run.
+app.use(express.static(publicDir, {
+  extensions: ['html'],
+  index: false,
+  maxAge: isProduction ? '1d' : 0,
+  etag: true,
+  setHeaders(res, filePath) {
+    const base = path.basename(filePath).toLowerCase();
+    if (base.startsWith('admin.')) {
+      res.setHeader('Cache-Control', 'no-store');
+      return;
+    }
+    if (/\.(css|js|png|svg|woff2?)$/i.test(filePath)) {
+      res.setHeader('Cache-Control', isProduction ? 'public, max-age=86400' : 'no-cache');
+    }
+  }
+}));
+
+// Deliberate final 404: if the homepage ever fails, sendHtml logs the real
+// filesystem/template error instead of silently hiding it as a generic 404.
+app.use((req, res) => {
+  if (req.method === 'GET') return res.status(404).type('text').send('Not Found');
+  return res.status(404).json({ error: 'Not found' });
+});
+
 async function fulfillPaidSession(session, eventId) {
+  const freshSession = stripe ? await stripe.checkout.sessions.retrieve(session.id) : session;
+  if (freshSession.payment_status !== 'paid') return;
+  session = freshSession;
   const sessionId = clean(session.id, 200);
   const fulfilledFile = path.join(storageDir, 'fulfilled-sessions.json');
   let fulfilled = {};
@@ -488,8 +532,20 @@ function appendNdjson(filename, value) {
 }
 
 function sendHtml(res, filename) {
+  const candidates = [
+    path.join(publicDir, filename),
+    path.join(__dirname, filename) // deployment-safe fallback for index.html
+  ];
+  const file = candidates.find(candidate => fs.existsSync(candidate));
+
+  if (!file) {
+    const detail = `HTML file missing: ${filename}; checked ${candidates.join(' | ')}`;
+    console.error(detail);
+    return res.status(500).type('text').send('QONVEXA deployment error: required page is missing.');
+  }
+
   try {
-    const html = fs.readFileSync(path.join(pubPath(), filename), 'utf8');
+    const html = fs.readFileSync(file, 'utf8');
     const replacements = {
       '{{SITE_URL}}': escapeHtml(siteUrl),
       '{{CONTACT_EMAIL}}': escapeHtml(contactEmail || 'CONTACT_EMAIL_NOT_CONFIGURED'),
@@ -503,11 +559,37 @@ function sendHtml(res, filename) {
     let output = html;
     for (const [token, value] of Object.entries(replacements)) output = output.split(token).join(value);
     res.type('html').send(output);
-  } catch {
-    res.status(404).send('Not found');
+  } catch (err) {
+    console.error(`Failed to render ${filename}:`, err);
+    res.status(500).type('text').send('QONVEXA deployment error: page could not be rendered.');
   }
 }
 
+
+function requireSameSiteMutation(req, res, next) {
+  const fetchSite = String(req.get('sec-fetch-site') || '').toLowerCase();
+  if (fetchSite && !['same-origin','same-site','none'].includes(fetchSite)) {
+    return res.status(403).json({ error: 'Cross-site request blocked.' });
+  }
+  const origin = req.get('origin');
+  if (origin) {
+    try {
+      if (new URL(origin).host !== req.get('host')) {
+        return res.status(403).json({ error: 'Origin mismatch.' });
+      }
+    } catch {
+      return res.status(403).json({ error: 'Invalid request origin.' });
+    }
+  }
+  next();
+}
+
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, session] of adminSessions) {
+    if (now >= session.expiresAt) adminSessions.delete(key);
+  }
+}, 30 * 60 * 1000).unref();
 
 function parseCookies(header = '') {
   const result = {};
@@ -698,23 +780,51 @@ function toCsv(headers, rows) {
 }
 
 function validateProductionConfig() {
+  const allowedModes = ['development','staging','live'];
+  if (!allowedModes.includes(launchMode)) {
+    throw new Error(`Invalid LAUNCH_MODE: ${launchMode}`);
+  }
   if (!isProduction) return;
-  const required = [
-    'SITE_URL', 'STRIPE_SECRET_KEY', 'STRIPE_WEBHOOK_SECRET',
-    'CONTACT_EMAIL', 'LEGAL_BUSINESS_NAME', 'LEGAL_ADDRESS',
-    'LEGAL_JURISDICTION', 'DELIVERY_TIMEFRAME', 'REFUND_POLICY_TEXT',
-    'ADMIN_USERNAME', 'ADMIN_PASSWORD', 'ADMIN_SESSION_SECRET'
-  ];
-  const missing = required.filter(key => !String(process.env[key] || '').trim());
-  if (!/^https:\/\//i.test(process.env.SITE_URL || '')) missing.push('SITE_URL must use https://');
-  if (/^sk_test_/i.test(process.env.STRIPE_SECRET_KEY || '')) missing.push('STRIPE_SECRET_KEY must be a live key in production');
-  if (/replace/i.test(process.env.STRIPE_WEBHOOK_SECRET || '')) missing.push('STRIPE_WEBHOOK_SECRET must be configured');
+
+  const requiredForAnyProduction = ['ADMIN_USERNAME','ADMIN_PASSWORD','ADMIN_SESSION_SECRET','IP_HASH_SALT'];
+  const missing = requiredForAnyProduction.filter(key => !String(process.env[key] || '').trim());
+
+  if (adminPassword && adminPassword.length < 14) missing.push('ADMIN_PASSWORD must be at least 14 characters');
+  if (adminSessionSecret && adminSessionSecret.length < 32) missing.push('ADMIN_SESSION_SECRET must be at least 32 characters');
+  if (String(process.env.IP_HASH_SALT || '').length < 24) missing.push('IP_HASH_SALT must be at least 24 characters');
+
+  if (isLiveLaunch) {
+    const requiredForLive = [
+      'SITE_URL','STRIPE_SECRET_KEY','STRIPE_WEBHOOK_SECRET','CONTACT_EMAIL',
+      'LEGAL_BUSINESS_NAME','LEGAL_ADDRESS','LEGAL_JURISDICTION',
+      'DELIVERY_TIMEFRAME','REFUND_POLICY_TEXT'
+    ];
+    missing.push(...requiredForLive.filter(key => !String(process.env[key] || '').trim()));
+    if (!/^https:\/\//i.test(process.env.SITE_URL || '')) missing.push('SITE_URL must use https:// in live mode');
+    if (/^sk_test_/i.test(process.env.STRIPE_SECRET_KEY || '')) missing.push('STRIPE_SECRET_KEY must be a live key in live mode');
+    if (/replace/i.test(process.env.STRIPE_WEBHOOK_SECRET || '')) missing.push('STRIPE_WEBHOOK_SECRET must be configured');
+  }
+
   if (missing.length) {
     throw new Error(`Production configuration incomplete: ${[...new Set(missing)].join(', ')}`);
   }
 }
 
-function pubPath() { return path.join(__dirname, 'public'); }
+function verifyPublicAssets() {
+  const required = [
+    'index.html', 'styles.css', 'app.js',
+    'admin.html', 'admin.css', 'admin.js',
+    'privacy.html', 'terms.html', 'refund.html',
+    'success.html', 'success.js', 'favicon.svg'
+  ];
+  const missing = required.filter(file => !fs.existsSync(path.join(publicDir, file)));
+  if (missing.length) {
+    throw new Error(`Deployment package incomplete. Missing public files: ${missing.join(', ')}`);
+  }
+  console.log(`Public assets verified: ${required.length} required files in ${publicDir}`);
+}
+
+function pubPath() { return publicDir; }
 function hashIp(ip) {
   return crypto.createHash('sha256')
     .update(`${process.env.IP_HASH_SALT || 'development-salt'}:${ip || ''}`)
@@ -744,7 +854,7 @@ function escapeHtml(value) {
   }[ch]));
 }
 
-app.listen(port, () => {
+app.listen(port, '0.0.0.0', () => {
   console.log(`QONVEXA running at ${siteUrl}`);
   console.log(`Storage: ${storageDir}`);
 });

@@ -1,21 +1,24 @@
 {
-  "name": "qonvexa-production-6-0",
-  "version": "6.0.0",
+  "name": "qonvexa-production-7-1",
+  "version": "7.1.0",
   "private": true,
   "type": "module",
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js",
     "check": "node --check server.js && node --check public/app.js && node --check public/success.js && node --check public/admin.js && node --check scripts/smoke.js",
-    "smoke": "node scripts/smoke.js"
+    "smoke": "node scripts/smoke.js",
+    "verify": "npm run check && npm run smoke && npm run render-audit && node scripts/preflight.mjs",
+    "preflight": "node scripts/preflight.mjs",
+    "render-audit": "node scripts/render-audit.mjs"
   },
   "dependencies": {
-    "dotenv": "^16.4.5",
-    "express": "^4.21.1",
-    "helmet": "^8.0.0",
-    "stripe": "^18.0.0"
+    "dotenv": "16.4.5",
+    "express": "4.21.1",
+    "helmet": "8.0.0",
+    "stripe": "18.0.0"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22.0.0 <25.0.0"
   }
 }

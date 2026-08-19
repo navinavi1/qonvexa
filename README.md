@@ -101,3 +101,7 @@ The dashboard stores operational statuses, notes, settings and event logs under 
 CSV exports are available for leads, orders and clients.
 
 Domain-email fields in Settings are preparation metadata only; actual mailbox creation happens with your domain/email provider.
+
+
+## Production 7.0
+Use `GITHUB-RENDER-DEPLOY.md` for the next step. The project is now designed to deploy first in `LAUNCH_MODE=staging`, then switch to `LAUNCH_MODE=live` only after qonvexa.co, legal/contact details and live payments are ready.
