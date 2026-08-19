@@ -1,32 +1,8 @@
 services:
   - type: web
     name: qonvexa
-    runtime: node
+    env: node
     plan: starter
-    region: virginia
-    buildCommand: npm install --omit=dev && npm run verify
+    buildCommand: npm install
     startCommand: npm start
     healthCheckPath: /health
-    maxShutdownDelaySeconds: 30
-    autoDeployTrigger: commit
-    domains:
-      - qonvexa.co
-    disk:
-      name: qonvexa-data
-      mountPath: /var/lib/qonvexa
-      sizeGB: 1
-    envVars:
-      - key: LAUNCH_MODE
-        value: staging
-      - key: STORAGE_DIR
-        value: /var/lib/qonvexa/data
-      - key: AUDIT_PRICE_CENTS
-        value: "14900"
-      - key: ADMIN_USERNAME
-        value: owner
-      - key: ADMIN_PASSWORD
-        sync: false
-      - key: ADMIN_SESSION_SECRET
-        generateValue: true
-      - key: IP_HASH_SALT
-        generateValue: true

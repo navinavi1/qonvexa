@@ -13,9 +13,7 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const port = safeInteger(process.env.PORT, 3000, 1, 65535);
 const isProduction = process.env.NODE_ENV === 'production';
-const launchMode = clean(process.env.LAUNCH_MODE || (isProduction ? 'staging' : 'development'), 20).toLowerCase();
-const isLiveLaunch = launchMode === 'live';
-const siteUrl = normalizeSiteUrl(process.env.SITE_URL || process.env.RENDER_EXTERNAL_URL || `http://localhost:${port}`);
+const siteUrl = normalizeSiteUrl(process.env.SITE_URL || `http://localhost:${port}`);
 const priceCents = safeInteger(process.env.AUDIT_PRICE_CENTS, 14900, 50, 10000000);
 const storageDir = path.resolve(process.env.STORAGE_DIR || path.join(__dirname, 'data'));
 const contactEmail = clean(process.env.CONTACT_EMAIL || '', 320);
@@ -141,18 +139,11 @@ app.use(express.static(pubPath(), {
 
 
 
-app.use('/api/admin', (_req, res, next) => {
-  res.setHeader('Cache-Control', 'no-store');
-  next();
-});
-
 app.get('/admin', (_req, res) => {
-  res.setHeader('Cache-Control', 'no-store');
   res.sendFile(path.join(pubPath(), 'admin.html'));
 });
 
 app.post('/api/admin/login',
-  requireSameSiteMutation,
   rateLimit({ windowMs: 15 * 60 * 1000, max: 12 }),
   (req, res) => {
     if (!adminPassword || !adminSessionSecret) {
@@ -174,7 +165,7 @@ app.post('/api/admin/login',
   }
 );
 
-app.post('/api/admin/logout', requireSameSiteMutation, (req, res) => {
+app.post('/api/admin/logout', (req, res) => {
   const session = getAdminSession(req);
   if (session) adminSessions.delete(session.key);
   res.setHeader('Set-Cookie',
@@ -220,29 +211,25 @@ app.get('/api/admin/dashboard', requireAdmin, (_req, res) => {
   });
 });
 
-app.patch('/api/admin/leads/:id', requireAdmin, requireSameSiteMutation, (req, res) => {
+app.patch('/api/admin/leads/:id', requireAdmin, (req, res) => {
   const id = clean(req.params.id, 120);
   const allowed = ['new','reviewing','preview_sent','follow_up','won','lost','closed'];
   const status = clean(req.body?.status || '', 40);
   const note = clean(req.body?.adminNote || '', 2000);
   if (status && !allowed.includes(status)) return res.status(400).json({ error: 'Invalid lead status.' });
-  const exists = readNdjson('preview-requests.ndjson').some(item => item.id === id);
-  if (!exists) return res.status(404).json({ error: 'Lead not found.' });
   const state = updateEntityState('lead', id, { status: status || undefined, adminNote: note });
-  logAdminEvent('lead_updated', { entityId:id, status:state.status });
+  logAdminEvent('lead_updated', { entityId:id, status:state.status, adminNote:state.adminNote });
   res.json({ ok:true, state });
 });
 
-app.patch('/api/admin/orders/:id', requireAdmin, requireSameSiteMutation, (req, res) => {
+app.patch('/api/admin/orders/:id', requireAdmin, (req, res) => {
   const id = clean(req.params.id, 200);
   const allowed = ['paid','queued','in_progress','ready','delivered','refunded','cancelled'];
   const status = clean(req.body?.status || '', 40);
   const note = clean(req.body?.adminNote || '', 2000);
   if (status && !allowed.includes(status)) return res.status(400).json({ error: 'Invalid order status.' });
-  const exists = readNdjson('orders.ndjson').some(item => item.sessionId === id);
-  if (!exists) return res.status(404).json({ error: 'Order not found.' });
   const state = updateEntityState('order', id, { status: status || undefined, adminNote: note });
-  logAdminEvent('order_updated', { entityId:id, status:state.status });
+  logAdminEvent('order_updated', { entityId:id, status:state.status, adminNote:state.adminNote });
   res.json({ ok:true, state });
 });
 
@@ -268,7 +255,7 @@ app.get('/api/admin/settings', requireAdmin, (_req, res) => {
   });
 });
 
-app.patch('/api/admin/settings', requireAdmin, requireSameSiteMutation, (req, res) => {
+app.patch('/api/admin/settings', requireAdmin, (req, res) => {
   const current = readAdminSettings();
   const next = {
     ownerDisplayName: clean(req.body?.ownerDisplayName ?? current.ownerDisplayName ?? '', 120),
@@ -278,12 +265,8 @@ app.patch('/api/admin/settings', requireAdmin, requireSameSiteMutation, (req, re
     defaultOrderStatus: clean(req.body?.defaultOrderStatus ?? current.defaultOrderStatus ?? 'paid', 40),
     updatedAt: new Date().toISOString()
   };
-  const leadStatuses = ['new','reviewing','preview_sent','follow_up'];
-  const orderStatuses = ['paid','queued','in_progress'];
   if (next.domainEmail && !isValidEmail(next.domainEmail)) return res.status(400).json({ error:'Invalid domain email.' });
   if (next.notificationEmail && !isValidEmail(next.notificationEmail)) return res.status(400).json({ error:'Invalid notification email.' });
-  if (!leadStatuses.includes(next.defaultLeadStatus)) return res.status(400).json({ error:'Invalid default lead status.' });
-  if (!orderStatuses.includes(next.defaultOrderStatus)) return res.status(400).json({ error:'Invalid default order status.' });
   writeJsonAtomic('admin-settings.json', next);
   logAdminEvent('settings_updated', {
     ownerDisplayName: next.ownerDisplayName,
@@ -333,7 +316,6 @@ app.get('/sitemap.xml', (_req, res) => {
 app.get('/health', (_req, res) => res.json({
   ok: true,
   environment: isProduction ? 'production' : 'development',
-  launchMode,
   stripeConfigured: Boolean(stripe),
   storageConfigured: Boolean(storageDir)
 }));
@@ -448,9 +430,6 @@ app.get('/api/checkout-session-status',
 );
 
 async function fulfillPaidSession(session, eventId) {
-  const freshSession = stripe ? await stripe.checkout.sessions.retrieve(session.id) : session;
-  if (freshSession.payment_status !== 'paid') return;
-  session = freshSession;
   const sessionId = clean(session.id, 200);
   const fulfilledFile = path.join(storageDir, 'fulfilled-sessions.json');
   let fulfilled = {};
@@ -529,31 +508,6 @@ function sendHtml(res, filename) {
   }
 }
 
-
-function requireSameSiteMutation(req, res, next) {
-  const fetchSite = String(req.get('sec-fetch-site') || '').toLowerCase();
-  if (fetchSite && !['same-origin','same-site','none'].includes(fetchSite)) {
-    return res.status(403).json({ error: 'Cross-site request blocked.' });
-  }
-  const origin = req.get('origin');
-  if (origin) {
-    try {
-      if (new URL(origin).host !== req.get('host')) {
-        return res.status(403).json({ error: 'Origin mismatch.' });
-      }
-    } catch {
-      return res.status(403).json({ error: 'Invalid request origin.' });
-    }
-  }
-  next();
-}
-
-setInterval(() => {
-  const now = Date.now();
-  for (const [key, session] of adminSessions) {
-    if (now >= session.expiresAt) adminSessions.delete(key);
-  }
-}, 30 * 60 * 1000).unref();
 
 function parseCookies(header = '') {
   const result = {};
@@ -744,31 +698,17 @@ function toCsv(headers, rows) {
 }
 
 function validateProductionConfig() {
-  const allowedModes = ['development','staging','live'];
-  if (!allowedModes.includes(launchMode)) {
-    throw new Error(`Invalid LAUNCH_MODE: ${launchMode}`);
-  }
   if (!isProduction) return;
-
-  const requiredForAnyProduction = ['ADMIN_USERNAME','ADMIN_PASSWORD','ADMIN_SESSION_SECRET','IP_HASH_SALT'];
-  const missing = requiredForAnyProduction.filter(key => !String(process.env[key] || '').trim());
-
-  if (adminPassword && adminPassword.length < 14) missing.push('ADMIN_PASSWORD must be at least 14 characters');
-  if (adminSessionSecret && adminSessionSecret.length < 32) missing.push('ADMIN_SESSION_SECRET must be at least 32 characters');
-  if (String(process.env.IP_HASH_SALT || '').length < 24) missing.push('IP_HASH_SALT must be at least 24 characters');
-
-  if (isLiveLaunch) {
-    const requiredForLive = [
-      'SITE_URL','STRIPE_SECRET_KEY','STRIPE_WEBHOOK_SECRET','CONTACT_EMAIL',
-      'LEGAL_BUSINESS_NAME','LEGAL_ADDRESS','LEGAL_JURISDICTION',
-      'DELIVERY_TIMEFRAME','REFUND_POLICY_TEXT'
-    ];
-    missing.push(...requiredForLive.filter(key => !String(process.env[key] || '').trim()));
-    if (!/^https:\/\//i.test(process.env.SITE_URL || '')) missing.push('SITE_URL must use https:// in live mode');
-    if (/^sk_test_/i.test(process.env.STRIPE_SECRET_KEY || '')) missing.push('STRIPE_SECRET_KEY must be a live key in live mode');
-    if (/replace/i.test(process.env.STRIPE_WEBHOOK_SECRET || '')) missing.push('STRIPE_WEBHOOK_SECRET must be configured');
-  }
-
+  const required = [
+    'SITE_URL', 'STRIPE_SECRET_KEY', 'STRIPE_WEBHOOK_SECRET',
+    'CONTACT_EMAIL', 'LEGAL_BUSINESS_NAME', 'LEGAL_ADDRESS',
+    'LEGAL_JURISDICTION', 'DELIVERY_TIMEFRAME', 'REFUND_POLICY_TEXT',
+    'ADMIN_USERNAME', 'ADMIN_PASSWORD', 'ADMIN_SESSION_SECRET'
+  ];
+  const missing = required.filter(key => !String(process.env[key] || '').trim());
+  if (!/^https:\/\//i.test(process.env.SITE_URL || '')) missing.push('SITE_URL must use https://');
+  if (/^sk_test_/i.test(process.env.STRIPE_SECRET_KEY || '')) missing.push('STRIPE_SECRET_KEY must be a live key in production');
+  if (/replace/i.test(process.env.STRIPE_WEBHOOK_SECRET || '')) missing.push('STRIPE_WEBHOOK_SECRET must be configured');
   if (missing.length) {
     throw new Error(`Production configuration incomplete: ${[...new Set(missing)].join(', ')}`);
   }

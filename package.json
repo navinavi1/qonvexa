@@ -1,15 +1,13 @@
 {
-  "name": "qonvexa-production-7-0",
-  "version": "7.0.0",
+  "name": "qonvexa-production-6-0",
+  "version": "6.0.0",
   "private": true,
   "type": "module",
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js",
     "check": "node --check server.js && node --check public/app.js && node --check public/success.js && node --check public/admin.js && node --check scripts/smoke.js",
-    "smoke": "node scripts/smoke.js",
-    "verify": "npm run check && npm run smoke && node scripts/preflight.mjs",
-    "preflight": "node scripts/preflight.mjs"
+    "smoke": "node scripts/smoke.js"
   },
   "dependencies": {
     "dotenv": "^16.4.5",
