@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>QONVEXA Owner Dashboard</title>
+  <meta name="robots" content="noindex,nofollow">
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="admin.css">
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+</head>
+<body class="admin-body">
+  <main class="admin-shell">
+    <section id="login-view" class="admin-card admin-login">
+      <div class="admin-brand"><span class="brand-mark">Q</span><strong>QONVEXA</strong></div>
+      <p class="admin-kicker">OWNER ACCESS</p>
+      <h1>Owner dashboard</h1>
+      <p>Private access to leads, paid orders, clients and launch settings.</p>
+      <form id="admin-login-form" class="admin-form">
+        <label>Username<input name="username" autocomplete="username" required></label>
+        <label>Password<input name="password" type="password" autocomplete="current-password" required></label>
+        <button class="button full" type="submit">Sign in</button>
+        <p id="login-status" class="admin-status" role="status"></p>
+      </form>
+    </section>
+
+    <section id="dashboard-view" hidden>
+      <header class="admin-top">
+        <div>
+          <div class="admin-brand"><span class="brand-mark">Q</span><strong>QONVEXA</strong></div>
+          <p>Owner dashboard · Production 6.0</p>
+        </div>
+        <div class="admin-top-actions">
+          <span id="admin-user" class="admin-user"></span>
+          <button id="refresh-btn" class="admin-secondary">Refresh</button>
+          <button id="logout-btn" class="admin-secondary danger-lite">Log out</button>
+        </div>
+      </header>
+
+      <nav class="admin-tabs" aria-label="Owner dashboard sections">
+        <button class="admin-tab active" data-view="overview">Overview</button>
+        <button class="admin-tab" data-view="leads">Leads</button>
+        <button class="admin-tab" data-view="orders">Orders</button>
+        <button class="admin-tab" data-view="clients">Clients</button>
+        <button class="admin-tab" data-view="activity">Activity</button>
+        <button class="admin-tab" data-view="settings">Settings</button>
+      </nav>
+
+      <section class="admin-view active" data-panel="overview">
+        <div class="admin-grid stats-5">
+          <article class="admin-stat"><small>PREVIEW REQUESTS</small><strong id="preview-count">0</strong></article>
+          <article class="admin-stat"><small>OPEN LEADS</small><strong id="open-lead-count">0</strong></article>
+          <article class="admin-stat"><small>PAID ORDERS</small><strong id="order-count">0</strong></article>
+          <article class="admin-stat"><small>ACTIVE ORDERS</small><strong id="active-order-count">0</strong></article>
+          <article class="admin-stat"><small>CLIENTS</small><strong id="client-count">0</strong></article>
+        </div>
+
+        <div class="overview-grid">
+          <section class="admin-panel">
+            <div class="admin-panel-head"><div><small>PIPELINE</small><h2>Recent leads</h2></div><button class="admin-link" data-go="leads">View all →</button></div>
+            <div id="recent-leads" class="card-list"></div>
+          </section>
+          <section class="admin-panel">
+            <div class="admin-panel-head"><div><small>FULFILLMENT</small><h2>Recent orders</h2></div><button class="admin-link" data-go="orders">View all →</button></div>
+            <div id="recent-orders" class="card-list"></div>
+          </section>
+        </div>
+
+        <section class="admin-panel">
+          <div class="admin-panel-head"><div><small>SYSTEM</small><h2>Launch readiness</h2></div></div>
+          <div id="system-readiness" class="readiness-grid"></div>
+        </section>
+      </section>
+
+      <section class="admin-view" data-panel="leads">
+        <div class="view-heading"><div><small>PIPELINE</small><h1>Preview requests</h1></div><a class="admin-secondary export-link" href="/api/admin/export/leads.csv">Export CSV</a></div>
+        <div class="admin-toolbar">
+          <input class="table-search" data-target="leads" type="search" placeholder="Search email, URL, business type…">
+          <select class="status-filter" data-target="leads"><option value="">All statuses</option><option>new</option><option>reviewing</option><option>preview_sent</option><option>follow_up</option><option>won</option><option>lost</option><option>closed</option></select>
+        </div>
+        <section class="admin-panel"><div class="admin-table-wrap"><table><thead><tr><th>Received</th><th>Email</th><th>Website</th><th>Business</th><th>Status</th><th>Note</th><th>Admin note</th></tr></thead><tbody id="preview-rows"></tbody></table></div></section>
+      </section>
+
+      <section class="admin-view" data-panel="orders">
+        <div class="view-heading"><div><small>FULFILLMENT</small><h1>Paid orders</h1></div><a class="admin-secondary export-link" href="/api/admin/export/orders.csv">Export CSV</a></div>
+        <div class="admin-toolbar">
+          <input class="table-search" data-target="orders" type="search" placeholder="Search customer, URL, business, goal…">
+          <select class="status-filter" data-target="orders"><option value="">All statuses</option><option>paid</option><option>queued</option><option>in_progress</option><option>ready</option><option>delivered</option><option>refunded</option><option>cancelled</option></select>
+        </div>
+        <section class="admin-panel"><div class="admin-table-wrap"><table><thead><tr><th>Paid</th><th>Email</th><th>Website</th><th>Business</th><th>Goal</th><th>Amount</th><th>Status</th><th>Admin note</th></tr></thead><tbody id="order-rows"></tbody></table></div></section>
+      </section>
+
+      <section class="admin-view" data-panel="clients">
+        <div class="view-heading"><div><small>RELATIONSHIPS</small><h1>Clients</h1></div><a class="admin-secondary export-link" href="/api/admin/export/clients.csv">Export CSV</a></div>
+        <div class="admin-toolbar"><input class="table-search" data-target="clients" type="search" placeholder="Search client email, website or business…"></div>
+        <div id="client-cards" class="client-grid"></div>
+      </section>
+
+      <section class="admin-view" data-panel="activity">
+        <div class="view-heading"><div><small>AUDIT LOG</small><h1>Activity</h1></div></div>
+        <section class="admin-panel"><div id="activity-list" class="activity-list"></div></section>
+      </section>
+
+      <section class="admin-view" data-panel="settings">
+        <div class="view-heading"><div><small>OWNER SETTINGS</small><h1>Settings</h1></div></div>
+        <div class="settings-grid">
+          <form id="settings-form" class="admin-panel admin-form">
+            <div class="admin-panel-head"><div><small>PROFILE</small><h2>Owner & email</h2></div></div>
+            <label>Owner display name<input name="ownerDisplayName" placeholder="Your name"></label>
+            <label>Domain email<input name="domainEmail" type="email" placeholder="hello@yourdomain.com"></label>
+            <label>Notification email<input name="notificationEmail" type="email" placeholder="Where alerts should go"></label>
+            <label>Default lead status<select name="defaultLeadStatus"><option>new</option><option>reviewing</option><option>preview_sent</option><option>follow_up</option></select></label>
+            <label>Default order status<select name="defaultOrderStatus"><option>paid</option><option>queued</option><option>in_progress</option></select></label>
+            <button class="button" type="submit">Save settings</button>
+            <p id="settings-status" class="admin-status" role="status"></p>
+          </form>
+          <section class="admin-panel">
+            <div class="admin-panel-head"><div><small>INTEGRATIONS</small><h2>System configuration</h2></div></div>
+            <div id="system-settings" class="system-list"></div>
+            <p class="settings-note">Secrets such as Stripe keys and the admin password are intentionally never shown or editable in the browser. They stay in server environment variables.</p>
+          </section>
+        </div>
+      </section>
+    </section>
+  </main>
+
+  <dialog id="edit-dialog" class="admin-dialog">
+    <button id="dialog-close" class="dialog-x" aria-label="Close">×</button>
+    <small id="dialog-kind">ITEM</small>
+    <h2 id="dialog-title">Update</h2>
+    <form id="edit-form" class="admin-form">
+      <input type="hidden" name="entityType">
+      <input type="hidden" name="entityId">
+      <label>Status<select name="status" id="dialog-status"></select></label>
+      <label>Private admin note<textarea name="adminNote" rows="5" placeholder="Internal note only"></textarea></label>
+      <button class="button" type="submit">Save changes</button>
+      <p id="edit-status" class="admin-status" role="status"></p>
+    </form>
+  </dialog>
+
+  <script src="admin.js" defer></script>
+</body>
+</html>
