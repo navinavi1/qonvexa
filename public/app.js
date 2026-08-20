@@ -134,11 +134,17 @@ const revealObserver = new IntersectionObserver((entries) => {
 revealItems.forEach(el => revealObserver.observe(el));
 
 function animateCount(el, target, duration = 1300) {
+  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    el.textContent = target;
+    return;
+  }
+  const startValue = Number(el.textContent || 0);
+  if (startValue === target) return;
   const start = performance.now();
   function tick(now) {
     const progress = Math.min(1, (now - start) / duration);
     const eased = 1 - Math.pow(1 - progress, 3);
-    el.textContent = Math.round(target * eased);
+    el.textContent = Math.round(startValue + (target - startValue) * eased);
     if (progress < 1) requestAnimationFrame(tick);
   }
   requestAnimationFrame(tick);

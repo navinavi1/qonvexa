@@ -19,7 +19,7 @@ const isLiveLaunch = launchMode === 'live';
 const siteUrl = normalizeSiteUrl(process.env.SITE_URL || process.env.RENDER_EXTERNAL_URL || `http://localhost:${port}`);
 const priceCents = safeInteger(process.env.AUDIT_PRICE_CENTS, 14900, 50, 10000000);
 const storageDir = path.resolve(process.env.STORAGE_DIR || path.join(__dirname, 'data'));
-const contactEmail = clean(process.env.CONTACT_EMAIL || '', 320);
+const contactEmail = clean(process.env.CONTACT_EMAIL || 'hello@qonvexa.co', 320);
 const adminUsername = clean(process.env.ADMIN_USERNAME || 'admin', 120);
 const adminPassword = String(process.env.ADMIN_PASSWORD || '');
 const adminSessionSecret = String(process.env.ADMIN_SESSION_SECRET || '');
@@ -325,6 +325,26 @@ app.get('/sitemap.xml', (_req, res) => {
   res.type('application/xml').send(xml);
 });
 
+app.get('/launch-readiness', (_req, res) => {
+  const checks = {
+    siteUrl: /^https:\/\//i.test(siteUrl),
+    contactEmail: isValidEmail(contactEmail),
+    legalBusinessName: Boolean(clean(process.env.LEGAL_BUSINESS_NAME || '', 300)),
+    legalAddress: Boolean(clean(process.env.LEGAL_ADDRESS || '', 500)),
+    legalJurisdiction: Boolean(clean(process.env.LEGAL_JURISDICTION || '', 200)),
+    deliveryTimeframe: Boolean(clean(process.env.DELIVERY_TIMEFRAME || '', 300)),
+    refundPolicy: Boolean(clean(process.env.REFUND_POLICY_TEXT || '', 2000)),
+    paymentProvider: Boolean(stripe),
+    notificationWebhook: Boolean(process.env.NOTIFICATION_WEBHOOK_URL),
+    persistentStorage: storageDir.startsWith('/var/lib/') || Boolean(process.env.DATABASE_URL)
+  };
+  res.json({
+    launchMode,
+    readyForLiveSales: Object.values(checks).every(Boolean),
+    checks
+  });
+});
+
 app.get('/health', (_req, res) => res.json({
   ok: true,
   environment: isProduction ? 'production' : 'development',
@@ -548,13 +568,14 @@ function sendHtml(res, filename) {
     const html = fs.readFileSync(file, 'utf8');
     const replacements = {
       '{{SITE_URL}}': escapeHtml(siteUrl),
-      '{{CONTACT_EMAIL}}': escapeHtml(contactEmail || 'CONTACT_EMAIL_NOT_CONFIGURED'),
-      '{{LEGAL_BUSINESS_NAME}}': escapeHtml(process.env.LEGAL_BUSINESS_NAME || 'LEGAL_BUSINESS_NAME_NOT_CONFIGURED'),
-      '{{LEGAL_ADDRESS}}': escapeHtml(process.env.LEGAL_ADDRESS || 'LEGAL_ADDRESS_NOT_CONFIGURED'),
-      '{{LEGAL_JURISDICTION}}': escapeHtml(process.env.LEGAL_JURISDICTION || 'LEGAL_JURISDICTION_NOT_CONFIGURED'),
-      '{{DELIVERY_TIMEFRAME}}': escapeHtml(process.env.DELIVERY_TIMEFRAME || 'DELIVERY_TIMEFRAME_NOT_CONFIGURED'),
-      '{{REFUND_POLICY_TEXT}}': escapeHtml(process.env.REFUND_POLICY_TEXT || 'REFUND_POLICY_NOT_CONFIGURED'),
-      '{{LAST_UPDATED}}': escapeHtml(process.env.LEGAL_LAST_UPDATED || new Date().toISOString().slice(0, 10))
+      '{{CONTACT_EMAIL}}': escapeHtml(contactEmail),
+      '{{LEGAL_BUSINESS_NAME}}': escapeHtml(process.env.LEGAL_BUSINESS_NAME || 'QONVEXA'),
+      '{{LEGAL_ADDRESS}}': escapeHtml(process.env.LEGAL_ADDRESS || 'Business details available on request'),
+      '{{LEGAL_JURISDICTION}}': escapeHtml(process.env.LEGAL_JURISDICTION || 'Ukraine'),
+      '{{DELIVERY_TIMEFRAME}}': escapeHtml(process.env.DELIVERY_TIMEFRAME || 'communicated before payment'),
+      '{{REFUND_POLICY_TEXT}}': escapeHtml(process.env.REFUND_POLICY_TEXT || 'Refund and cancellation terms are confirmed before payment. For questions, contact hello@qonvexa.co.'),
+      '{{LAST_UPDATED}}': escapeHtml(process.env.LEGAL_LAST_UPDATED || new Date().toISOString().slice(0, 10)),
+      '{{LEGAL_ROBOTS}}': escapeHtml(isLiveLaunch ? 'index,follow' : 'noindex,nofollow')
     };
     let output = html;
     for (const [token, value] of Object.entries(replacements)) output = output.split(token).join(value);
