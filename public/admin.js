@@ -82,8 +82,8 @@ function renderOrders(){
   const rows=data.orders.filter(x=>matches(x,q)&&(!status||x.status===status));
   el('#order-rows').innerHTML=rows.length?rows.map(x=>`<tr>
     <td>${esc(formatDate(x.receivedAt))}</td><td>${esc(x.customerEmail)}</td><td>${link(x.websiteUrl)}</td><td>${esc(x.businessType)}</td><td>${esc(x.primaryGoal)}</td>
-    <td>${esc(formatMoney(x.amountTotal,x.currency))}</td><td><button class="status-button s-${esc(x.status)}" data-edit="order" data-id="${esc(x.sessionId)}">${pretty(x.status)}</button></td>
-    <td class="muted-cell">${esc(x.adminNote)}</td></tr>`).join(''):emptyRow(8,'No orders found.');
+    <td>${esc(formatMoney(x.amountTotal,x.currency))}</td><td>${esc(pretty(x.paymentMethod || 'card'))}</td><td><button class="status-button s-${esc(x.status)}" data-edit="order" data-id="${esc(x.sessionId)}">${pretty(x.status)}</button></td>
+    <td class="muted-cell">${esc(x.adminNote)}</td></tr>`).join(''):emptyRow(9,'No orders found.');
 }
 function renderClients(){
   const q=valueFor('clients','.table-search');
@@ -108,7 +108,9 @@ function renderSettings(){
   el('#system-settings').innerHTML=[
     settingRow('Site URL',data.system.siteUrl),
     settingRow('Server contact email',data.system.contactEmail||'Not configured'),
-    settingRow('Stripe',data.system.stripeConfigured?'Configured':'Not configured',data.system.stripeConfigured),
+    settingRow('Card checkout',data.system.stripeConfigured?'Configured':'Not configured',data.system.stripeConfigured),
+    settingRow('Bank-transfer fallback',data.system.manualPaymentConfigured?'Configured':'Not configured',data.system.manualPaymentConfigured),
+    settingRow('Payment mode',data.system.paymentMode||'Not configured'),
     settingRow('Notification webhook',data.system.notificationWebhookConfigured?'Configured':'Not configured',data.system.notificationWebhookConfigured),
     settingRow('Domain email',data.system.domainEmailConfigured?'Configured':'Not configured',data.system.domainEmailConfigured),
     settingRow('Storage',data.system.storageDir?'Configured':'Not configured',Boolean(data.system.storageDir))
@@ -117,7 +119,7 @@ function renderSettings(){
 function settingRow(label,value,ok){return `<div class="system-row"><span>${esc(label)}</span><b>${esc(value)}</b>${typeof ok==='boolean'?`<i class="${ok?'ok':'warn'}">${ok?'READY':'TODO'}</i>`:''}</div>`}
 function renderReadiness(){
   const items=[
-    ['Stripe',data.system.stripeConfigured],
+    ['Payment method',Boolean(data.system.stripeConfigured || data.system.manualPaymentConfigured)],
     ['Persistent storage path',Boolean(data.system.storageDir)],
     ['Domain email',data.system.domainEmailConfigured],
     ['Notification automation',data.system.notificationWebhookConfigured]
@@ -137,7 +139,7 @@ function openEdit(type,id,item){
   const form=el('#edit-form'); form.reset(); form.elements.entityType.value=type; form.elements.entityId.value=id; form.elements.adminNote.value=item.adminNote||'';
   el('#dialog-kind').textContent=type==='lead'?'LEAD':'ORDER';
   el('#dialog-title').textContent=type==='lead'?(item.email||'Lead'):(item.customerEmail||'Order');
-  const opts=type==='lead'?['new','reviewing','preview_sent','follow_up','won','lost','closed']:['paid','queued','in_progress','ready','delivered','refunded','cancelled'];
+  const opts=type==='lead'?['new','reviewing','preview_sent','follow_up','won','lost','closed']:['awaiting_payment','paid','queued','in_progress','ready','delivered','refunded','cancelled'];
   el('#dialog-status').innerHTML=opts.map(x=>`<option ${x===item.status?'selected':''}>${x}</option>`).join('');
   el('#edit-status').textContent=''; editDialog.showModal();
 }

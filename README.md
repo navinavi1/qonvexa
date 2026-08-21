@@ -105,3 +105,33 @@ Domain-email fields in Settings are preparation metadata only; actual mailbox cr
 
 ## Production 7.0
 Use `GITHUB-RENDER-DEPLOY.md` for the next step. The project is now designed to deploy first in `LAUNCH_MODE=staging`, then switch to `LAUNCH_MODE=live` only after qonvexa.co, legal/contact details and live payments are ready.
+
+
+## QONVEXA 9.0 Purchase Experience
+The customer checkout is now a four-step flow:
+1. Details
+2. Review
+3. Payment
+4. Confirmation
+
+Payment methods are server-driven through `/api/purchase-options`.
+
+### Card checkout
+The existing hosted Stripe checkout remains available when Stripe credentials are configured.
+
+### Bank-transfer fallback
+Bank transfer is OFF by default. It becomes visible only when:
+- `MANUAL_PAYMENT_ENABLED=true`
+- `BANK_BENEFICIARY` is set
+- `BANK_IBAN` or `BANK_ACCOUNT` is set
+
+Optional:
+- `BANK_NAME`
+- `BANK_SWIFT`
+- `BANK_CURRENCY`
+- `BANK_PAYMENT_NOTE`
+
+Customers receive a private `/order.html?token=...` status link. It refreshes automatically while payment is pending.
+
+### Post-payment handoff
+If `DELIVERY_PORTAL_URL` is configured, the private order page exposes that URL only after confirmed payment status. Otherwise the customer is told that the personalized audit is in preparation.

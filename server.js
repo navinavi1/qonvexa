@@ -18,6 +18,9 @@ const launchMode = clean(process.env.LAUNCH_MODE || (isProduction ? 'staging' : 
 const isLiveLaunch = launchMode === 'live';
 const siteUrl = normalizeSiteUrl(process.env.SITE_URL || process.env.RENDER_EXTERNAL_URL || `http://localhost:${port}`);
 const priceCents = safeInteger(process.env.AUDIT_PRICE_CENTS, 14900, 50, 10000000);
+const paymentMode = clean(process.env.PAYMENT_MODE || (process.env.STRIPE_SECRET_KEY ? 'stripe' : 'manual'), 20).toLowerCase();
+const manualPaymentEnabled = /^(1|true|yes|on)$/i.test(String(process.env.MANUAL_PAYMENT_ENABLED || 'false'));
+const deliveryPortalUrl = clean(process.env.DELIVERY_PORTAL_URL || '', 1000);
 const storageDir = path.resolve(process.env.STORAGE_DIR || path.join(__dirname, 'data'));
 const contactEmail = clean(process.env.CONTACT_EMAIL || 'hello@qonvexa.co', 320);
 const adminUsername = clean(process.env.ADMIN_USERNAME || 'admin', 120);
@@ -208,6 +211,8 @@ app.get('/api/admin/dashboard', requireAdmin, (_req, res) => {
       siteUrl,
       contactEmail,
       stripeConfigured: Boolean(stripe),
+      manualPaymentConfigured: manualPaymentConfig().enabled,
+      paymentMode,
       storageDir,
       notificationWebhookConfigured: Boolean(process.env.NOTIFICATION_WEBHOOK_URL),
       domainEmailConfigured: isValidEmail(settings.domainEmail || contactEmail)
@@ -230,7 +235,7 @@ app.patch('/api/admin/leads/:id', requireAdmin, requireSameSiteMutation, (req, r
 
 app.patch('/api/admin/orders/:id', requireAdmin, requireSameSiteMutation, (req, res) => {
   const id = clean(req.params.id, 200);
-  const allowed = ['paid','queued','in_progress','ready','delivered','refunded','cancelled'];
+  const allowed = ['awaiting_payment','paid','queued','in_progress','ready','delivered','refunded','cancelled'];
   const status = clean(req.body?.status || '', 40);
   const note = clean(req.body?.adminNote || '', 2000);
   if (status && !allowed.includes(status)) return res.status(400).json({ error: 'Invalid order status.' });
@@ -334,7 +339,7 @@ app.get('/launch-readiness', (_req, res) => {
     legalJurisdiction: Boolean(clean(process.env.LEGAL_JURISDICTION || '', 200)),
     deliveryTimeframe: Boolean(clean(process.env.DELIVERY_TIMEFRAME || '', 300)),
     refundPolicy: Boolean(clean(process.env.REFUND_POLICY_TEXT || '', 2000)),
-    paymentProvider: Boolean(stripe),
+    paymentProvider: Boolean(stripe) || manualPaymentConfig().enabled,
     notificationWebhook: Boolean(process.env.NOTIFICATION_WEBHOOK_URL),
     persistentStorage: storageDir.startsWith('/var/lib/') || Boolean(process.env.DATABASE_URL)
   };
@@ -350,6 +355,8 @@ app.get('/health', (_req, res) => res.json({
   environment: isProduction ? 'production' : 'development',
   launchMode,
   stripeConfigured: Boolean(stripe),
+  manualPaymentConfigured: manualPaymentConfig().enabled,
+  paymentMode,
   storageConfigured: Boolean(storageDir),
   publicIndexAvailable: fs.existsSync(path.join(publicDir, 'index.html'))
 }));
@@ -383,6 +390,108 @@ app.post('/api/preview-request',
   }
 );
 
+
+app.get('/api/purchase-options',
+  rateLimit({ windowMs: 5 * 60 * 1000, max: 60 }),
+  (_req, res) => {
+    const manual = manualPaymentConfig();
+    const stripeAvailable = Boolean(stripe);
+    res.json({
+      priceCents,
+      currency: 'USD',
+      primary: paymentMode,
+      methods: {
+        card: {
+          available: stripeAvailable,
+          label: 'Pay securely by card'
+        },
+        bankTransfer: {
+          available: manual.enabled,
+          label: 'Bank transfer',
+          details: manual.enabled ? manual.details : null
+        }
+      },
+      contactEmail
+    });
+  }
+);
+
+app.post('/api/manual-order',
+  rateLimit({ windowMs: 15 * 60 * 1000, max: 8 }),
+  async (req, res) => {
+    const manual = manualPaymentConfig();
+    if (!manual.enabled) {
+      return res.status(503).json({ error: 'Bank-transfer checkout is not configured.' });
+    }
+
+    const {
+      websiteUrl,
+      businessType = '',
+      primaryGoal = '',
+      primaryService = '',
+      email = ''
+    } = req.body || {};
+
+    if (!isValidHttpUrl(websiteUrl) || !isValidEmail(email)) {
+      return res.status(400).json({ error: 'Please provide a valid website URL and email.' });
+    }
+
+    const orderId = `qvx_${Date.now().toString(36)}_${crypto.randomBytes(4).toString('hex')}`;
+    const accessToken = crypto.randomBytes(24).toString('hex');
+    const order = {
+      receivedAt: new Date().toISOString(),
+      eventId: '',
+      sessionId: orderId,
+      paymentMethod: 'bank_transfer',
+      paymentStatus: 'pending',
+      customerEmail: clean(email, 320),
+      websiteUrl: clean(websiteUrl, 500),
+      businessType: clean(businessType, 120),
+      primaryGoal: clean(primaryGoal, 120),
+      primaryService: clean(primaryService, 180),
+      amountTotal: priceCents,
+      currency: manual.details.currency.toLowerCase(),
+      publicTokenHash: hashOrderToken(accessToken)
+    };
+
+    appendNdjson('orders.ndjson', order);
+    updateEntityState('order', orderId, { status: 'awaiting_payment', adminNote: '' });
+    logAdminEvent('manual_order_created', {
+      entityId: orderId,
+      email: order.customerEmail,
+      websiteUrl: order.websiteUrl
+    });
+    await sendOptionalWebhook('manual_order_created', {
+      ...order,
+      publicTokenHash: undefined
+    });
+
+    res.status(201).json({
+      ok: true,
+      orderId,
+      accessToken,
+      statusUrl: `${siteUrl}/order.html?token=${encodeURIComponent(accessToken)}`,
+      amountTotal: priceCents,
+      currency: manual.details.currency,
+      bankDetails: manual.details
+    });
+  }
+);
+
+app.get('/api/order-status',
+  rateLimit({ windowMs: 5 * 60 * 1000, max: 60 }),
+  (req, res) => {
+    const token = clean(req.query.token || '', 200);
+    if (!/^[a-f0-9]{48}$/i.test(token)) {
+      return res.status(400).json({ error: 'Invalid order access token.' });
+    }
+    const order = getOrderByAccessToken(token);
+    if (!order) return res.status(404).json({ error: 'Order not found.' });
+    res.setHeader('Cache-Control', 'no-store');
+    res.json(publicOrderPayload(order));
+  }
+);
+
 app.post('/api/create-checkout-session',
   rateLimit({ windowMs: 15 * 60 * 1000, max: 12 }),
   async (req, res) => {
@@ -403,6 +512,7 @@ app.post('/api/create-checkout-session',
     }
 
     try {
+      const publicAccessToken = crypto.randomBytes(24).toString('hex');
       const session = await stripe.checkout.sessions.create({
         mode: 'payment',
         customer_email: clean(email, 320),
@@ -421,7 +531,8 @@ app.post('/api/create-checkout-session',
           websiteUrl: clean(websiteUrl, 500),
           businessType: clean(businessType, 120),
           primaryGoal: clean(primaryGoal, 120),
-          primaryService: clean(primaryService, 180)
+          primaryService: clean(primaryService, 180),
+          publicTokenHash: hashOrderToken(publicAccessToken)
         },
         success_url: `${siteUrl}/success.html?session_id={CHECKOUT_SESSION_ID}`,
         cancel_url: `${siteUrl}/?checkout=cancelled#pricing`,
@@ -507,7 +618,9 @@ async function fulfillPaidSession(session, eventId) {
     receivedAt: new Date().toISOString(),
     eventId: clean(eventId, 200),
     sessionId,
+    paymentMethod: 'card',
     paymentStatus: session.payment_status,
+    publicTokenHash: session.metadata?.publicTokenHash || '',
     customerEmail: session.customer_details?.email || session.customer_email || '',
     websiteUrl: session.metadata?.websiteUrl || '',
     businessType: session.metadata?.businessType || '',
@@ -800,6 +913,76 @@ function toCsv(headers, rows) {
   return lines.join('\r\n');
 }
 
+
+function manualPaymentConfig() {
+  const details = {
+    beneficiary: clean(process.env.BANK_BENEFICIARY || '', 300),
+    bankName: clean(process.env.BANK_NAME || '', 300),
+    account: clean(process.env.BANK_ACCOUNT || '', 300),
+    iban: clean(process.env.BANK_IBAN || '', 100),
+    swift: clean(process.env.BANK_SWIFT || '', 100),
+    currency: clean(process.env.BANK_CURRENCY || 'USD', 10).toUpperCase(),
+    note: clean(process.env.BANK_PAYMENT_NOTE || 'Use your QONVEXA order reference in the payment memo.', 500)
+  };
+  const hasDestination = Boolean(details.iban || details.account);
+  return {
+    enabled: manualPaymentEnabled && Boolean(details.beneficiary) && hasDestination,
+    details
+  };
+}
+
+function hashOrderToken(token) {
+  return crypto.createHash('sha256').update(String(token || '')).digest('hex');
+}
+
+function readAllOrders() {
+  return readNdjson('orders.ndjson');
+}
+
+function getOrderByAccessToken(token) {
+  const tokenHash = hashOrderToken(token);
+  return readAllOrders().find(order => order.publicTokenHash === tokenHash) || null;
+}
+
+function effectiveOrderState(order) {
+  const states = readJson('order-state.json', {});
+  const state = states[order.sessionId] || {};
+  const operationalStatus = state.status || (order.paymentStatus === 'paid' ? 'paid' : 'awaiting_payment');
+  const manualPaid = order.paymentMethod === 'bank_transfer' &&
+    ['paid','queued','in_progress','ready','delivered'].includes(operationalStatus);
+  return {
+    operationalStatus,
+    paymentStatus: order.paymentStatus === 'paid' || manualPaid ? 'paid' : order.paymentStatus
+  };
+}
+
+function publicOrderPayload(order) {
+  const state = effectiveOrderState(order);
+  const paid = state.paymentStatus === 'paid';
+  return {
+    orderId: order.sessionId,
+    paymentMethod: order.paymentMethod || 'card',
+    paymentStatus: state.paymentStatus,
+    status: state.operationalStatus,
+    websiteUrl: order.websiteUrl || '',
+    customerEmail: order.customerEmail || '',
+    amountTotal: order.amountTotal,
+    currency: order.currency || 'usd',
+    createdAt: order.receivedAt || '',
+    delivery: paid ? {
+      state: deliveryPortalUrl ? 'available' : 'preparing',
+      url: deliveryPortalUrl || '',
+      message: deliveryPortalUrl
+        ? 'Your post-payment delivery area is ready.'
+        : 'Payment is confirmed. Your personalized audit is now in preparation.'
+    } : {
+      state: 'waiting_for_payment',
+      url: '',
+      message: 'We are waiting for payment confirmation.'
+    }
+  };
+}
+
 function validateProductionConfig() {
   const allowedModes = ['development','staging','live'];
   if (!allowedModes.includes(launchMode)) {
@@ -816,14 +999,17 @@ function validateProductionConfig() {
 
   if (isLiveLaunch) {
     const requiredForLive = [
-      'SITE_URL','STRIPE_SECRET_KEY','STRIPE_WEBHOOK_SECRET','CONTACT_EMAIL',
+      'SITE_URL','CONTACT_EMAIL',
       'LEGAL_BUSINESS_NAME','LEGAL_ADDRESS','LEGAL_JURISDICTION',
       'DELIVERY_TIMEFRAME','REFUND_POLICY_TEXT'
     ];
     missing.push(...requiredForLive.filter(key => !String(process.env[key] || '').trim()));
     if (!/^https:\/\//i.test(process.env.SITE_URL || '')) missing.push('SITE_URL must use https:// in live mode');
-    if (/^sk_test_/i.test(process.env.STRIPE_SECRET_KEY || '')) missing.push('STRIPE_SECRET_KEY must be a live key in live mode');
-    if (/replace/i.test(process.env.STRIPE_WEBHOOK_SECRET || '')) missing.push('STRIPE_WEBHOOK_SECRET must be configured');
+
+    const manual = manualPaymentConfig();
+    const hasStripe = Boolean(process.env.STRIPE_SECRET_KEY && process.env.STRIPE_WEBHOOK_SECRET);
+    if (!hasStripe && !manual.enabled) missing.push('At least one live payment method must be configured');
+    if (hasStripe && /^sk_test_/i.test(process.env.STRIPE_SECRET_KEY || '')) missing.push('STRIPE_SECRET_KEY must be a live key in live mode');
   }
 
   if (missing.length) {
@@ -836,7 +1022,7 @@ function verifyPublicAssets() {
     'index.html', 'styles.css', 'app.js',
     'admin.html', 'admin.css', 'admin.js',
     'privacy.html', 'terms.html', 'refund.html',
-    'success.html', 'success.js', 'favicon.svg'
+    'success.html', 'success.js', 'order.html', 'order.js', 'favicon.svg'
   ];
   const missing = required.filter(file => !fs.existsSync(path.join(publicDir, file)));
   if (missing.length) {

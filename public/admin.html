@@ -85,9 +85,9 @@
         <div class="view-heading"><div><small>FULFILLMENT</small><h1>Paid orders</h1></div><a class="admin-secondary export-link" href="/api/admin/export/orders.csv">Export CSV</a></div>
         <div class="admin-toolbar">
           <input class="table-search" data-target="orders" type="search" placeholder="Search customer, URL, business, goal…">
-          <select class="status-filter" data-target="orders"><option value="">All statuses</option><option>paid</option><option>queued</option><option>in_progress</option><option>ready</option><option>delivered</option><option>refunded</option><option>cancelled</option></select>
+          <select class="status-filter" data-target="orders"><option value="">All statuses</option><option>awaiting_payment</option><option>paid</option><option>queued</option><option>in_progress</option><option>ready</option><option>delivered</option><option>refunded</option><option>cancelled</option></select>
         </div>
-        <section class="admin-panel"><div class="admin-table-wrap"><table><thead><tr><th>Paid</th><th>Email</th><th>Website</th><th>Business</th><th>Goal</th><th>Amount</th><th>Status</th><th>Admin note</th></tr></thead><tbody id="order-rows"></tbody></table></div></section>
+        <section class="admin-panel"><div class="admin-table-wrap"><table><thead><tr><th>Created</th><th>Email</th><th>Website</th><th>Business</th><th>Goal</th><th>Amount</th><th>Method</th><th>Status</th><th>Admin note</th></tr></thead><tbody id="order-rows"></tbody></table></div></section>
       </section>
 
       <section class="admin-view" data-panel="clients">

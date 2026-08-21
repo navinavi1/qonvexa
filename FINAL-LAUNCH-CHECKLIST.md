@@ -59,3 +59,19 @@
 - [x] Activity log.
 - [x] Owner settings.
 - [x] Domain-email preparation.
+
+
+## QONVEXA 9.0 — Customer Purchase Experience
+- [x] Four-step purchase flow.
+- [x] Customer tips and progress.
+- [x] Review-before-pay.
+- [x] Provider-neutral payment-options API.
+- [x] Configurable fallback bank transfer.
+- [x] Private order-status page.
+- [x] Automatic payment-status refresh / post-payment handoff.
+- [x] Mobile and tablet checkout adaptation.
+- [x] Dedicated purchase-flow audit.
+- [ ] Final approved payment provider connected.
+- [ ] Real fallback bank details enabled, if desired.
+- [ ] Persistent production storage/database.
+- [ ] Final live payment test.

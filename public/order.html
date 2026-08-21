@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Your QONVEXA Order</title>
+  <meta name="robots" content="noindex,nofollow">
+  <link rel="stylesheet" href="styles.css">
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+</head>
+<body>
+  <main class="section shell narrow order-status-page">
+    <p class="eyebrow"><span class="eyebrow-dot" aria-hidden="true"></span>ORDER STATUS</p>
+    <h1 id="order-title">Checking your order…</h1>
+    <p class="lead" id="order-message">We are loading the latest payment and delivery status.</p>
+    <div id="order-card" class="order-status-card" hidden></div>
+    <div class="order-status-actions">
+      <button class="button ghost" id="refresh-order" type="button">Refresh status</button>
+      <a class="button" href="/">Back to QONVEXA</a>
+    </div>
+  </main>
+  <script src="order.js" defer></script>
+</body>
+</html>

@@ -208,7 +208,7 @@
         </div>
         <div class="price-card reveal">
           <p class="muted">Launch price</p>
-          <div class="price"><span>$</span><span class="count-up" data-count="149">0</span></div>
+          <div class="price"><span>$</span><span class="count-up" data-count="149">149</span></div>
           <p>one-time payment</p>
           <ul class="check-list compact">
             <li>Full conversion review</li>
@@ -262,22 +262,116 @@
   <footer class="footer shell">
     <div><a class="brand" href="index.html"><span class="brand-mark">Q</span><span>QONVEXA</span></a><p>Website conversion intelligence for high-value customer journeys.</p></div>
     <div class="footer-links"><a href="privacy.html">Privacy</a><a href="terms.html">Terms</a><a href="refund.html">Refund &amp; Delivery</a><a href="mailto:{{CONTACT_EMAIL}}">Contact</a></div>
-    <p class="fine">© <span id="year"></span> QONVEXA. Replace placeholder contact and legal business information before launch.</p>
+    <p class="fine">© <span id="year"></span> QONVEXA. Website conversion intelligence for high-value customer journeys.</p>
   </footer>
+<dialog id="checkout-dialog" class="purchase-dialog" aria-labelledby="purchase-title">
+    <button class="dialog-close" aria-label="Close purchase flow" id="close-checkout">×</button>
 
-  <dialog id="checkout-dialog">
-    <button class="dialog-close" aria-label="Close" id="close-checkout">×</button>
-    <p class="eyebrow"><span class="eyebrow-dot" aria-hidden="true"></span>UNLOCK FULL AUDIT</p>
-    <h2>Tell us what matters most.</h2>
-    <form id="checkout-form" class="form">
-      <label>Website URL<input required type="url" name="websiteUrl" placeholder="https://example.com"></label>
-      <label>Email for delivery<input required type="email" name="email" placeholder="you@company.com"></label>
-      <label>Business type<input name="businessType" placeholder="e.g. Dental practice"></label>
-      <label>Primary goal<select name="primaryGoal"><option>Appointments</option><option>Calls</option><option>Leads</option><option>Consultations</option><option>Quotes</option><option>Other</option></select></label>
-      <label>Primary service<input name="primaryService" placeholder="e.g. Invisalign, personal injury, HVAC repair"></label>
-      <button class="button full" type="submit">Continue to Secure Checkout — $149</button>
-      <p class="form-status" id="checkout-status" role="status"></p>
-      <p class="fine">Payment details are entered on Stripe's hosted checkout page, not on this website.</p>
+    <div class="purchase-head">
+      <p class="eyebrow"><span class="eyebrow-dot" aria-hidden="true"></span>UNLOCK FULL AUDIT</p>
+      <h2 id="purchase-title">Complete your order in a few clear steps.</h2>
+      <p class="muted">Your website details stay saved while you move through checkout.</p>
+    </div>
+
+    <ol class="purchase-progress" aria-label="Purchase progress">
+      <li class="active" data-progress="1"><span>1</span><b>Details</b></li>
+      <li data-progress="2"><span>2</span><b>Review</b></li>
+      <li data-progress="3"><span>3</span><b>Payment</b></li>
+      <li data-progress="4"><span>4</span><b>Confirm</b></li>
+    </ol>
+
+    <form id="checkout-form" class="purchase-flow" novalidate>
+      <section class="purchase-step active" data-step="1">
+        <div class="purchase-step-copy">
+          <span class="step-label">STEP 1 OF 4</span>
+          <h3>Tell us what matters most.</h3>
+          <p>We use this to focus the audit on the actions that matter to your business.</p>
+        </div>
+
+        <div class="form purchase-fields">
+          <label>Website URL<input required type="url" name="websiteUrl" placeholder="https://example.com" autocomplete="url"></label>
+          <label>Email for delivery<input required type="email" name="email" placeholder="you@company.com" autocomplete="email"></label>
+          <label>Business type<input name="businessType" placeholder="e.g. Dental practice"></label>
+          <label>Primary goal<select name="primaryGoal"><option>Appointments</option><option>Calls</option><option>Leads</option><option>Consultations</option><option>Quotes</option><option>Other</option></select></label>
+          <label class="span-2">Primary service<input name="primaryService" placeholder="e.g. Invisalign, personal injury, HVAC repair"></label>
+        </div>
+
+        <aside class="purchase-tip">
+          <b>Tip</b>
+          <span>Use the public URL a potential customer would actually visit. No website login is required.</span>
+        </aside>
+
+        <div class="purchase-actions">
+          <button class="button" type="button" data-next="2">Review order</button>
+        </div>
+      </section>
+
+      <section class="purchase-step" data-step="2" hidden>
+        <div class="purchase-step-copy">
+          <span class="step-label">STEP 2 OF 4</span>
+          <h3>Review before you pay.</h3>
+          <p>Make sure the website and delivery email are correct.</p>
+        </div>
+
+        <div class="purchase-review" id="purchase-review"></div>
+
+        <div class="purchase-includes">
+          <b>Your $149 audit includes</b>
+          <div><span>Customer journey review</span><span>Mobile conversion review</span><span>CTA &amp; form friction</span><span>Trust &amp; credibility</span><span>Prioritized fixes</span></div>
+        </div>
+
+        <aside class="purchase-tip">
+          <b>Good to know</b>
+          <span>This is a one-time purchase for one public website. It is not a subscription.</span>
+        </aside>
+
+        <div class="purchase-actions split">
+          <button class="button ghost" type="button" data-prev="1">Back</button>
+          <button class="button" type="button" data-next="3">Choose payment</button>
+        </div>
+      </section>
+
+      <section class="purchase-step" data-step="3" hidden>
+        <div class="purchase-step-copy">
+          <span class="step-label">STEP 3 OF 4</span>
+          <h3>Choose a payment method.</h3>
+          <p>Available methods are loaded securely from the server.</p>
+        </div>
+
+        <div id="payment-options" class="payment-options" aria-live="polite">
+          <div class="payment-loading">Checking available payment methods…</div>
+        </div>
+
+        <aside class="purchase-tip">
+          <b>Payment safety</b>
+          <span>QONVEXA does not store full card details. Bank-transfer instructions are shown only when that method is configured.</span>
+        </aside>
+
+        <p class="form-status" id="checkout-status" role="status"></p>
+
+        <div class="purchase-actions split">
+          <button class="button ghost" type="button" data-prev="2">Back</button>
+        </div>
+      </section>
+
+      <section class="purchase-step" data-step="4" hidden>
+        <div class="purchase-step-copy">
+          <span class="step-label">STEP 4 OF 4</span>
+          <h3>Order created.</h3>
+          <p id="purchase-confirmation-copy">Follow the payment instructions below. We will update your order automatically when payment is confirmed.</p>
+        </div>
+
+        <div id="purchase-confirmation" class="purchase-confirmation"></div>
+
+        <aside class="purchase-tip success-tip">
+          <b>What happens next?</b>
+          <span>After payment confirmation, your order status updates and your personalized audit moves into preparation.</span>
+        </aside>
+
+        <div class="purchase-actions">
+          <button class="button ghost" type="button" id="finish-purchase">Close</button>
+        </div>
+      </section>
     </form>
   </dialog>
 

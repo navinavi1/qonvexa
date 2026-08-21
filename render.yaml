@@ -20,6 +20,10 @@ services:
         value: ./data
       - key: AUDIT_PRICE_CENTS
         value: "14900"
+      - key: PAYMENT_MODE
+        value: hybrid
+      - key: MANUAL_PAYMENT_ENABLED
+        value: "false" 
       - key: CONTACT_EMAIL
         value: hello@qonvexa.co
       - key: SITE_URL

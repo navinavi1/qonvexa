@@ -217,3 +217,41 @@ dialog::backdrop{background:rgba(5,10,24,.62);backdrop-filter:blur(4px)}
 }
 
 .hp-field{position:absolute!important;left:-10000px!important;top:auto!important;width:1px!important;height:1px!important;overflow:hidden!important}
+
+
+/* QONVEXA 9.0 — Customer Purchase Experience */
+.purchase-dialog{width:min(900px,calc(100% - 28px));max-height:min(92vh,980px);padding:0;border:1px solid rgba(119,89,255,.35);border-radius:26px;background:#0a1020;color:#f6f8ff;box-shadow:0 35px 120px rgba(0,0,0,.65);overflow:auto}
+.purchase-dialog::backdrop{background:rgba(2,5,12,.78);backdrop-filter:blur(8px)}
+.purchase-dialog .dialog-close{position:sticky;float:right;top:12px;right:12px;z-index:10;margin:12px 12px 0 0;border:1px solid #25314b;background:#0f172b;color:#fff;width:38px;height:38px;border-radius:50%;cursor:pointer}
+.purchase-head{padding:34px 40px 18px}.purchase-head h2{margin:.25em 0 .3em;font-size:clamp(1.65rem,3vw,2.55rem)}.purchase-head p{margin:0}
+.purchase-progress{list-style:none;margin:0 40px 8px;padding:0;display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+.purchase-progress li{position:relative;display:flex;align-items:center;gap:8px;color:#6f7d98;font-size:.72rem;font-weight:800;letter-spacing:.04em;padding:10px;border-radius:12px;background:#090f1c;border:1px solid #1c2740}
+.purchase-progress li span{display:grid;place-items:center;width:26px;height:26px;border-radius:50%;background:#121b30;color:#8090ad}.purchase-progress li.active{color:#fff;border-color:#6554d7;background:#14152c}.purchase-progress li.active span{background:#755cff;color:#fff}.purchase-progress li.done{color:#91d7bf}.purchase-progress li.done span{background:#15362f;color:#8fe0c1}
+.purchase-flow{padding:8px 40px 38px}.purchase-step{animation:purchaseIn .22s ease}.purchase-step[hidden]{display:none!important}@keyframes purchaseIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+.purchase-step-copy{margin:18px 0}.purchase-step-copy h3{font-size:1.45rem;margin:.25em 0}.purchase-step-copy p{margin:.2em 0;color:#8e9bb3}.step-label{font-size:.62rem;letter-spacing:.14em;color:#8f82ff;font-weight:900}
+.purchase-fields{display:grid;grid-template-columns:1fr 1fr;gap:14px}.purchase-fields .span-2{grid-column:1/-1}
+.purchase-tip{display:flex;gap:12px;margin:16px 0;padding:14px 16px;border:1px solid #27334e;border-radius:14px;background:linear-gradient(135deg,#0c1425,#10172b);color:#91a0ba}.purchase-tip b{color:#9e91ff;white-space:nowrap}.purchase-tip span{font-size:.82rem;line-height:1.45}.success-tip{border-color:#245847;background:#0c211d}.success-tip b{color:#85dfbb}
+.purchase-actions{display:flex;justify-content:flex-end;margin-top:18px}.purchase-actions.split{justify-content:space-between;gap:12px}.button.ghost{background:transparent!important;border:1px solid #2a3752!important;color:#dfe5ef!important}
+.purchase-review{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:#1b253b;border:1px solid #1b253b;border-radius:15px;overflow:hidden}.purchase-review>div{padding:13px 14px;background:#090f1d;display:grid;gap:4px}.purchase-review span{font-size:.64rem;letter-spacing:.08em;color:#73819a;text-transform:uppercase}.purchase-review b{font-size:.84rem;overflow-wrap:anywhere}.purchase-review .review-total{grid-column:1/-1;background:#10162a;grid-template-columns:1fr auto;align-items:center}
+.purchase-includes{margin-top:16px;padding:16px;border:1px solid #212d47;border-radius:14px;background:#0a101e}.purchase-includes>b{display:block;margin-bottom:10px}.purchase-includes>div{display:flex;gap:7px;flex-wrap:wrap}.purchase-includes span{padding:7px 9px;border-radius:999px;background:#121b30;color:#9eabc0;font-size:.7rem}
+.payment-options{display:grid;gap:10px}.payment-method{width:100%;display:grid;grid-template-columns:auto 1fr auto;gap:13px;align-items:center;text-align:left;padding:16px;border:1px solid #27344f;border-radius:15px;background:#0a111f;color:#fff;cursor:pointer;transition:.18s ease}.payment-method:hover,.payment-method:focus-visible{border-color:#7763ee;transform:translateY(-1px);box-shadow:0 14px 35px #0003}.payment-method:disabled{opacity:.55;cursor:wait}.payment-method span:nth-child(2){display:grid;gap:3px}.payment-method small{color:#7d8ba4;font-size:.72rem}.payment-method strong{font-size:.9rem}.payment-icon{display:grid;place-items:center;width:38px;height:38px;border-radius:12px;background:#171d36;color:#a899ff;font-size:1.2rem}
+.payment-loading,.payment-unavailable{padding:18px;border:1px dashed #35415a;border-radius:14px;color:#8e9bb3}.payment-unavailable{display:grid;gap:6px}.payment-unavailable b{color:#fff}.payment-unavailable a{color:#8fc7ff}
+.purchase-confirmation{display:grid;gap:14px}.confirmation-order,.bank-details{border:1px solid #243149;background:#090f1d;border-radius:15px;padding:16px}.confirmation-order{display:grid;grid-template-columns:1fr auto;gap:6px 12px;align-items:center}.confirmation-order span{font-size:.65rem;color:#77859e;text-transform:uppercase;letter-spacing:.08em}.confirmation-order b{font-family:monospace;overflow-wrap:anywhere}.copy-button{grid-column:2;grid-row:1/3;border:1px solid #33415d;border-radius:10px;background:#111a2d;color:#dfe7f5;padding:8px 10px;cursor:pointer}
+.bank-details{display:grid;grid-template-columns:1fr 1fr;gap:12px}.bank-details>div{display:grid;gap:3px;padding:10px;background:#0c1424;border-radius:10px}.bank-details span{font-size:.62rem;color:#74819a;text-transform:uppercase;letter-spacing:.08em}.bank-details b{font-size:.8rem;overflow-wrap:anywhere}.bank-details small{color:#7f8ba4}.bank-note{grid-column:1/-1}
+.order-status-page{padding-top:80px}.order-status-card{margin:24px 0;padding:20px;border:1px solid #26334c;border-radius:18px;background:#0a111f}.order-status-line{display:grid;grid-template-columns:150px 1fr;gap:12px;padding:11px 0;border-bottom:1px solid #1e2940}.order-status-line:last-of-type{border-bottom:0}.order-status-line span{color:#7b88a0}.order-status-line b{overflow-wrap:anywhere}.status-paid{color:#80dbb8}.status-pending{color:#f2c272}.order-status-actions{display:flex;gap:10px;flex-wrap:wrap}
+
+@media(max-width:760px){
+  .purchase-dialog{width:100%;max-width:none;height:100dvh;max-height:100dvh;border-radius:0;border-left:0;border-right:0}
+  .purchase-head{padding:26px 18px 14px}.purchase-flow{padding:6px 18px 28px}.purchase-progress{margin:0 18px 6px;gap:5px}
+  .purchase-progress li{justify-content:center;padding:8px 5px}.purchase-progress li b{display:none}.purchase-progress li span{width:28px;height:28px}
+  .purchase-fields{grid-template-columns:1fr}.purchase-fields .span-2{grid-column:auto}.purchase-review{grid-template-columns:1fr}.purchase-review .review-total{grid-column:auto}
+  .bank-details{grid-template-columns:1fr}.bank-note{grid-column:auto}.payment-method{grid-template-columns:auto 1fr}.payment-method strong{grid-column:2}
+  .purchase-actions .button{min-height:48px}.purchase-tip{align-items:flex-start}
+}
+@media(max-width:430px){
+  .purchase-head h2{font-size:1.55rem}.purchase-progress{position:sticky;top:0;z-index:5;background:#0a1020;padding:8px 0}
+  .purchase-flow{padding-left:14px;padding-right:14px}.purchase-head{padding-left:14px;padding-right:14px}.purchase-progress{margin-left:14px;margin-right:14px}
+  .purchase-actions.split{flex-direction:column-reverse}.purchase-actions.split .button,.purchase-actions .button{width:100%}
+  .confirmation-order{grid-template-columns:1fr}.copy-button{grid-column:auto;grid-row:auto;width:100%}
+  .order-status-line{grid-template-columns:1fr;gap:3px}.order-status-actions{flex-direction:column}.order-status-actions .button{width:100%}
+}
