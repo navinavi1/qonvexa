@@ -10,6 +10,9 @@ import { fileURLToPath } from 'node:url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const publicDir = path.resolve(__dirname, 'public');
+const packageMeta = JSON.parse(fs.readFileSync(path.join(__dirname, 'package.json'), 'utf8'));
+const appVersion = clean(packageMeta.version || 'unknown', 40);
+const gitCommit = clean(process.env.RENDER_GIT_COMMIT || '', 64);
 
 const app = express();
 const port = safeInteger(process.env.PORT, 3000, 1, 65535);
@@ -18,9 +21,10 @@ const launchMode = clean(process.env.LAUNCH_MODE || (isProduction ? 'staging' : 
 const isLiveLaunch = launchMode === 'live';
 const siteUrl = normalizeSiteUrl(process.env.SITE_URL || process.env.RENDER_EXTERNAL_URL || `http://localhost:${port}`);
 const priceCents = safeInteger(process.env.AUDIT_PRICE_CENTS, 14900, 50, 10000000);
+const allowStagingPayments = /^(1|true|yes|on)$/i.test(String(process.env.ALLOW_STAGING_PAYMENTS || 'false'));
+const salesEnabled = !isProduction || isLiveLaunch || allowStagingPayments;
 const paymentMode = clean(process.env.PAYMENT_MODE || (process.env.STRIPE_SECRET_KEY ? 'stripe' : 'manual'), 20).toLowerCase();
 const manualPaymentEnabled = /^(1|true|yes|on)$/i.test(String(process.env.MANUAL_PAYMENT_ENABLED || 'false'));
-const deliveryPortalUrl = clean(process.env.DELIVERY_PORTAL_URL || '', 1000);
 const storageDir = path.resolve(process.env.STORAGE_DIR || path.join(__dirname, 'data'));
 const contactEmail = clean(process.env.CONTACT_EMAIL || 'hello@qonvexa.co', 320);
 const adminUsername = clean(process.env.ADMIN_USERNAME || 'admin', 120);
@@ -197,10 +201,10 @@ app.get('/api/admin/dashboard', requireAdmin, (_req, res) => {
   res.json({
     counts: {
       previews: previews.length,
-      paidOrders: orders.length,
+      paidOrders: orders.filter(isOrderPaid).length,
       clients: clients.length,
       openLeads: previews.filter(x => !['closed','won','lost'].includes(x.status)).length,
-      activeOrders: orders.filter(x => !['delivered','refunded','cancelled'].includes(x.status)).length
+      activeOrders: orders.filter(x => isOrderPaid(x) && !['delivered','refunded','cancelled'].includes(x.status)).length
     },
     previews: previews.slice(-300).reverse(),
     orders: orders.slice(-300).reverse(),
@@ -213,7 +217,9 @@ app.get('/api/admin/dashboard', requireAdmin, (_req, res) => {
       stripeConfigured: Boolean(stripe),
       manualPaymentConfigured: manualPaymentConfig().enabled,
       paymentMode,
+      salesEnabled,
       storageDir,
+      persistentStorage: isPersistentStorage(),
       notificationWebhookConfigured: Boolean(process.env.NOTIFICATION_WEBHOOK_URL),
       domainEmailConfigured: isValidEmail(settings.domainEmail || contactEmail)
     }
@@ -238,11 +244,13 @@ app.patch('/api/admin/orders/:id', requireAdmin, requireSameSiteMutation, (req, 
   const allowed = ['awaiting_payment','paid','queued','in_progress','ready','delivered','refunded','cancelled'];
   const status = clean(req.body?.status || '', 40);
   const note = clean(req.body?.adminNote || '', 2000);
+  const deliveryUrl = clean(req.body?.deliveryUrl || '', 1000);
   if (status && !allowed.includes(status)) return res.status(400).json({ error: 'Invalid order status.' });
+  if (deliveryUrl && !isValidHttpUrl(deliveryUrl)) return res.status(400).json({ error: 'Delivery URL must be a valid http(s) URL.' });
   const exists = readNdjson('orders.ndjson').some(item => item.sessionId === id);
   if (!exists) return res.status(404).json({ error: 'Order not found.' });
-  const state = updateEntityState('order', id, { status: status || undefined, adminNote: note });
-  logAdminEvent('order_updated', { entityId:id, status:state.status });
+  const state = updateEntityState('order', id, { status: status || undefined, adminNote: note, deliveryUrl });
+  logAdminEvent('order_updated', { entityId:id, status:state.status, deliveryConfigured:Boolean(state.deliveryUrl) });
   res.json({ ok:true, state });
 });
 
@@ -341,13 +349,20 @@ app.get('/launch-readiness', (_req, res) => {
     refundPolicy: Boolean(clean(process.env.REFUND_POLICY_TEXT || '', 2000)),
     paymentProvider: Boolean(stripe) || manualPaymentConfig().enabled,
     notificationWebhook: Boolean(process.env.NOTIFICATION_WEBHOOK_URL),
-    persistentStorage: storageDir.startsWith('/var/lib/') || Boolean(process.env.DATABASE_URL)
+    persistentStorage: isPersistentStorage(),
+    salesEnabled,
+    salesEnabled
   };
   res.json({
     launchMode,
     readyForLiveSales: Object.values(checks).every(Boolean),
     checks
   });
+});
+
+app.get('/version', (_req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  res.json({ name:'QONVEXA', version:appVersion, commit:gitCommit || null, launchMode, salesEnabled });
 });
 
 app.get('/health', (_req, res) => res.json({
@@ -357,7 +372,9 @@ app.get('/health', (_req, res) => res.json({
   stripeConfigured: Boolean(stripe),
   manualPaymentConfigured: manualPaymentConfig().enabled,
   paymentMode,
+  salesEnabled,
   storageConfigured: Boolean(storageDir),
+  persistentStorage: isPersistentStorage(),
   publicIndexAvailable: fs.existsSync(path.join(publicDir, 'index.html'))
 }));
 
@@ -395,7 +412,7 @@ app.get('/api/purchase-options',
   rateLimit({ windowMs: 5 * 60 * 1000, max: 60 }),
   (_req, res) => {
     const manual = manualPaymentConfig();
-    const stripeAvailable = Boolean(stripe);
+    const stripeAvailable = salesEnabled && Boolean(stripe);
     res.json({
       priceCents,
       currency: 'USD',
@@ -406,9 +423,9 @@ app.get('/api/purchase-options',
           label: 'Pay securely by card'
         },
         bankTransfer: {
-          available: manual.enabled,
+          available: salesEnabled && manual.enabled,
           label: 'Bank transfer',
-          details: manual.enabled ? manual.details : null
+          details: salesEnabled && manual.enabled ? manual.details : null
         }
       },
       contactEmail
@@ -419,6 +436,7 @@ app.get('/api/purchase-options',
 app.post('/api/manual-order',
   rateLimit({ windowMs: 15 * 60 * 1000, max: 8 }),
   async (req, res) => {
+    if (!salesEnabled) return res.status(503).json({ error: 'Paid checkout is not enabled yet.' });
     const manual = manualPaymentConfig();
     if (!manual.enabled) {
       return res.status(503).json({ error: 'Bank-transfer checkout is not configured.' });
@@ -480,12 +498,35 @@ app.post('/api/manual-order',
 
 app.get('/api/order-status',
   rateLimit({ windowMs: 5 * 60 * 1000, max: 60 }),
-  (req, res) => {
+  async (req, res) => {
     const token = clean(req.query.token || '', 200);
+    const sessionId = clean(req.query.session_id || '', 220);
     if (!/^[a-f0-9]{48}$/i.test(token)) {
       return res.status(400).json({ error: 'Invalid order access token.' });
     }
-    const order = getOrderByAccessToken(token);
+
+    let order = getOrderByAccessToken(token);
+
+    if (!order && sessionId && stripe) {
+      try {
+        const session = await stripe.checkout.sessions.retrieve(sessionId);
+        const expectedHash = clean(session.metadata?.publicTokenHash || '', 128);
+        if (!expectedHash || !safeCredentialEqual(expectedHash, hashOrderToken(token))) {
+          return res.status(404).json({ error: 'Order not found.' });
+        }
+        if (session.payment_status === 'paid') {
+          await fulfillPaidSession(session, `status:${session.id}`);
+          order = getOrderByAccessToken(token);
+        }
+        if (!order) {
+          res.setHeader('Cache-Control', 'no-store');
+          return res.json(publicStripeSessionPayload(session));
+        }
+      } catch {
+        return res.status(404).json({ error: 'Order not found.' });
+      }
+    }
+
     if (!order) return res.status(404).json({ error: 'Order not found.' });
     res.setHeader('Cache-Control', 'no-store');
     res.json(publicOrderPayload(order));
@@ -495,6 +536,7 @@ app.get('/api/order-status',
 app.post('/api/create-checkout-session',
   rateLimit({ windowMs: 15 * 60 * 1000, max: 12 }),
   async (req, res) => {
+    if (!salesEnabled) return res.status(503).json({ error: 'Paid checkout is not enabled yet.' });
     if (!stripe) {
       return res.status(503).json({ error: 'Payments are not configured yet.' });
     }
@@ -534,7 +576,7 @@ app.post('/api/create-checkout-session',
           primaryService: clean(primaryService, 180),
           publicTokenHash: hashOrderToken(publicAccessToken)
         },
-        success_url: `${siteUrl}/success.html?session_id={CHECKOUT_SESSION_ID}`,
+        success_url: `${siteUrl}/order.html?token=${encodeURIComponent(publicAccessToken)}&session_id={CHECKOUT_SESSION_ID}`,
         cancel_url: `${siteUrl}/?checkout=cancelled#pricing`,
         billing_address_collection: 'auto'
       });
@@ -588,7 +630,11 @@ app.use(express.static(publicDir, {
       res.setHeader('Cache-Control', 'no-store');
       return;
     }
-    if (/\.(css|js|png|svg|woff2?)$/i.test(filePath)) {
+    if (/\.(css|js)$/i.test(filePath)) {
+      res.setHeader('Cache-Control', 'public, max-age=0, must-revalidate');
+      return;
+    }
+    if (/\.(png|svg|woff2?)$/i.test(filePath)) {
       res.setHeader('Cache-Control', isProduction ? 'public, max-age=86400' : 'no-cache');
     }
   }
@@ -682,16 +728,18 @@ function sendHtml(res, filename) {
     const replacements = {
       '{{SITE_URL}}': escapeHtml(siteUrl),
       '{{CONTACT_EMAIL}}': escapeHtml(contactEmail),
-      '{{LEGAL_BUSINESS_NAME}}': escapeHtml(process.env.LEGAL_BUSINESS_NAME || 'QONVEXA'),
-      '{{LEGAL_ADDRESS}}': escapeHtml(process.env.LEGAL_ADDRESS || 'Business details available on request'),
+      '{{LEGAL_BUSINESS_NAME}}': escapeHtml(process.env.LEGAL_BUSINESS_NAME || 'QONVEXA — pre-launch'),
+      '{{LEGAL_ADDRESS}}': escapeHtml(process.env.LEGAL_ADDRESS || 'Legal operator details will be published before paid checkout is enabled.'),
       '{{LEGAL_JURISDICTION}}': escapeHtml(process.env.LEGAL_JURISDICTION || 'Ukraine'),
-      '{{DELIVERY_TIMEFRAME}}': escapeHtml(process.env.DELIVERY_TIMEFRAME || 'communicated before payment'),
-      '{{REFUND_POLICY_TEXT}}': escapeHtml(process.env.REFUND_POLICY_TEXT || 'Refund and cancellation terms are confirmed before payment. For questions, contact hello@qonvexa.co.'),
+      '{{DELIVERY_TIMEFRAME}}': escapeHtml(process.env.DELIVERY_TIMEFRAME || 'Paid checkout is not enabled until a delivery timeframe is published.'),
+      '{{REFUND_POLICY_TEXT}}': escapeHtml(process.env.REFUND_POLICY_TEXT || 'Paid checkout is not enabled until final refund and cancellation terms are published. For questions, contact hello@qonvexa.co.'),
       '{{LAST_UPDATED}}': escapeHtml(process.env.LEGAL_LAST_UPDATED || new Date().toISOString().slice(0, 10)),
       '{{LEGAL_ROBOTS}}': escapeHtml(isLiveLaunch ? 'index,follow' : 'noindex,nofollow')
     };
     let output = html;
     for (const [token, value] of Object.entries(replacements)) output = output.split(token).join(value);
+    res.setHeader('Cache-Control', 'public, max-age=0, must-revalidate');
+    res.setHeader('X-QONVEXA-Version', appVersion);
     res.type('html').send(output);
   } catch (err) {
     console.error(`Failed to render ${filename}:`, err);
@@ -838,8 +886,11 @@ function withEntityState(items, type) {
     const state = states[id] || {};
     return {
       ...item,
-      status: state.status || (type === 'order' ? defaults.defaultOrderStatus : defaults.defaultLeadStatus),
+      status: state.status || (type === 'order'
+        ? (item.paymentStatus === 'paid' ? defaults.defaultOrderStatus : 'awaiting_payment')
+        : defaults.defaultLeadStatus),
       adminNote: state.adminNote || '',
+      deliveryUrl: type === 'order' ? (state.deliveryUrl || '') : undefined,
       statusUpdatedAt: state.updatedAt || ''
     };
   });
@@ -883,7 +934,7 @@ function buildClients(previews, orders) {
       firstSeenAt: current?.firstSeenAt || date,
       lastSeenAt: !current?.lastSeenAt || date > current.lastSeenAt ? date : current.lastSeenAt,
       orderCount: (current?.orderCount || 0) + 1,
-      totalPaidCents: (current?.totalPaidCents || 0) + Number(order.amountTotal || 0),
+      totalPaidCents: (current?.totalPaidCents || 0) + (isOrderPaid(order) ? Number(order.amountTotal || 0) : 0),
       currency: order.currency || current?.currency || 'usd',
       latestOrderStatus: order.status
     });
@@ -935,6 +986,40 @@ function hashOrderToken(token) {
   return crypto.createHash('sha256').update(String(token || '')).digest('hex');
 }
 
+function isOrderPaid(order) {
+  if (!order) return false;
+  if (order.paymentStatus === 'paid') return true;
+  return order.paymentMethod === 'bank_transfer' &&
+    ['paid','queued','in_progress','ready','delivered'].includes(order.status);
+}
+
+function isPersistentStorage() {
+  const normalized = storageDir.replaceAll('\\', '/');
+  return normalized === '/var/lib/qonvexa/data' || normalized.startsWith('/var/lib/qonvexa/');
+}
+
+function publicStripeSessionPayload(session) {
+  const paid = session.payment_status === 'paid';
+  return {
+    orderId: session.id,
+    paymentMethod: 'card',
+    paymentStatus: session.payment_status || 'pending',
+    status: paid ? 'paid' : 'awaiting_payment',
+    websiteUrl: session.metadata?.websiteUrl || '',
+    customerEmail: session.customer_details?.email || session.customer_email || '',
+    amountTotal: session.amount_total,
+    currency: session.currency || 'usd',
+    createdAt: session.created ? new Date(session.created * 1000).toISOString() : '',
+    delivery: {
+      state: paid ? 'preparing' : 'waiting_for_payment',
+      url: '',
+      message: paid
+        ? 'Payment is confirmed. Your personalized audit is now in preparation.'
+        : 'We are waiting for payment confirmation.'
+    }
+  };
+}
+
 function readAllOrders() {
   return readNdjson('orders.ndjson');
 }
@@ -959,6 +1044,11 @@ function effectiveOrderState(order) {
 function publicOrderPayload(order) {
   const state = effectiveOrderState(order);
   const paid = state.paymentStatus === 'paid';
+  const states = readJson('order-state.json', {});
+  const deliveryUrl = clean(states[order.sessionId]?.deliveryUrl || '', 1000);
+  const deliveryAvailable = paid && isValidHttpUrl(deliveryUrl) &&
+    ['ready','delivered'].includes(state.operationalStatus);
+
   return {
     orderId: order.sessionId,
     paymentMethod: order.paymentMethod || 'card',
@@ -970,10 +1060,10 @@ function publicOrderPayload(order) {
     currency: order.currency || 'usd',
     createdAt: order.receivedAt || '',
     delivery: paid ? {
-      state: deliveryPortalUrl ? 'available' : 'preparing',
-      url: deliveryPortalUrl || '',
-      message: deliveryPortalUrl
-        ? 'Your post-payment delivery area is ready.'
+      state: deliveryAvailable ? 'available' : 'preparing',
+      url: deliveryAvailable ? deliveryUrl : '',
+      message: deliveryAvailable
+        ? 'Your personalized audit is ready.'
         : 'Payment is confirmed. Your personalized audit is now in preparation.'
     } : {
       state: 'waiting_for_payment',
@@ -1006,6 +1096,7 @@ function validateProductionConfig() {
     missing.push(...requiredForLive.filter(key => !String(process.env[key] || '').trim()));
     if (!/^https:\/\//i.test(process.env.SITE_URL || '')) missing.push('SITE_URL must use https:// in live mode');
 
+    if (!isPersistentStorage()) missing.push('Live mode requires persistent STORAGE_DIR under /var/lib/qonvexa');
     const manual = manualPaymentConfig();
     const hasStripe = Boolean(process.env.STRIPE_SECRET_KEY && process.env.STRIPE_WEBHOOK_SECRET);
     if (!hasStripe && !manual.enabled) missing.push('At least one live payment method must be configured');

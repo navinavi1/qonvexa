@@ -111,16 +111,17 @@ function renderSettings(){
     settingRow('Card checkout',data.system.stripeConfigured?'Configured':'Not configured',data.system.stripeConfigured),
     settingRow('Bank-transfer fallback',data.system.manualPaymentConfigured?'Configured':'Not configured',data.system.manualPaymentConfigured),
     settingRow('Payment mode',data.system.paymentMode||'Not configured'),
+    settingRow('Sales gate',data.system.salesEnabled?'Enabled':'Disabled',data.system.salesEnabled),
     settingRow('Notification webhook',data.system.notificationWebhookConfigured?'Configured':'Not configured',data.system.notificationWebhookConfigured),
     settingRow('Domain email',data.system.domainEmailConfigured?'Configured':'Not configured',data.system.domainEmailConfigured),
-    settingRow('Storage',data.system.storageDir?'Configured':'Not configured',Boolean(data.system.storageDir))
+    settingRow('Storage',data.system.persistentStorage?'Persistent':(data.system.storageDir?'Ephemeral':'Not configured'),data.system.persistentStorage)
   ].join('');
 }
 function settingRow(label,value,ok){return `<div class="system-row"><span>${esc(label)}</span><b>${esc(value)}</b>${typeof ok==='boolean'?`<i class="${ok?'ok':'warn'}">${ok?'READY':'TODO'}</i>`:''}</div>`}
 function renderReadiness(){
   const items=[
     ['Payment method',Boolean(data.system.stripeConfigured || data.system.manualPaymentConfigured)],
-    ['Persistent storage path',Boolean(data.system.storageDir)],
+    ['Persistent storage',data.system.persistentStorage],
     ['Domain email',data.system.domainEmailConfigured],
     ['Notification automation',data.system.notificationWebhookConfigured]
   ];
@@ -137,6 +138,11 @@ document.addEventListener('click',e=>{
 });
 function openEdit(type,id,item){
   const form=el('#edit-form'); form.reset(); form.elements.entityType.value=type; form.elements.entityId.value=id; form.elements.adminNote.value=item.adminNote||'';
+  const deliveryRow=el('#delivery-url-row');
+  if(deliveryRow){
+    deliveryRow.hidden=type!=='order';
+    if(form.elements.deliveryUrl) form.elements.deliveryUrl.value=type==='order'?(item.deliveryUrl||''):'';
+  }
   el('#dialog-kind').textContent=type==='lead'?'LEAD':'ORDER';
   el('#dialog-title').textContent=type==='lead'?(item.email||'Lead'):(item.customerEmail||'Order');
   const opts=type==='lead'?['new','reviewing','preview_sent','follow_up','won','lost','closed']:['awaiting_payment','paid','queued','in_progress','ready','delivered','refunded','cancelled'];
@@ -147,7 +153,9 @@ el('#edit-form')?.addEventListener('submit',async e=>{
   e.preventDefault(); const f=e.currentTarget; const type=f.elements.entityType.value,id=f.elements.entityId.value;
   el('#edit-status').textContent='Saving…';
   try{
-    await api(`/api/admin/${type==='lead'?'leads':'orders'}/${encodeURIComponent(id)}`,{method:'PATCH',body:JSON.stringify({status:f.elements.status.value,adminNote:f.elements.adminNote.value})});
+    const body={status:f.elements.status.value,adminNote:f.elements.adminNote.value};
+    if(type==='order' && f.elements.deliveryUrl) body.deliveryUrl=f.elements.deliveryUrl.value;
+    await api(`/api/admin/${type==='lead'?'leads':'orders'}/${encodeURIComponent(id)}`,{method:'PATCH',body:JSON.stringify(body)});
     editDialog.close(); await loadDashboard();
   }catch(err){el('#edit-status').textContent=err.message}
 });

@@ -1,4 +1,6 @@
-const token = new URLSearchParams(location.search).get('token') || '';
+const params = new URLSearchParams(location.search);
+const token = params.get('token') || '';
+const sessionId = params.get('session_id') || '';
 const title = document.querySelector('#order-title');
 const message = document.querySelector('#order-message');
 const card = document.querySelector('#order-card');
@@ -13,7 +15,7 @@ async function loadOrder() {
   }
   refresh.disabled = true;
   try {
-    const response = await fetch(`/api/order-status?token=${encodeURIComponent(token)}`, {
+    const response = await fetch(`/api/order-status?token=${encodeURIComponent(token)}${sessionId ? `&session_id=${encodeURIComponent(sessionId)}` : ''}`, {
       headers: { accept:'application/json' },
       cache:'no-store'
     });

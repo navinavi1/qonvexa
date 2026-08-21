@@ -1,3 +1,18 @@
+const navToggle = document.querySelector('.nav-toggle');
+const primaryNav = document.querySelector('#primary-nav');
+
+function setMobileNav(open) {
+  if (!navToggle || !primaryNav) return;
+  navToggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+  navToggle.setAttribute('aria-label', open ? 'Close navigation' : 'Open navigation');
+  primaryNav.classList.toggle('open', open);
+  document.body.classList.toggle('nav-open', open);
+}
+navToggle?.addEventListener('click', () => setMobileNav(navToggle.getAttribute('aria-expanded') !== 'true'));
+primaryNav?.querySelectorAll('a').forEach(link => link.addEventListener('click', () => setMobileNav(false)));
+document.addEventListener('keydown', event => { if (event.key === 'Escape') setMobileNav(false); });
+window.addEventListener('resize', () => { if (window.innerWidth > 900) setMobileNav(false); });
+
 const industryData = {
   dental: {
     title: 'Dental practices',
@@ -137,10 +152,19 @@ function showPurchaseStep(step) {
   });
   document.querySelectorAll('[data-progress]').forEach(item => {
     const n = Number(item.dataset.progress);
-    item.classList.toggle('active', n === step);
+    const active = n === step;
+    item.classList.toggle('active', active);
     item.classList.toggle('done', n < step);
+    if (active) item.setAttribute('aria-current', 'step');
+    else item.removeAttribute('aria-current');
   });
-  dialog?.querySelector('.purchase-step.active')?.scrollIntoView({ block:'nearest' });
+  const activeSection = dialog?.querySelector('.purchase-step.active');
+  activeSection?.scrollIntoView({ block:'nearest' });
+  const heading = activeSection?.querySelector('h3');
+  if (heading && step > 1) {
+    heading.setAttribute('tabindex', '-1');
+    requestAnimationFrame(() => heading.focus({ preventScroll:true }));
+  }
 }
 
 function validatePurchaseDetails() {

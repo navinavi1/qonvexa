@@ -75,3 +75,23 @@
 - [ ] Real fallback bank details enabled, if desired.
 - [ ] Persistent production storage/database.
 - [ ] Final live payment test.
+
+
+## Production Finalization 9.1.0
+
+- [x] Mobile navigation works below 900px.
+- [x] Purchase progress exposes accessible current step.
+- [x] Card and fallback purchases use the private order-status architecture.
+- [x] Card order token is verified server-side.
+- [x] Deliverable URL is per order, not global.
+- [x] Pending fallback orders do not count as paid revenue.
+- [x] Public staging paid checkout is disabled by default.
+- [x] Live mode requires persistent `/var/lib/qonvexa` storage.
+- [x] JS/CSS and dynamic HTML revalidate after deploys.
+- [x] `/version` and `X-QONVEXA-Version` identify the deployed release.
+- [x] Production Finalization automated audit passes.
+- [ ] Configure real legal business name/address.
+- [ ] Publish final delivery and refund terms.
+- [ ] Configure approved live payment provider.
+- [ ] Configure persistent Render disk or equivalent data store.
+- [ ] Run one real end-to-end production payment.

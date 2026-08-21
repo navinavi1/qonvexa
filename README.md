@@ -135,3 +135,21 @@ Customers receive a private `/order.html?token=...` status link. It refreshes au
 
 ### Post-payment handoff
 If `DELIVERY_PORTAL_URL` is configured, the private order page exposes that URL only after confirmed payment status. Otherwise the customer is told that the personalized audit is in preparation.
+
+
+## Production Finalization (9.1.0)
+
+Production Finalization preserves the 9.0 funnel while hardening the release for real customers.
+
+Key additions:
+- responsive mobile navigation;
+- unified private order status for card and bank-transfer flows;
+- per-order secure deliverable URLs;
+- staging payment safety gate;
+- live persistent-storage guard;
+- correct paid-order/revenue metrics;
+- cache revalidation for unfingerprinted JS/CSS;
+- `/version` deployment marker;
+- improved checkout accessibility.
+
+Before live sales, configure the real legal values, approved live payment credentials and persistent storage. See `QONVEXA-PRODUCTION-FINALIZATION-REPORT.md`.

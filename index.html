@@ -41,7 +41,10 @@
       <span class="brand-mark" aria-hidden="true">Q</span>
       <span>QONVEXA</span>
     </a>
-    <nav aria-label="Primary">
+    <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="primary-nav" aria-label="Open navigation">
+      <span></span><span></span><span></span>
+    </button>
+    <nav class="primary-nav" id="primary-nav" aria-label="Primary">
       <a href="#what-we-check">What we check</a>
       <a href="#how">How it works</a>
       <a href="#pricing">Pricing</a>
@@ -274,7 +277,7 @@
     </div>
 
     <ol class="purchase-progress" aria-label="Purchase progress">
-      <li class="active" data-progress="1"><span>1</span><b>Details</b></li>
+      <li class="active" data-progress="1" aria-current="step"><span>1</span><b>Details</b></li>
       <li data-progress="2"><span>2</span><b>Review</b></li>
       <li data-progress="3"><span>3</span><b>Payment</b></li>
       <li data-progress="4"><span>4</span><b>Confirm</b></li>

@@ -22,8 +22,10 @@ services:
         value: "14900"
       - key: PAYMENT_MODE
         value: hybrid
+      - key: ALLOW_STAGING_PAYMENTS
+        value: "false"
       - key: MANUAL_PAYMENT_ENABLED
-        value: "false" 
+        value: "false"
       - key: CONTACT_EMAIL
         value: hello@qonvexa.co
       - key: SITE_URL
