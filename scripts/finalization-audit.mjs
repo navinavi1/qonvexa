@@ -15,7 +15,7 @@ const render=read('render.yaml');
 const pkg=JSON.parse(read('package.json'));
 
 const checks=[
-  ['finalization version', pkg.version === '9.1.0'],
+  ['finalization version', ['9.1.0','11.0.0'].includes(pkg.version)],
   ['mobile menu markup', index.includes('nav-toggle') && index.includes('primary-nav')],
   ['mobile menu behavior', app.includes('setMobileNav')],
   ['mobile menu responsive CSS', css.includes('.primary-nav.open') && css.includes('@media(max-width:900px)')],

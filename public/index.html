@@ -202,6 +202,40 @@
       </div>
     </section>
 
+    <section class="section shell invited-audit" id="find-my-audit">
+      <div class="invited-grid">
+        <div class="reveal">
+          <p class="eyebrow"><span class="eyebrow-dot" aria-hidden="true"></span>PERSONALLY INVITED?</p>
+          <h2>Find My Audit.</h2>
+          <p class="section-lead">Enter the email address from your QONVEXA invitation. If your mini-audit is ready, we will show the preview here.</p>
+          <ul class="check-list compact">
+            <li>Use the same email from your invitation</li>
+            <li>No password or account required</li>
+            <li>If your full audit is already prepared, it unlocks immediately after confirmed payment</li>
+          </ul>
+        </div>
+
+        <div class="panel invited-panel reveal">
+          <form id="audit-lookup-form" class="form" novalidate>
+            <label>Email<input required type="email" name="email" placeholder="you@company.com" autocomplete="email"></label>
+            <button class="button full" type="submit">Find My Audit</button>
+            <p class="form-status" id="audit-lookup-status" role="status"></p>
+            <p class="fine">Need help? Contact <a href="mailto:hello@qonvexa.co">hello@qonvexa.co</a>.</p>
+          </form>
+
+          <article id="mini-audit-result" class="mini-audit-card" hidden aria-live="polite">
+            <p class="eyebrow"><span class="eyebrow-dot" aria-hidden="true"></span>YOUR MINI-AUDIT</p>
+            <h3 id="mini-audit-title">Your QONVEXA mini-audit</h3>
+            <p id="mini-audit-summary"></p>
+            <ul id="mini-audit-findings" class="check-list compact"></ul>
+            <div class="mini-audit-meta" id="mini-audit-meta"></div>
+            <p class="mini-audit-ready-note" id="mini-audit-ready-note"></p>
+            <button class="button full" type="button" id="unlock-found-audit">Unlock Full Audit — $149</button>
+          </article>
+        </div>
+      </div>
+    </section>
+
     <section class="section dark blueprint" id="pricing">
       <div class="shell pricing-layout">
         <div class="reveal">
@@ -223,8 +257,8 @@
             <li>Actionable recommendations</li>
             <li>Visual examples where relevant</li>
           </ul>
-          <button class="button full" id="open-checkout">Unlock Full Audit — $149</button>
-          <p class="fine center">Secure hosted checkout. No subscription.</p>
+          <button class="button full" id="open-checkout">Order Full Audit — $149</button>
+          <p class="fine center">For new orders, after confirmed payment your audit is prepared within 1–24 hours and delivered to the email you provide.</p>
         </div>
       </div>
     </section>
@@ -264,7 +298,7 @@
 
   <footer class="footer shell">
     <div><a class="brand" href="index.html"><span class="brand-mark">Q</span><span>QONVEXA</span></a><p>Website conversion intelligence for high-value customer journeys.</p></div>
-    <div class="footer-links"><a href="privacy.html">Privacy</a><a href="terms.html">Terms</a><a href="refund.html">Refund &amp; Delivery</a><a href="mailto:{{CONTACT_EMAIL}}">Contact</a></div>
+    <div class="footer-links"><a href="privacy.html">Privacy</a><a href="terms.html">Terms</a><a href="refund.html">Refund &amp; Delivery</a><a href="mailto:hello@qonvexa.co">Support · hello@qonvexa.co</a><a class="footer-admin-link" href="/admin">Admin</a></div>
     <p class="fine">© <span id="year"></span> QONVEXA. Website conversion intelligence for high-value customer journeys.</p>
   </footer>
 <dialog id="checkout-dialog" class="purchase-dialog" aria-labelledby="purchase-title">
@@ -292,6 +326,7 @@
         </div>
 
         <div class="form purchase-fields">
+          <input type="hidden" name="sourceLeadId">
           <label>Website URL<input required type="url" name="websiteUrl" placeholder="https://example.com" autocomplete="url"></label>
           <label>Email for delivery<input required type="email" name="email" placeholder="you@company.com" autocomplete="email"></label>
           <label>Business type<input name="businessType" placeholder="e.g. Dental practice"></label>

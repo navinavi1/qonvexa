@@ -231,11 +231,34 @@ app.patch('/api/admin/leads/:id', requireAdmin, requireSameSiteMutation, (req, r
   const allowed = ['new','reviewing','preview_sent','follow_up','won','lost','closed'];
   const status = clean(req.body?.status || '', 40);
   const note = clean(req.body?.adminNote || '', 2000);
+  const miniAuditTitle = clean(req.body?.miniAuditTitle || '', 180);
+  const miniAuditSummary = clean(req.body?.miniAuditSummary || '', 3000);
+  const miniAuditFindings = clean(req.body?.miniAuditFindings || '', 4000);
+  const preparedAuditUrl = clean(req.body?.preparedAuditUrl || '', 1000);
+
   if (status && !allowed.includes(status)) return res.status(400).json({ error: 'Invalid lead status.' });
+  if (preparedAuditUrl && !isValidHttpUrl(preparedAuditUrl)) {
+    return res.status(400).json({ error: 'Prepared full audit URL must be a valid http(s) URL.' });
+  }
+
   const exists = readNdjson('preview-requests.ndjson').some(item => item.id === id);
   if (!exists) return res.status(404).json({ error: 'Lead not found.' });
-  const state = updateEntityState('lead', id, { status: status || undefined, adminNote: note });
-  logAdminEvent('lead_updated', { entityId:id, status:state.status });
+
+  const state = updateEntityState('lead', id, {
+    status: status || undefined,
+    adminNote: note,
+    miniAuditTitle,
+    miniAuditSummary,
+    miniAuditFindings,
+    preparedAuditUrl
+  });
+
+  logAdminEvent('lead_updated', {
+    entityId:id,
+    status:state.status,
+    miniAuditReady:Boolean(state.miniAuditSummary),
+    preparedFullAudit:Boolean(state.preparedAuditUrl)
+  });
   res.json({ ok:true, state });
 });
 
@@ -249,7 +272,15 @@ app.patch('/api/admin/orders/:id', requireAdmin, requireSameSiteMutation, (req, 
   if (deliveryUrl && !isValidHttpUrl(deliveryUrl)) return res.status(400).json({ error: 'Delivery URL must be a valid http(s) URL.' });
   const exists = readNdjson('orders.ndjson').some(item => item.sessionId === id);
   if (!exists) return res.status(404).json({ error: 'Order not found.' });
-  const state = updateEntityState('order', id, { status: status || undefined, adminNote: note, deliveryUrl });
+  const order = readNdjson('orders.ndjson').find(item => item.sessionId === id);
+  const inheritedPreparedAudit = order && ['paid','queued','in_progress','ready','delivered'].includes(status)
+    ? preparedAuditForLead(order.sourceLeadId, order.customerEmail)
+    : '';
+  const state = updateEntityState('order', id, {
+    status: inheritedPreparedAudit ? 'ready' : (status || undefined),
+    adminNote: note,
+    deliveryUrl: deliveryUrl || inheritedPreparedAudit
+  });
   logAdminEvent('order_updated', { entityId:id, status:state.status, deliveryConfigured:Boolean(state.deliveryUrl) });
   res.json({ ok:true, state });
 });
@@ -408,6 +439,47 @@ app.post('/api/preview-request',
 );
 
 
+app.post('/api/find-mini-audit',
+  rateLimit({ windowMs: 15 * 60 * 1000, max: 8 }),
+  (req, res) => {
+    const email = clean(req.body?.email || '', 320).toLowerCase();
+    if (!isValidEmail(email)) {
+      return res.status(400).json({ error:'Please enter a valid email address.' });
+    }
+
+    const matches = withEntityState(readNdjson('preview-requests.ndjson'), 'lead')
+      .filter(item => String(item.email || '').trim().toLowerCase() === email)
+      .filter(item => Boolean(item.miniAuditSummary))
+      .sort((a,b) => String(b.statusUpdatedAt || b.receivedAt || '').localeCompare(String(a.statusUpdatedAt || a.receivedAt || '')));
+
+    const lead = matches[0];
+    res.setHeader('Cache-Control', 'no-store');
+
+    if (!lead) {
+      return res.json({
+        found:false,
+        message:'We could not find a ready mini-audit for this email. Use the email from your invitation or contact hello@qonvexa.co.'
+      });
+    }
+
+    res.json({
+      found:true,
+      miniAudit:{
+        leadId:lead.id,
+        email:lead.email,
+        websiteUrl:lead.websiteUrl,
+        businessType:lead.businessType || '',
+        title:lead.miniAuditTitle || 'Your QONVEXA mini-audit',
+        summary:lead.miniAuditSummary,
+        findings:String(lead.miniAuditFindings || '').split(/\\r?\\n/).map(x=>x.trim()).filter(Boolean).slice(0,5),
+        fullAuditPrepared:Boolean(lead.preparedAuditUrl)
+      },
+      priceCents,
+      currency:'USD'
+    });
+  }
+);
+
 app.get('/api/purchase-options',
   rateLimit({ windowMs: 5 * 60 * 1000, max: 60 }),
   (_req, res) => {
@@ -447,6 +519,7 @@ app.post('/api/manual-order',
       businessType = '',
       primaryGoal = '',
       primaryService = '',
+      sourceLeadId = '',
       email = ''
     } = req.body || {};
 
@@ -467,6 +540,7 @@ app.post('/api/manual-order',
       businessType: clean(businessType, 120),
       primaryGoal: clean(primaryGoal, 120),
       primaryService: clean(primaryService, 180),
+      sourceLeadId: resolveSourceLeadId(sourceLeadId, email),
       amountTotal: priceCents,
       currency: manual.details.currency.toLowerCase(),
       publicTokenHash: hashOrderToken(accessToken)
@@ -546,6 +620,7 @@ app.post('/api/create-checkout-session',
       businessType = '',
       primaryGoal = '',
       primaryService = '',
+      sourceLeadId = '',
       email = ''
     } = req.body || {};
 
@@ -574,6 +649,7 @@ app.post('/api/create-checkout-session',
           businessType: clean(businessType, 120),
           primaryGoal: clean(primaryGoal, 120),
           primaryService: clean(primaryService, 180),
+          sourceLeadId: resolveSourceLeadId(sourceLeadId, email),
           publicTokenHash: hashOrderToken(publicAccessToken)
         },
         success_url: `${siteUrl}/order.html?token=${encodeURIComponent(publicAccessToken)}&session_id={CHECKOUT_SESSION_ID}`,
@@ -672,12 +748,17 @@ async function fulfillPaidSession(session, eventId) {
     businessType: session.metadata?.businessType || '',
     primaryGoal: session.metadata?.primaryGoal || '',
     primaryService: session.metadata?.primaryService || '',
+    sourceLeadId: session.metadata?.sourceLeadId || '',
     amountTotal: session.amount_total,
     currency: session.currency
   };
 
   appendNdjson('orders.ndjson', order);
-  updateEntityState('order', order.sessionId, { status: readAdminSettings().defaultOrderStatus || 'paid', adminNote:'' });
+  const preparedAuditUrl = preparedAuditForLead(order.sourceLeadId, order.customerEmail);
+  updateEntityState('order', order.sessionId, preparedAuditUrl
+    ? { status:'ready', deliveryUrl:preparedAuditUrl, adminNote:'' }
+    : { status: readAdminSettings().defaultOrderStatus || 'paid', adminNote:'' }
+  );
   logAdminEvent('paid_order_received', { entityId:order.sessionId, email:order.customerEmail, websiteUrl:order.websiteUrl, amountTotal:order.amountTotal, currency:order.currency });
 
   // Mark fulfilled atomically enough for a single-instance MVP.
@@ -890,6 +971,10 @@ function withEntityState(items, type) {
         ? (item.paymentStatus === 'paid' ? defaults.defaultOrderStatus : 'awaiting_payment')
         : defaults.defaultLeadStatus),
       adminNote: state.adminNote || '',
+      miniAuditTitle: type === 'lead' ? (state.miniAuditTitle || '') : undefined,
+      miniAuditSummary: type === 'lead' ? (state.miniAuditSummary || '') : undefined,
+      miniAuditFindings: type === 'lead' ? (state.miniAuditFindings || '') : undefined,
+      preparedAuditUrl: type === 'lead' ? (state.preparedAuditUrl || '') : undefined,
       deliveryUrl: type === 'order' ? (state.deliveryUrl || '') : undefined,
       statusUpdatedAt: state.updatedAt || ''
     };
@@ -1024,6 +1109,24 @@ function readAllOrders() {
   return readNdjson('orders.ndjson');
 }
 
+function resolveSourceLeadId(sourceLeadId, email) {
+  const id = clean(sourceLeadId || '', 120);
+  const normalizedEmail = clean(email || '', 320).toLowerCase();
+  if (!id || !normalizedEmail) return '';
+  const lead = readNdjson('preview-requests.ndjson').find(item =>
+    item.id === id && String(item.email || '').trim().toLowerCase() === normalizedEmail
+  );
+  return lead ? id : '';
+}
+
+function preparedAuditForLead(sourceLeadId, email) {
+  const id = resolveSourceLeadId(sourceLeadId, email);
+  if (!id) return '';
+  const state = readJson('lead-state.json', {})[id] || {};
+  const url = clean(state.preparedAuditUrl || '', 1000);
+  return isValidHttpUrl(url) ? url : '';
+}
+
 function getOrderByAccessToken(token) {
   const tokenHash = hashOrderToken(token);
   return readAllOrders().find(order => order.publicTokenHash === tokenHash) || null;
@@ -1063,8 +1166,8 @@ function publicOrderPayload(order) {
       state: deliveryAvailable ? 'available' : 'preparing',
       url: deliveryAvailable ? deliveryUrl : '',
       message: deliveryAvailable
-        ? 'Your personalized audit is ready.'
-        : 'Payment is confirmed. Your personalized audit is now in preparation.'
+        ? 'Your full QONVEXA audit is ready. You can open it now.'
+        : `Payment is confirmed. Your full audit will be prepared within 1–24 hours and delivered to ${order.customerEmail || 'your email'}.`
     } : {
       state: 'waiting_for_payment',
       url: '',

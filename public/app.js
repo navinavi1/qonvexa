@@ -106,6 +106,72 @@ previewForm?.addEventListener('submit', async (e) => {
   }
 });
 
+const auditLookupForm = document.querySelector('#audit-lookup-form');
+const auditLookupStatus = document.querySelector('#audit-lookup-status');
+const miniAuditResult = document.querySelector('#mini-audit-result');
+const miniAuditTitle = document.querySelector('#mini-audit-title');
+const miniAuditSummary = document.querySelector('#mini-audit-summary');
+const miniAuditFindings = document.querySelector('#mini-audit-findings');
+const miniAuditMeta = document.querySelector('#mini-audit-meta');
+const miniAuditReadyNote = document.querySelector('#mini-audit-ready-note');
+const unlockFoundAudit = document.querySelector('#unlock-found-audit');
+
+let foundMiniAudit = null;
+
+auditLookupForm?.addEventListener('submit', async event => {
+  event.preventDefault();
+  const email = String(new FormData(auditLookupForm).get('email') || '').trim();
+
+  auditLookupStatus.textContent = 'Looking for your audit…';
+  miniAuditResult.hidden = true;
+  foundMiniAudit = null;
+
+  try {
+    const response = await fetch('/api/find-mini-audit', {
+      method:'POST',
+      headers:{'Content-Type':'application/json','Accept':'application/json'},
+      body:JSON.stringify({ email })
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'Could not search for your audit.');
+
+    if (!data.found) {
+      auditLookupStatus.textContent = data.message || 'No ready mini-audit was found for this email.';
+      return;
+    }
+
+    foundMiniAudit = data.miniAudit;
+    auditLookupStatus.textContent = '';
+    miniAuditTitle.textContent = foundMiniAudit.title || 'Your QONVEXA mini-audit';
+    miniAuditSummary.textContent = foundMiniAudit.summary || '';
+    miniAuditFindings.innerHTML = (foundMiniAudit.findings || []).map(item => `<li>${escHtml(item)}</li>`).join('');
+    miniAuditFindings.hidden = !(foundMiniAudit.findings || []).length;
+    miniAuditMeta.textContent = [foundMiniAudit.websiteUrl, foundMiniAudit.businessType].filter(Boolean).join(' · ');
+    miniAuditReadyNote.textContent = foundMiniAudit.fullAuditPrepared
+      ? 'Your full audit is already prepared. After confirmed payment, access unlocks immediately.'
+      : 'Your full audit is not pre-prepared yet. After confirmed payment, preparation takes 1–24 hours.';
+    miniAuditResult.hidden = false;
+    miniAuditResult.scrollIntoView({ behavior:'smooth', block:'nearest' });
+  } catch (err) {
+    auditLookupStatus.textContent = err.message;
+  }
+});
+
+unlockFoundAudit?.addEventListener('click', async () => {
+  if (!foundMiniAudit) return;
+
+  restorePurchaseDraft();
+  if (checkoutForm?.elements?.websiteUrl) checkoutForm.elements.websiteUrl.value = foundMiniAudit.websiteUrl || '';
+  if (checkoutForm?.elements?.email) checkoutForm.elements.email.value = foundMiniAudit.email || '';
+  if (checkoutForm?.elements?.businessType) checkoutForm.elements.businessType.value = foundMiniAudit.businessType || '';
+  if (checkoutForm?.elements?.sourceLeadId) checkoutForm.elements.sourceLeadId.value = foundMiniAudit.leadId || '';
+
+  savePurchaseDraft();
+  showPurchaseStep(1);
+  dialog?.showModal();
+  await loadPurchaseOptions();
+});
+
 const dialog = document.querySelector('#checkout-dialog');
 const checkoutForm = document.querySelector('#checkout-form');
 const checkoutStatus = document.querySelector('#checkout-status');
@@ -118,6 +184,7 @@ const purchaseDraftKey = 'qonvexa_purchase_draft_v1';
 
 document.querySelector('#open-checkout')?.addEventListener('click', async () => {
   restorePurchaseDraft();
+  if (checkoutForm?.elements?.sourceLeadId) checkoutForm.elements.sourceLeadId.value = '';
   showPurchaseStep(1);
   dialog?.showModal();
   await loadPurchaseOptions();
@@ -183,7 +250,8 @@ function purchasePayload() {
     email: data.email || '',
     businessType: data.businessType || '',
     primaryGoal: data.primaryGoal || '',
-    primaryService: data.primaryService || ''
+    primaryService: data.primaryService || '',
+    sourceLeadId: data.sourceLeadId || ''
   };
 }
 
@@ -197,6 +265,7 @@ function renderPurchaseReview() {
     <div><span>Business</span><b>${escHtml(p.businessType || 'Not specified')}</b></div>
     <div><span>Primary goal</span><b>${escHtml(p.primaryGoal || 'Not specified')}</b></div>
     <div><span>Primary service</span><b>${escHtml(p.primaryService || 'Not specified')}</b></div>
+    ${p.sourceLeadId ? '<div><span>Invitation</span><b>Matched to your email</b></div>' : ''}
     <div class="review-total"><span>Total</span><b>$149 one-time</b></div>
   `;
 }

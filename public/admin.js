@@ -74,7 +74,7 @@ function renderLeads(){
   const rows=data.previews.filter(x=>matches(x,q)&&(!status||x.status===status));
   el('#preview-rows').innerHTML=rows.length?rows.map(x=>`<tr data-edit="lead" data-id="${esc(x.id)}">
     <td>${esc(formatDate(x.receivedAt))}</td><td>${esc(x.email)}</td><td>${link(x.websiteUrl)}</td><td>${esc(x.businessType)}</td>
-    <td><button class="status-button s-${esc(x.status)}" data-edit="lead" data-id="${esc(x.id)}">${pretty(x.status)}</button></td>
+    <td><button class="status-button s-${esc(x.status)}" data-edit="lead" data-id="${esc(x.id)}">${pretty(x.status)}</button>${x.miniAuditSummary?'<span class="status s-ready">Mini audit ready</span>':''}${x.preparedAuditUrl?'<span class="status s-ready">Full audit prepared</span>':''}</td>
     <td class="muted-cell">${esc(x.note)}</td><td class="muted-cell">${esc(x.adminNote)}</td></tr>`).join(''):emptyRow(7,'No leads found.');
 }
 function renderOrders(){
@@ -138,11 +138,19 @@ document.addEventListener('click',e=>{
 });
 function openEdit(type,id,item){
   const form=el('#edit-form'); form.reset(); form.elements.entityType.value=type; form.elements.entityId.value=id; form.elements.adminNote.value=item.adminNote||'';
-  const deliveryRow=el('#delivery-url-row');
-  if(deliveryRow){
-    deliveryRow.hidden=type!=='order';
-    if(form.elements.deliveryUrl) form.elements.deliveryUrl.value=type==='order'?(item.deliveryUrl||''):'';
+  const invitedFields=el('#invited-audit-fields');
+  const orderDeliveryFields=el('#order-delivery-fields');
+  if(invitedFields) invitedFields.hidden=type!=='lead';
+  if(orderDeliveryFields) orderDeliveryFields.hidden=type!=='order';
+
+  if(type==='lead'){
+    if(form.elements.miniAuditTitle) form.elements.miniAuditTitle.value=item.miniAuditTitle||'';
+    if(form.elements.miniAuditSummary) form.elements.miniAuditSummary.value=item.miniAuditSummary||'';
+    if(form.elements.miniAuditFindings) form.elements.miniAuditFindings.value=item.miniAuditFindings||'';
+    if(form.elements.preparedAuditUrl) form.elements.preparedAuditUrl.value=item.preparedAuditUrl||'';
   }
+  if(type==='order' && form.elements.deliveryUrl) form.elements.deliveryUrl.value=item.deliveryUrl||'';
+
   el('#dialog-kind').textContent=type==='lead'?'LEAD':'ORDER';
   el('#dialog-title').textContent=type==='lead'?(item.email||'Lead'):(item.customerEmail||'Order');
   const opts=type==='lead'?['new','reviewing','preview_sent','follow_up','won','lost','closed']:['awaiting_payment','paid','queued','in_progress','ready','delivered','refunded','cancelled'];
@@ -154,6 +162,12 @@ el('#edit-form')?.addEventListener('submit',async e=>{
   el('#edit-status').textContent='Saving…';
   try{
     const body={status:f.elements.status.value,adminNote:f.elements.adminNote.value};
+    if(type==='lead'){
+      body.miniAuditTitle=f.elements.miniAuditTitle?.value||'';
+      body.miniAuditSummary=f.elements.miniAuditSummary?.value||'';
+      body.miniAuditFindings=f.elements.miniAuditFindings?.value||'';
+      body.preparedAuditUrl=f.elements.preparedAuditUrl?.value||'';
+    }
     if(type==='order' && f.elements.deliveryUrl) body.deliveryUrl=f.elements.deliveryUrl.value;
     await api(`/api/admin/${type==='lead'?'leads':'orders'}/${encodeURIComponent(id)}`,{method:'PATCH',body:JSON.stringify(body)});
     editDialog.close(); await loadDashboard();

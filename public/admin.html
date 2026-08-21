@@ -28,7 +28,7 @@
       <header class="admin-top">
         <div>
           <div class="admin-brand"><span class="brand-mark">Q</span><strong>QONVEXA</strong></div>
-          <p>Owner dashboard · Production 6.0</p>
+          <p>Owner dashboard · QONVEXA 11.0</p>
         </div>
         <div class="admin-top-actions">
           <span id="admin-user" class="admin-user"></span>
@@ -132,7 +132,19 @@
       <input type="hidden" name="entityType">
       <input type="hidden" name="entityId">
       <label>Status<select name="status" id="dialog-status"></select></label>
-      <label id="delivery-url-row" hidden>Secure deliverable URL<input name="deliveryUrl" type="url" placeholder="https://..."></label>
+
+      <div id="invited-audit-fields" hidden>
+        <label>Mini-audit title<input name="miniAuditTitle" maxlength="180" placeholder="Your QONVEXA mini-audit"></label>
+        <label>Mini-audit summary<textarea name="miniAuditSummary" rows="6" maxlength="3000" placeholder="Customer-facing preview summary"></textarea></label>
+        <label>Mini-audit findings<textarea name="miniAuditFindings" rows="6" maxlength="4000" placeholder="One finding per line"></textarea></label>
+        <label>Already-prepared full audit URL<input name="preparedAuditUrl" type="url" placeholder="https://..."></label>
+        <p class="settings-note">For personally invited clients: fill the mini-audit here. If the full audit is already prepared, add its URL before the client pays; confirmed payment will unlock it immediately.</p>
+      </div>
+
+      <div id="order-delivery-fields" hidden>
+        <label>Secure deliverable URL<input name="deliveryUrl" type="url" placeholder="https://..."></label>
+      </div>
+
       <label>Private admin note<textarea name="adminNote" rows="5" placeholder="Internal note only"></textarea></label>
       <button class="button" type="submit">Save changes</button>
       <p id="edit-status" class="admin-status" role="status"></p>
