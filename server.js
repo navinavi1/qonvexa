@@ -381,7 +381,6 @@ app.get('/launch-readiness', (_req, res) => {
     paymentProvider: Boolean(stripe) || manualPaymentConfig().enabled,
     notificationWebhook: Boolean(process.env.NOTIFICATION_WEBHOOK_URL),
     persistentStorage: isPersistentStorage(),
-    salesEnabled,
     salesEnabled
   };
   res.json({
