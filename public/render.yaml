@@ -1,0 +1,66 @@
+services:
+  - type: web
+    name: qonvexa
+    runtime: node
+    plan: starter
+    region: virginia
+    buildCommand: npm install --omit=dev && npm run verify
+    startCommand: npm start
+    healthCheckPath: /health
+    maxShutdownDelaySeconds: 30
+    autoDeployTrigger: commit
+    domains:
+      - qonvexa.co
+    disk:
+      name: qonvexa-data
+      mountPath: /var/lib/qonvexa/data
+      sizeGB: 1
+    envVars:
+      - key: NODE_VERSION
+        value: ">=22.0.0 <25.0.0"
+      - key: LAUNCH_MODE
+        value: live
+      - key: STORAGE_DIR
+        value: /var/lib/qonvexa/data
+      - key: AUDIT_PRICE_CENTS
+        value: "14900"
+      - key: PAYMENT_MODE
+        value: manual
+      - key: ALLOW_STAGING_PAYMENTS
+        value: "false"
+      - key: MANUAL_PAYMENT_ENABLED
+        value: "true"
+      - key: CONTACT_EMAIL
+        value: hello@qonvexa.co
+      - key: SITE_URL
+        value: https://qonvexa.co
+      - key: LEGAL_BUSINESS_NAME
+        value: "ФОП Гончаров Іван Михайлович"
+      - key: LEGAL_ADDRESS
+        value: "30200, Україна, Хмельницька обл., Білогірський р-н, смт Білогір'я, вул. Цегельна, 6А"
+      - key: LEGAL_JURISDICTION
+        value: Ukraine
+      - key: DELIVERY_TIMEFRAME
+        value: "1–24 hours after payment confirmation"
+      - key: REFUND_POLICY_TEXT
+        value: "If we have not started preparing your personalized audit, you may request a full refund within 24 hours of payment by contacting us. Once delivery has started, refunds are considered case by case."
+      - key: BANK_BENEFICIARY
+        value: "FOP HONCHAROV IVAN MYKHAILOVYCH"
+      - key: BANK_NAME
+        value: "AT KB PrivatBank"
+      - key: BANK_IBAN
+        value: "UA893052990000026007046254269"
+      - key: BANK_SWIFT
+        value: PBANUA2X
+      - key: BANK_CURRENCY
+        value: USD
+      - key: BANK_PAYMENT_NOTE
+        value: "Use your QONVEXA order reference in the payment memo. For international wire via correspondent bank: JPMorgan Chase (SWIFT CHASUS33, acc 001-1-000080) or Citibank NA (SWIFT CITIUS33, acc 36445343) or BNY Mellon (SWIFT IRVTUS3N, acc 890-0085-754)."
+      - key: ADMIN_USERNAME
+        value: owner
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: ADMIN_SESSION_SECRET
+        generateValue: true
+      - key: IP_HASH_SALT
+        generateValue: true
