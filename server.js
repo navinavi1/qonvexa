@@ -1198,7 +1198,9 @@ function validateProductionConfig() {
     missing.push(...requiredForLive.filter(key => !String(process.env[key] || '').trim()));
     if (!/^https:\/\//i.test(process.env.SITE_URL || '')) missing.push('SITE_URL must use https:// in live mode');
 
-    if (!isPersistentStorage()) missing.push('Live mode requires persistent STORAGE_DIR under /var/lib/qonvexa');
+    if (!isPersistentStorage()) {
+      console.warn('WARNING: STORAGE_DIR is not on persistent storage. Orders/leads will be lost on the next deploy or container restart until a persistent disk is attached.');
+    }
     const manual = manualPaymentConfig();
     const hasStripe = Boolean(process.env.STRIPE_SECRET_KEY && process.env.STRIPE_WEBHOOK_SECRET);
     if (!hasStripe && !manual.enabled) missing.push('At least one live payment method must be configured');
