@@ -26,6 +26,7 @@ const salesEnabled = !isProduction || isLiveLaunch || allowStagingPayments;
 const paymentMode = clean(process.env.PAYMENT_MODE || (process.env.STRIPE_SECRET_KEY ? 'stripe' : 'manual'), 20).toLowerCase();
 const manualPaymentEnabled = /^(1|true|yes|on)$/i.test(String(process.env.MANUAL_PAYMENT_ENABLED || 'false'));
 const storageDir = path.resolve(process.env.STORAGE_DIR || path.join(__dirname, 'data'));
+// Live mode requires persistent STORAGE_DIR under /var/lib/qonvexa (deployment invariant).
 const contactEmail = clean(process.env.CONTACT_EMAIL || 'hello@qonvexa.co', 320);
 const adminUsername = clean(process.env.ADMIN_USERNAME || 'admin', 120);
 const adminPassword = String(process.env.ADMIN_PASSWORD || '');
