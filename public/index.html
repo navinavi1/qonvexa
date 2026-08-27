@@ -54,6 +54,15 @@
 
   <main id="main">
     <section class="hero shell">
+      <div class="hero-ambient" aria-hidden="true">
+        <span class="ambient-blob blob-a"></span>
+        <span class="ambient-blob blob-b"></span>
+        <span class="ambient-blob blob-c"></span>
+        <svg class="ambient-grid" viewBox="0 0 400 400" preserveAspectRatio="none"><defs><pattern id="gridPattern" width="34" height="34" patternUnits="userSpaceOnUse"><path d="M34 0H0V34" fill="none" stroke="currentColor" stroke-width="1"/></pattern></defs><rect width="400" height="400" fill="url(#gridPattern)"/></svg>
+        <span class="ambient-chip chip-fix" style="--x:8%;--y:18%;--delay:0s">Fixed <svg viewBox="0 0 24 24"><path d="M5 13l4 4L19 7"/></svg></span>
+        <span class="ambient-chip chip-issue" style="--x:86%;--y:64%;--delay:1.4s">Friction found</span>
+        <span class="ambient-chip chip-fix" style="--x:74%;--y:12%;--delay:2.6s">+38% leads <svg viewBox="0 0 24 24"><path d="M5 13l4 4L19 7"/></svg></span>
+      </div>
       <div class="hero-copy reveal">
         <p class="eyebrow"><span class="eyebrow-dot" aria-hidden="true"></span>WEBSITE CONVERSION AUDIT</p>
         <h1>Your website may be <span class="leak-word">leaking</span> customers every day.</h1>
@@ -95,6 +104,62 @@
         </div>
         <div class="meter"><i style="width:0%" data-fill="72"></i></div>
         <p class="card-note">Illustrative example — every real audit is based on the website reviewed.</p>
+      </div>
+    </section>
+
+    <section class="section story" id="story">
+      <div class="shell">
+        <p class="eyebrow"><span class="eyebrow-dot" aria-hidden="true"></span>SEE IT WORK</p>
+        <h2 class="reveal">Watch a leak get found — and fixed.</h2>
+        <p class="section-lead reveal">A simplified, looping example of what an audit actually catches: a call-to-action that's technically there, but not doing its job — until it is.</p>
+
+        <div class="story-stage reveal">
+          <div class="story-browser">
+            <div class="scan-chrome">
+              <span class="chrome-dot"></span><span class="chrome-dot"></span><span class="chrome-dot"></span>
+              <span class="chrome-url">yourwebsite.com</span>
+              <span class="story-chrome-status">
+                <span class="story-chrome-bad">Scanning…</span>
+                <span class="story-chrome-good">Fix verified</span>
+              </span>
+            </div>
+            <div class="story-canvas">
+              <div class="story-nav-bar"><span></span><span></span><span></span></div>
+              <div class="story-headline"></div>
+              <div class="story-copy-line"></div>
+              <div class="story-copy-line short"></div>
+              <div class="story-cta-row">
+                <button class="story-cta" type="button" tabindex="-1">Book a call</button>
+                <span class="story-ripple" aria-hidden="true"></span>
+                <span class="story-cursor" aria-hidden="true">
+                  <svg viewBox="0 0 24 24"><path d="M4 2l14 8-6 2-2 6z"/></svg>
+                </span>
+                <span class="story-flag story-flag-bad">Low contrast · easy to miss</span>
+                <span class="story-flag story-flag-good">Fixed — high visibility CTA</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="story-side">
+            <div class="story-metric-card">
+              <span class="story-metric-label">Conversion readiness</span>
+              <svg class="story-chart" viewBox="0 0 200 70" preserveAspectRatio="none">
+                <path class="story-chart-grid" d="M0 60h200M0 40h200M0 20h200" />
+                <path class="story-chart-line" pathLength="1" d="M4 54 C 30 56, 50 50, 66 48 S 100 44, 118 30 S 150 12, 196 8" />
+                <circle class="story-chart-dot" cx="196" cy="8" r="4"/>
+              </svg>
+              <div class="story-metric-row">
+                <span>Before <b class="story-num-bad">42</b>/100</span>
+                <span>After <b class="story-num-good">91</b>/100</span>
+              </div>
+            </div>
+            <div class="story-metric-card small">
+              <span class="story-metric-label">Estimated impact</span>
+              <div class="story-uplift"><span class="story-uplift-num">+38%</span><span>more visible calls to action</span></div>
+              <p class="card-note">Illustrative example — real numbers come from the audit of your own website.</p>
+            </div>
+          </div>
+        </div>
       </div>
     </section>
 
