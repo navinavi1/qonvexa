@@ -8,10 +8,11 @@
     "dev": "node --watch server.js",
     "check": "node --check server.js && node --check public/app.js && node --check public/order.js && node --check public/admin.js && node --check public/success.js && node --check scripts/preflight.mjs && node --check scripts/purchase-audit.mjs && node --check scripts/finalization-audit.mjs",
     "smoke": "node scripts/smoke.js",
-    "verify": "npm run check && npm run autonomos-audit && node scripts/preflight.mjs && node scripts/render-audit.mjs && node scripts/purchase-audit.mjs && node scripts/finalization-audit.mjs && node scripts/smoke.js",
+    "verify": "npm run check && npm run autonomos-audit && npm run autonomos2-flow-test && node scripts/preflight.mjs && node scripts/render-audit.mjs && node scripts/purchase-audit.mjs && node scripts/finalization-audit.mjs && node scripts/smoke.js",
     "preflight": "node scripts/preflight.mjs",
     "render-audit": "node scripts/render-audit.mjs",
-    "autonomos-audit": "node scripts/autonomos-audit.mjs"
+    "autonomos-audit": "node scripts/autonomos-audit.mjs",
+    "autonomos2-flow-test": "node scripts/autonomos2-flow-test.mjs"
   },
   "dependencies": {
     "dotenv": "16.4.5",

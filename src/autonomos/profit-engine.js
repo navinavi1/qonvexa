@@ -3,27 +3,32 @@ export function evaluateOpportunity(input = {}, config = {}) {
   const probability = clamp(finite(input.successProbability, 1), 0, 1);
   const compute = finite(input.computeCostUsd, 0);
   const api = finite(input.apiCostUsd, 0);
-  const marketplace = finite(input.marketplaceFeesUsd, 0);
+  const model = finite(input.modelCostUsd, 0);
+  const externalAgent = finite(input.externalAgentCostUsd, 0);
+  const marketplace = finite(input.marketplaceFeesUsd ?? input.marketplaceFeeUsd, 0);
   const network = finite(input.networkFeesUsd, 0);
   const failure = finite(input.failureReserveUsd, 0);
-  const totalCost = compute + api + marketplace + network + failure;
+  const totalCost = compute + api + model + externalAgent + marketplace + network + failure;
+  const outOfPocketCost = compute + api + model + externalAgent + network;
   const expectedRevenue = revenue * probability;
   const expectedProfit = expectedRevenue - totalCost;
   const marginPercent = expectedRevenue > 0 ? (expectedProfit / expectedRevenue) * 100 : 0;
   const minMarginPercent = finite(config.minMarginPercent, 35);
   const zeroSpendMode = config.zeroSpendMode !== false;
-  const hasSpend = totalCost > 0.000001;
-  const allowed = expectedProfit > 0 && marginPercent >= minMarginPercent && (!zeroSpendMode || !hasSpend);
+  const hasExternalSpend = outOfPocketCost > 0.000001;
+  const allowed = expectedProfit > 0 && marginPercent >= minMarginPercent && (!zeroSpendMode || !hasExternalSpend);
 
   return {
     expectedRevenueUsd: round(expectedRevenue),
     expectedCostUsd: round(totalCost),
+    outOfPocketCostUsd: round(outOfPocketCost),
+    marketplaceFeesUsd: round(marketplace),
     expectedProfitUsd: round(expectedProfit),
     marginPercent: round(marginPercent),
     allowed,
     reason: allowed
       ? 'positive_unit_economics'
-      : zeroSpendMode && hasSpend
+      : zeroSpendMode && hasExternalSpend
         ? 'blocked_by_zero_spend_mode'
         : expectedProfit <= 0
           ? 'non_positive_profit'
@@ -43,10 +48,6 @@ export function allocateRevenue(amountUsd, config = {}) {
     experimentUsd: round(amount * experimentPct / total)
   };
 }
-
-function finite(value, fallback) {
-  const number = Number(value);
-  return Number.isFinite(number) ? number : fallback;
-}
-function clamp(value, min, max) { return Math.min(max, Math.max(min, value)); }
-function round(value) { return Math.round((value + Number.EPSILON) * 1e6) / 1e6; }
+function finite(value, fallback) { const number=Number(value); return Number.isFinite(number)?number:fallback; }
+function clamp(value,min,max){return Math.min(max,Math.max(min,value));}
+function round(value){return Math.round((value+Number.EPSILON)*1e6)/1e6;}

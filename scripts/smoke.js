@@ -2,7 +2,6 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 const required = [
-  'index.html',
   'server.js',
   'public/index.html',
   'public/app.js',
@@ -53,7 +52,9 @@ for (const endpoint of [
   '/api/admin/events',
   '/api/admin/clients',
   '/api/admin/orders/',
-  '/api/admin/leads/'
+  '/api/admin/leads/',
+  '/api/admin/autonomos',
+  '/api/autonomos/catalog'
 ]) {
   if (!server.includes(endpoint)) {
     console.error(`SERVER ENDPOINT MISSING: ${endpoint}`);

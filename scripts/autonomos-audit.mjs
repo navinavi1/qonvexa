@@ -7,7 +7,10 @@ import { normalizeConfig, validateAction } from '../src/autonomos/policy-engine.
 import { evaluateOpportunity, allocateRevenue } from '../src/autonomos/profit-engine.js';
 import { validatePublicUrl, ProductError, MACHINE_PRODUCTS } from '../src/autonomos/products.js';
 import { createAutonomOS } from '../src/autonomos/runtime.js';
-import { isEvmAddress } from '../src/autonomos/treasury.js';
+import { isEvmAddress, configuredEvmChains } from '../src/autonomos/treasury.js';
+import { classifyOpportunity } from '../src/autonomos/capabilities.js';
+import { normalizeOpportunity } from '../src/autonomos/job-normalizer.js';
+import { connectorStatuses } from '../src/autonomos/connectors/index.js';
 import { createX402Gateway } from '../src/autonomos/x402.js';
 
 const wallet = '0x1f674bf085f6fed36fa198287d51edf0fe0bb9e2';
@@ -91,6 +94,43 @@ await ok('x402 v2 challenge is mainnet-ready, receiver-only and Bazaar-declared'
   assert.equal(body.x402Version, 2);
 });
 
+
+await ok('AutonomOS 2.0 policy exposes guarded marketplace auto-claim controls', () => {
+  const cfg = normalizeConfig({ enabled:true, autoClaimJobs:true, requireEscrowForAutoClaim:true, maxJobsPerCycle:3, minJobPayoutUsd:.02, maxApiCostPercentOfPayout:20 });
+  assert.equal(cfg.autoClaimJobs, true);
+  assert.equal(cfg.requireEscrowForAutoClaim, true);
+  assert.equal(cfg.maxJobsPerCycle, 3);
+  assert.equal(cfg.minJobPayoutUsd, .02);
+});
+
+await ok('job normalizer creates a common escrow job shape', () => {
+  const op = normalizeOpportunity('clawlancer', { id:'abc', title:'Research a public API', price_usdc_wei:'50000', status:'open', category:'research' }, { escrowed:true, feePercent:2.5, currency:'USDC', network:'eip155:8453' });
+  assert.equal(op.externalId, 'abc');
+  assert.equal(op.budgetUsd, .05);
+  assert.equal(op.escrowed, true);
+  assert.equal(op.currency, 'USDC');
+});
+
+await ok('capability classifier refuses unsupported generative work without an LLM', () => {
+  const op = normalizeOpportunity('clawlancer', { id:'x', title:'Write a long original article', description:'Create a unique article about autonomous agents', category:'writing', priceUsd:1 }, { escrowed:true });
+  const cap = classifyOpportunity(op, { llmEnabled:false });
+  assert.equal(cap.executable, false);
+});
+
+await ok('multi-chain EVM treasury defaults include Base, Arbitrum and Polygon', () => {
+  const chains = configuredEvmChains({});
+  assert.ok(chains.some(x=>x.chainId===8453));
+  assert.ok(chains.some(x=>x.chainId===42161));
+  assert.ok(chains.some(x=>x.chainId===137));
+});
+
+await ok('Clawlancer and Agentverse are real connector states, not always-ready placeholders', () => {
+  const statuses = connectorStatuses({}, { enabled:false, configured:false, mode:'disabled' }, {});
+  assert.equal(statuses.find(x=>x.id==='clawlancer').status, 'auto_bootstrap_available');
+  assert.equal(statuses.find(x=>x.id==='agentverse').status, 'discovery_ready');
+  assert.equal(statuses.find(x=>x.id==='virtuals-acp').status, 'needs_credentials');
+});
+
 await ok('runtime boots without any paid API or private key', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'autonomos-audit-'));
   try {
@@ -111,6 +151,8 @@ await ok('runtime boots without any paid API or private key', async () => {
     assert.equal(snap.treasury.ownerWallet.toLowerCase(), wallet.toLowerCase());
     assert.equal(snap.config.zeroSpendMode, true);
     assert.equal(snap.config.privateKeysStored, false);
+    assert.equal(snap.version, '2.0.0');
+    assert.ok('opportunitiesFound' in snap.metrics);
     assert.equal(snap.runtime.status, 'stopped');
   } finally {
     fs.rmSync(root, { recursive:true, force:true });

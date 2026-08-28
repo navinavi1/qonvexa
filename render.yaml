@@ -80,6 +80,26 @@ services:
         value: "https://facilitator.xpay.sh"
       - key: AUTONOMOS_X402_FACILITATOR_HEADERS_JSON
         sync: false
+      - key: AUTONOMOS_X402_ACCEPTS_JSON
+        sync: false
+      - key: AUTONOMOS_ARBITRUM_RPC_URL
+        sync: false
+      - key: AUTONOMOS_POLYGON_RPC_URL
+        sync: false
+      - key: AUTONOMOS_EVM_CHAINS_JSON
+        sync: false
+      - key: CLAWLANCER_API_KEY
+        sync: false
+      - key: CLAWLANCER_AGENT_ID
+        sync: false
+      - key: T2000_MCP_URL
+        sync: false
+      - key: T2000_SESSION_TOKEN
+        sync: false
+      - key: T2000_PASSPORT_ADDRESS
+        sync: false
+      - key: AGENTVERSE_API_KEY
+        sync: false
       - key: AUTONOMOS_LLM_BASE_URL
         sync: false
       - key: AUTONOMOS_LLM_API_KEY

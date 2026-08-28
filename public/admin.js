@@ -145,12 +145,21 @@ function renderAutonomOS(){
   setText('#auto-net',usd(a.metrics?.netProfitUsd));
   setText('#auto-agents',String(a.metrics?.activeAgents??20));
   setText('#auto-children',String(a.metrics?.activeChildren??0));
+  setText('#auto-opportunities',String(a.metrics?.opportunitiesFound??0));
+  setText('#auto-claimed',String(a.metrics?.claimedJobs??0));
+  setText('#auto-delivered',String(a.metrics?.deliveredJobs??0));
+  setText('#auto-paid',String(a.metrics?.paidJobs??0));
   setText('#auto-jobs',String(a.metrics?.completedJobs??0));
   setText('#auto-cycles',String(a.runtime?.cycles??0));
   setText('#autonomos-llm',a.runtime?.llm?.enabled?`LLM · ${a.runtime.llm.model}`:'Deterministic · no paid LLM');
 
+  const radar=el('#autonomos-market-radar');
+  if(radar){ const m=a.runtime?.marketSummary||{}; const health=a.runtime?.connectorHealth||{}; radar.innerHTML=`<article class="autonomos-event"><div class="event-row"><b>Latest cycle</b><span class="status s-ready">${Number(m.observed||0)} seen</span></div><p>${Number(m.escrowedJobs||0)} escrowed · ${Number(m.executable||0)} executable · ${Number(m.profitable||0)} profitable · median ${usd(m.medianPayoutUsd||0)}</p></article>`+Object.entries(health).map(([name,h])=>`<article class="autonomos-event"><div class="event-row"><b>${esc(pretty(name))}</b><span class="connector-${h?.ok?'ready':'needs_credentials'}">${h?.ok?'Healthy':'Unavailable'}</span></div><p>${esc(h?.count!==undefined?`${h.count} signals`:h?.error||h?.status||'')}</p></article>`).join(''); }
+  const marketJobs=el('#autonomos-market-jobs');
+  if(marketJobs){ marketJobs.innerHTML=(a.jobs||[]).filter(j=>j.source&&j.source!=='x402'&&j.source!=='admin_preview').slice(0,12).map(j=>`<article class="autonomos-event"><div class="event-row"><b>${esc(j.title||j.externalId||j.id)}</b><span class="status ${String(j.status||'').includes('fail')?'s-error':'s-ready'}">${esc(pretty(j.status||'unknown'))}</span></div><p>${esc(pretty(j.source))} · ${j.budgetUsd!==undefined?usd(j.budgetUsd):''} ${esc(j.currency||'')}</p></article>`).join('')||emptyCard('No marketplace jobs claimed yet. Discovery can be active while claims remain zero.'); }
+
   const wallet=el('#autonomos-wallet');
-  if(wallet) wallet.innerHTML=`<b>${esc(a.treasury?.ownerWallet||'Not configured')}</b><span>${a.treasury?.ok?`Base · ${Number(a.treasury.usdc||0).toFixed(6)} USDC · ${Number(a.treasury.eth||0).toFixed(6)} ETH · checked ${esc(formatDate(a.treasury.checkedAt))}`:`Balance check: ${esc(a.treasury?.error||'not checked yet')}`}</span>`;
+  if(wallet){ const assets=(a.treasury?.assets||[]).filter(x=>Number(x.balance||0)>0).slice(0,12).map(x=>`${x.network}: ${Number(x.balance||0).toFixed(6)} ${x.symbol}`).join(' · '); wallet.innerHTML=`<b>${esc(a.treasury?.ownerWallet||'Not configured')}</b><span>${a.treasury?.ok?`${esc(assets||'No non-zero EVM balances detected')} · checked ${esc(formatDate(a.treasury.checkedAt))}`:`Balance check: ${esc(a.treasury?.error||'not checked yet')}`}</span>`; }
   const allocations=el('#autonomos-allocations');
   if(allocations){
     const al=a.treasury?.allocations||{};
@@ -202,8 +211,8 @@ el('#autonomos-runtime-badge')?.addEventListener('dblclick',async()=>{
 el('#autonomos-config-form')?.addEventListener('submit',async e=>{
   e.preventDefault();const f=e.currentTarget;const status=el('#autonomos-config-status');status.textContent='Saving…';
   const raw=Object.fromEntries(new FormData(f).entries());
-  const payload={...raw,autoReplication:f.elements.autoReplication.checked};
-  for(const key of ['heartbeatSeconds','minMarginPercent','reservePercent','growthPercent','experimentPercent','maxChildren'])payload[key]=Number(payload[key]);
+  const payload={...raw,autoReplication:f.elements.autoReplication.checked,autoClaimJobs:f.elements.autoClaimJobs.checked,requireEscrowForAutoClaim:f.elements.requireEscrowForAutoClaim.checked};
+  for(const key of ['heartbeatSeconds','minMarginPercent','reservePercent','growthPercent','experimentPercent','maxChildren','maxJobsPerCycle','minJobPayoutUsd','maxApiCostPercentOfPayout'])payload[key]=Number(payload[key]);
   try{await api('/api/admin/autonomos/config',{method:'PATCH',body:JSON.stringify(payload)});status.textContent='Saved.';await loadDashboard()}catch(err){status.textContent=err.message}
 });
 

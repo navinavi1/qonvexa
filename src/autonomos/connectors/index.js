@@ -1,97 +1,199 @@
+import { McpHttpClient, extractMcpToolPayload } from '../mcp-client.js';
+import { normalizeOpportunity } from '../job-normalizer.js';
+
 const CONNECTOR_DEFS = Object.freeze([
-  {
-    id:'x402-bazaar', name:'x402 / Bazaar', kind:'market',
-    description:'Machine-payable API discovery and seller rail.',
-    requiredEnv:[],
-    optionalEnv:['AUTONOMOS_BAZAAR_URL','AUTONOMOS_X402_FACILITATOR_URL','AUTONOMOS_X402_FACILITATOR_HEADERS_JSON']
-  },
-  {
-    id:'virtuals-acp', name:'Virtuals ACP', kind:'market',
-    description:'Agent-to-agent jobs with USDC escrow on Base.',
-    requiredEnv:['VIRTUALS_ACP_WALLET_ID','VIRTUALS_ACP_SIGNER'],
-    optionalEnv:['VIRTUALS_ACP_AGENT_ID','VIRTUALS_ACP_RPC_URL']
-  },
-  {
-    id:'olas-mech', name:'Olas Mech Marketplace', kind:'market',
-    description:'Marketplace for agent-provided Mech services.',
-    requiredEnv:['OLAS_MECH_API_KEY'], optionalEnv:['OLAS_MECH_ENDPOINT']
-  },
-  {
-    id:'nevermined', name:'Nevermined', kind:'payments',
-    description:'Agent monetization, metering and x402-compatible payment infrastructure.',
-    requiredEnv:['NVM_API_KEY'], optionalEnv:['NVM_PLAN_ID']
-  },
-  {
-    id:'skyfire', name:'Skyfire', kind:'payments',
-    description:'Agent identity, wallets and programmable payments.',
-    requiredEnv:['SKYFIRE_API_KEY'], optionalEnv:[]
-  },
-  {
-    id:'openserv', name:'OpenServ', kind:'market',
-    description:'Agent marketplace and x402-compatible services.',
-    requiredEnv:['OPENSERV_API_KEY'], optionalEnv:[]
-  },
-  {
-    id:'agentverse', name:'Agentverse / Fetch.ai', kind:'discovery',
-    description:'Discoverable agent network and service registry.',
-    requiredEnv:['AGENTVERSE_API_KEY'], optionalEnv:[]
-  },
-  {
-    id:'conway', name:'Conway Automaton', kind:'runtime',
-    description:'Optional sovereign runtime/compute integration; AutonomOS does not depend on it.',
-    requiredEnv:['CONWAY_API_KEY'], optionalEnv:['CONWAY_API_URL']
-  }
+  { id:'x402-bazaar', name:'x402 / Bazaar', kind:'seller+discovery', description:'Machine-payable API discovery and seller rail.', requiredEnv:[] },
+  { id:'clawlancer', name:'Clawlancer', kind:'jobs', description:'Pre-funded Base/USDC bounties: discover → claim → deliver → paid.', requiredEnv:[], optionalEnv:['CLAWLANCER_API_KEY','CLAWLANCER_AGENT_ID'] },
+  { id:'virtuals-acp', name:'Virtuals ACP', kind:'jobs+seller', description:'Agent Commerce Protocol jobs and USDC escrow.', requiredEnv:['VIRTUALS_ACP_WALLET_ID','VIRTUALS_ACP_SIGNER'], optionalEnv:['VIRTUALS_ACP_AGENT_ID'] },
+  { id:'t2000', name:'t2000', kind:'jobs+seller', description:'Sui/USDC open jobs with pre-funded escrow via Passport Connect.', requiredEnv:['T2000_MCP_URL','T2000_SESSION_TOKEN'], optionalEnv:['T2000_PASSPORT_ADDRESS'] },
+  { id:'olas-mech', name:'Olas Mech Marketplace', kind:'seller+discovery', description:'Agent-to-agent paid Mech services.', requiredEnv:['OLAS_MECH_API_KEY'], optionalEnv:['OLAS_MECH_ENDPOINT'] },
+  { id:'nevermined', name:'Nevermined', kind:'payments', description:'Fiat + crypto agent payment facilitator and metering.', requiredEnv:['NVM_API_KEY'], optionalEnv:['NVM_PLAN_ID'] },
+  { id:'agentverse', name:'Agentverse / Fetch.ai', kind:'discovery', description:'Public agent/function discovery and ASI routing.', requiredEnv:[], optionalEnv:['AGENTVERSE_API_KEY'] },
+  { id:'openserv', name:'OpenServ', kind:'discovery', description:'Agent/workflow ecosystem; optional authenticated connector.', requiredEnv:['OPENSERV_API_KEY'], optionalEnv:[] }
 ]);
 
-export function connectorStatuses(env = process.env, x402Status = {}) {
+export function connectorStatuses(env = process.env, x402Status = {}, persistedCredentials = {}) {
   return CONNECTOR_DEFS.map(def => {
-    const missing = def.requiredEnv.filter(key => !String(env[key] || '').trim());
-    if (def.id === 'x402-bazaar') {
-      return {
-        ...def,
-        status:x402Status.configured ? 'ready' : x402Status.enabled ? 'needs_configuration' : 'available',
-        configured:Boolean(x402Status.configured),
-        missing:x402Status.configured ? [] : ['AUTONOMOS_X402_ENABLED + facilitator for selected network'],
-        mode:x402Status.mode || 'disabled'
-      };
+    if (def.id === 'x402-bazaar') return { ...def, status:x402Status.configured?'ready':x402Status.enabled?'needs_configuration':'available', configured:Boolean(x402Status.configured), missing:x402Status.configured?[]:['AUTONOMOS_X402_ENABLED + supported facilitator'], mode:x402Status.mode||'disabled' };
+    if (def.id === 'clawlancer') {
+      const hasKey=Boolean(String(env.CLAWLANCER_API_KEY||persistedCredentials?.clawlancer?.apiKey||'').trim());
+      return { ...def, status:hasKey?'ready':'auto_bootstrap_available', configured:hasKey, missing:hasKey?[]:['agent registration will be created automatically on first cycle'] };
     }
-    return { ...def, status:missing.length ? 'needs_credentials' : 'ready', configured:missing.length === 0, missing };
+    if (def.id === 'agentverse') return { ...def, status:'discovery_ready', configured:true, missing:[] };
+    const missing=def.requiredEnv.filter(key=>!String(env[key]||'').trim());
+    return { ...def, status:missing.length?'needs_credentials':'ready', configured:missing.length===0, missing };
   });
 }
 
-export async function discoverPublicSignals({ env = process.env, limit = 60 } = {}) {
-  const url = String(env.AUTONOMOS_BAZAAR_URL || 'https://api.cdp.coinbase.com/platform/v2/x402/discovery/resources?limit=50');
-  const signals = [];
-  let bazaar = { ok:false, url, count:0, error:'' };
-  try {
-    const response = await fetch(url, {
-      headers:{ accept:'application/json', 'user-agent':'AutonomOS/1.0' },
-      signal:AbortSignal.timeout(12000)
-    });
-    if (!response.ok) throw new Error(`http_${response.status}`);
-    const body = await response.json();
-    const resources = Array.isArray(body) ? body : Array.isArray(body?.items) ? body.items : Array.isArray(body?.resources) ? body.resources : [];
-    bazaar = { ok:true, url, count:resources.length, error:'' };
-    for (const resource of resources.slice(0,limit)) {
-      const accepted = Array.isArray(resource.accepts) ? resource.accepts[0] : null;
-      const amount = Number(accepted?.amount || 0) / 1_000_000;
-      const rawUrl = String(resource.resource || resource.url || resource?.resource?.url || '');
-      if (!rawUrl) continue;
-      signals.push({
-        source:'x402-bazaar',
-        externalId:rawUrl,
-        title:resource?.resource?.description || resource.description || rawUrl,
-        url:rawUrl,
-        network:accepted?.network || '',
-        priceUsd:Number.isFinite(amount) ? amount : 0,
-        tags:resource?.resource?.tags || resource.tags || [],
-        observedAt:new Date().toISOString()
-      });
-    }
-  } catch (error) {
-    bazaar.error = String(error?.message || error).slice(0,200);
+export async function bootstrapMarketCredentials({ env=process.env, credentials={}, storeCredential=()=>{} }={}) {
+  const health={};
+  if (!String(env.CLAWLANCER_API_KEY||credentials?.clawlancer?.apiKey||'').trim()) {
+    try {
+      const response=await fetch('https://clawlancer.ai/api/agents/register',{method:'POST',headers:{'content-type':'application/json','accept':'application/json','user-agent':'AutonomOS/2.0'},body:JSON.stringify({name:String(env.AUTONOMOS_AGENT_NAME||'AutonomOS').slice(0,48),bio:'Autonomous digital-services worker: public web research, data extraction, code analysis, structured writing and QA.'}),signal:AbortSignal.timeout(15000)});
+      const body=await safeJson(response);
+      if (response.ok) {
+        const apiKey=body?.api_key||body?.apiKey||body?.key||body?.agent?.api_key||'';
+        const agentId=body?.agent_id||body?.agentId||body?.id||body?.agent?.id||'';
+        const walletAddress=body?.wallet_address||body?.walletAddress||body?.agent?.wallet_address||body?.agent?.walletAddress||'';
+        if (apiKey) {
+          const value={ apiKey:String(apiKey), agentId:String(agentId||''), walletAddress:String(walletAddress||''), createdAt:new Date().toISOString(), source:'auto_registration' };
+          storeCredential('clawlancer',value); credentials.clawlancer=value;
+          health.clawlancer={ok:true,bootstrapped:true,agentId:value.agentId,walletAddress:value.walletAddress};
+        } else health.clawlancer={ok:false,error:'registration_response_missing_api_key'};
+      } else health.clawlancer={ok:false,error:`http_${response.status}`,detail:body?.error||body?.message||''};
+    } catch(error){ health.clawlancer={ok:false,error:String(error?.message||error).slice(0,180)}; }
   }
-  return { signals, health:{ bazaar } };
+  return health;
 }
 
-export function connectorDefinitions() { return CONNECTOR_DEFS.map(item=>({...item})); }
+export async function discoverMarketOpportunities({ env=process.env, credentials={}, limit=100 }={}) {
+  const all=[]; const health={};
+  const [x402,claw,agentverse,t2000]=await Promise.allSettled([
+    discoverX402(env,limit), discoverClawlancer(env,credentials,limit), discoverAgentverse(limit), discoverT2000(env,limit)
+  ]);
+  for (const [id,result] of [['x402-bazaar',x402],['clawlancer',claw],['agentverse',agentverse],['t2000',t2000]]) {
+    if (result.status==='fulfilled') { all.push(...result.value.signals); health[id]=result.value.health; }
+    else health[id]={ok:false,error:String(result.reason?.message||result.reason).slice(0,180)};
+  }
+  return { signals:dedupe(all).slice(0,limit*4), health };
+}
+
+export async function claimMarketplaceJob(opportunity,{env=process.env,credentials={}}={}) {
+  if (opportunity.source==='clawlancer') return clawlancerAction('claim',opportunity,{env,credentials});
+  if (opportunity.source==='t2000') return t2000Action('claim',opportunity,{env});
+  return {ok:false,reason:'connector_claim_not_available'};
+}
+
+export async function deliverMarketplaceJob(opportunity,claim,deliverable,{env=process.env,credentials={}}={}) {
+  if (opportunity.source==='clawlancer') return clawlancerAction('deliver',opportunity,{env,credentials,claim,deliverable});
+  if (opportunity.source==='t2000') return t2000Action('deliver',opportunity,{env,claim,deliverable});
+  return {ok:false,reason:'connector_delivery_not_available'};
+}
+
+export async function readMarketplaceWallets({env=process.env,credentials={}}={}) {
+  const out={};
+  const key=String(env.CLAWLANCER_API_KEY||credentials?.clawlancer?.apiKey||'');
+  const agentId=String(env.CLAWLANCER_AGENT_ID||credentials?.clawlancer?.agentId||'');
+  if (key && agentId) {
+    try { const r=await fetch(`https://clawlancer.ai/api/wallet/balance?agent_id=${encodeURIComponent(agentId)}`,{headers:auth(key),signal:AbortSignal.timeout(12000)}); out.clawlancer={ok:r.ok,...await safeJson(r)}; }
+    catch(error){ out.clawlancer={ok:false,error:String(error?.message||error)}; }
+  }
+  return out;
+}
+
+async function discoverX402(env,limit){
+  const url=String(env.AUTONOMOS_BAZAAR_URL||'https://api.cdp.coinbase.com/platform/v2/x402/discovery/resources?limit=50');
+  const response=await fetch(url,{headers:{accept:'application/json','user-agent':'AutonomOS/2.0'},signal:AbortSignal.timeout(12000)});
+  if(!response.ok) return {signals:[],health:{ok:false,status:response.status,url}};
+  const body=await safeJson(response); const resources=Array.isArray(body)?body:Array.isArray(body?.items)?body.items:Array.isArray(body?.resources)?body.resources:[];
+  const signals=[];
+  for(const resource of resources.slice(0,limit)){
+    const accepted=Array.isArray(resource.accepts)?resource.accepts[0]:null;
+    const rawUrl=String(resource.resource?.url||resource.resource||resource.url||''); if(!rawUrl)continue;
+    signals.push(normalizeOpportunity('x402-bazaar',{externalId:rawUrl,title:resource.resource?.description||resource.description||rawUrl,url:rawUrl,priceUsd:Number(accepted?.amount||0)/1e6,network:accepted?.network||'',currency:accepted?.extra?.name||'USDC',tags:resource.resource?.tags||resource.tags||[],status:'available'},{claimMode:'buy',escrowed:false}));
+  }
+  return {signals,health:{ok:true,count:signals.length,url}};
+}
+
+async function discoverClawlancer(env,credentials,limit){
+  const key=String(env.CLAWLANCER_API_KEY||credentials?.clawlancer?.apiKey||'');
+  const response=await fetch(`https://clawlancer.ai/api/listings?listing_type=BOUNTY&limit=${Math.min(100,limit)}`,{headers:{accept:'application/json','user-agent':'AutonomOS/2.0',...(key?{authorization:`Bearer ${key}`}:{})},signal:AbortSignal.timeout(12000)});
+  const body=await safeJson(response); if(!response.ok) return {signals:[],health:{ok:false,status:response.status,error:body?.error||body?.message||''}};
+  const rows=Array.isArray(body)?body:Array.isArray(body?.listings)?body.listings:Array.isArray(body?.data)?body.data:[];
+  const signals=rows.map(raw=>normalizeOpportunity('clawlancer',{...raw,url:raw.url||`https://clawlancer.ai/listings/${raw.id||raw.listing_id||''}`},{feePercent:2.5,currency:'USDC',network:'eip155:8453',escrowed:true,claimMode:key?'automatic':'credentials_required'})).filter(x=>x.status==='open'||x.status==='active'||x.status==='available'||!x.status);
+  return {signals:signals.slice(0,limit),health:{ok:true,count:signals.length,authenticated:Boolean(key)}};
+}
+
+async function discoverAgentverse(limit){
+  const response=await fetch('https://agentverse.ai/v1/search/functions',{method:'POST',headers:{'content-type':'application/json','accept':'application/json','user-agent':'AutonomOS/2.0'},body:JSON.stringify({limit:Math.min(limit,50),offset:0,sort:'recent_interactions'}),signal:AbortSignal.timeout(12000)});
+  const body=await safeJson(response); if(!response.ok)return{signals:[],health:{ok:false,status:response.status}};
+  const rows=Array.isArray(body?.functions)?body.functions:[];
+  const signals=rows.map(raw=>normalizeOpportunity('agentverse',{externalId:raw.id,title:raw.name,description:raw.description||raw.name,url:'https://agentverse.ai/marketplace',status:'discovery',priceUsd:0},{claimMode:'route/discovery',escrowed:false,currency:'UNKNOWN'}));
+  return {signals,health:{ok:true,count:signals.length,total:Number(body?.total||0)}};
+}
+
+async function discoverT2000(env,limit){
+  const mcpUrl=String(env.T2000_MCP_URL||''); const token=String(env.T2000_SESSION_TOKEN||'');
+  if(mcpUrl&&token){
+    try{
+      const client=new McpHttpClient({url:mcpUrl,token,timeoutMs:18000}); await client.initialize(); const tools=await client.listTools();
+      const jobsTool=tools.find(t=>t.name==='t2000_jobs')||tools.find(t=>/jobs|openings|market/i.test(t.name));
+      if(!jobsTool)return{signals:[],health:{ok:false,connected:true,error:'jobs_tool_not_found',tools:tools.map(t=>t.name).slice(0,30)}};
+      let result; for(const args of [{},{role:'seller'},{role:'buyer'}]){try{result=extractMcpToolPayload(await client.callTool(jobsTool.name,args));if(result)break}catch{}}
+      const openings=findArrayByKey(result,['openings','jobs','items','results']);
+      const signals=openings.slice(0,limit).map(raw=>normalizeOpportunity('t2000',{...raw,externalId:raw.openingId||raw.opening_id||raw.jobId||raw.job_id||raw.id,url:raw.url||'https://t2000.ai/'},{feePercent:5,currency:'USDC',network:'Sui',escrowed:true,claimMode:'automatic_mcp'}));
+      return{signals,health:{ok:true,connected:true,count:signals.length,tool:jobsTool.name,tools:tools.map(t=>t.name).slice(0,30)}};
+    }catch(error){return{signals:[],health:{ok:false,connected:false,error:String(error?.message||error).slice(0,220)}}}
+  }
+  try{
+    const response=await fetch('https://t2000.ai/',{headers:{accept:'text/html','user-agent':'AutonomOS/2.0'},signal:AbortSignal.timeout(12000)}); const html=await response.text();
+    if(!response.ok)return{signals:[],health:{ok:false,status:response.status,claimReady:false}};
+    const settled=[...html.matchAll(/\$([0-9]+(?:\.[0-9]+)?)\s*(?:settled|·)/gi)].slice(0,limit).map((m,i)=>normalizeOpportunity('t2000-public',{externalId:`public-${i}-${m.index}`,title:'t2000 public marketplace activity',description:'Public activity only. Add Passport Connect MCP credentials to discover and claim live openings.',budgetUsd:Number(m[1]),status:'signal',url:'https://t2000.ai/'},{feePercent:5,currency:'USDC',network:'Sui',escrowed:true,claimMode:'needs_passport_connect'}));
+    return{signals:settled,health:{ok:true,publicActivitySignals:settled.length,claimReady:false}};
+  }catch(error){return{signals:[],health:{ok:false,error:String(error?.message||error).slice(0,180),claimReady:false}}}
+}
+
+async function t2000Action(kind,opportunity,{env,claim,deliverable}={}){
+  const mcpUrl=String(env.T2000_MCP_URL||''),token=String(env.T2000_SESSION_TOKEN||''); if(!mcpUrl||!token)return{ok:false,reason:'t2000_passport_connect_missing'};
+  try{
+    const client=new McpHttpClient({url:mcpUrl,token,timeoutMs:22000}); await client.initialize(); const tools=await client.listTools();
+    const want=kind==='claim'?/claim/i:/deliver|submit/i; const tool=tools.find(t=>want.test(t.name)); if(!tool)return{ok:false,reason:`t2000_${kind}_tool_not_found`,tools:tools.map(t=>t.name).slice(0,30)};
+    const ext=opportunity.externalId; const candidates=kind==='claim'?[{openingId:ext},{opening_id:ext},{jobId:ext},{id:ext}]:[
+      {jobId:claim?.jobId||claim?.transactionId||ext,deliverable:deliverable.content},
+      {job_id:claim?.jobId||claim?.transactionId||ext,content:deliverable.content},
+      {id:claim?.jobId||claim?.transactionId||ext,work:deliverable.content}
+    ];
+    let last=''; for(const args of candidates){try{const result=extractMcpToolPayload(await client.callTool(tool.name,args));return{ok:true,tool:tool.name,jobId:String(result?.jobId||result?.job_id||result?.id||claim?.jobId||ext),transactionId:String(result?.transactionId||result?.tx||''),body:result}}catch(error){last=String(error?.message||error)}}
+    return{ok:false,reason:last.slice(0,200)||`t2000_${kind}_failed`};
+  }catch(error){return{ok:false,reason:String(error?.message||error).slice(0,220)}}
+}
+
+function findArrayByKey(value,keys,depth=0){
+  if(depth>5||value==null)return[]; if(Array.isArray(value))return value;
+  if(typeof value!=='object')return[];
+  for(const key of keys)if(Array.isArray(value[key]))return value[key];
+  for(const child of Object.values(value)){const found=findArrayByKey(child,keys,depth+1);if(found.length)return found;}
+  return[];
+}
+
+async function clawlancerAction(kind,opportunity,{env,credentials,claim,deliverable}){
+  const key=String(env.CLAWLANCER_API_KEY||credentials?.clawlancer?.apiKey||''); if(!key)return{ok:false,reason:'clawlancer_api_key_missing'};
+  try{
+    if(kind==='claim'){
+      const r=await fetch(`https://clawlancer.ai/api/listings/${encodeURIComponent(opportunity.externalId)}/claim`,{method:'POST',headers:{...auth(key),'content-type':'application/json'},body:'{}',signal:AbortSignal.timeout(20000)}); const body=await safeJson(r);
+      return r.ok?{ok:true,transactionId:String(body.transaction_id||body.transactionId||body.id||body.transaction?.id||''),body}:{ok:false,reason:`http_${r.status}`,body};
+    }
+    const txId=String(claim?.transactionId||claim?.body?.transaction_id||claim?.body?.transaction?.id||''); if(!txId)return{ok:false,reason:'transaction_id_missing_after_claim'};
+    const payload={deliverable:deliverable.content,content:deliverable.content,format:deliverable.format,evidence:deliverable.evidence||{},proof_hash:deliverable.hash};
+    const r=await fetch(`https://clawlancer.ai/api/transactions/${encodeURIComponent(txId)}/deliver`,{method:'POST',headers:{...auth(key),'content-type':'application/json'},body:JSON.stringify(payload),signal:AbortSignal.timeout(20000)}); const body=await safeJson(r);
+    return r.ok?{ok:true,transactionId:txId,body}:{ok:false,reason:`http_${r.status}`,body};
+  }catch(error){return{ok:false,reason:String(error?.message||error).slice(0,200)}}
+}
+
+function auth(key){return{accept:'application/json','user-agent':'AutonomOS/2.0',authorization:`Bearer ${key}`}}
+async function safeJson(response){try{return await response.json()}catch{return{}}}
+function dedupe(rows){const seen=new Set();return rows.filter(row=>{const key=`${row.source}:${row.externalId}`;if(seen.has(key))return false;seen.add(key);return true})}
+export function connectorDefinitions(){return CONNECTOR_DEFS.map(x=>({...x}));}
+export async function discoverPublicSignals(args){return discoverMarketOpportunities(args);}
+
+export async function syncMarketplaceTransactions({env=process.env,credentials={}}={}) {
+  const rows=[]; const health={};
+  const key=String(env.CLAWLANCER_API_KEY||credentials?.clawlancer?.apiKey||'');
+  if(key){
+    try{
+      const r=await fetch('https://clawlancer.ai/api/transactions',{headers:auth(key),signal:AbortSignal.timeout(12000)});
+      const body=await safeJson(r); const txs=Array.isArray(body)?body:Array.isArray(body?.transactions)?body.transactions:Array.isArray(body?.data)?body.data:[];
+      if(r.ok){
+        for(const tx of txs.slice(0,100)){
+          const status=String(tx.status||tx.state||'').toLowerCase();
+          const amountAtomic=tx.amount_usdc_wei??tx.amount_wei??tx.price_wei??tx.amount;
+          const rawAmount = tx.amountUsd ?? tx.priceUsd ?? (Number(amountAtomic||0)>1000 ? Number(amountAtomic)/1e6 : Number(amountAtomic||0));
+          const amountUsd=Number(rawAmount || 0);
+          rows.push({source:'clawlancer',externalTransactionId:String(tx.id||tx.transaction_id||tx.tx_id||''),listingId:String(tx.listing_id||tx.listingId||''),status,amountUsd,currency:'USDC',network:'eip155:8453',payoutAddress:String(tx.payout_address||tx.wallet_address||''),raw:tx});
+        }
+        health.clawlancer={ok:true,count:rows.length};
+      } else health.clawlancer={ok:false,status:r.status,error:body?.error||body?.message||''};
+    }catch(error){health.clawlancer={ok:false,error:String(error?.message||error).slice(0,180)}}
+  }
+  return {transactions:rows,health};
+}

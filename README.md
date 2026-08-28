@@ -159,3 +159,9 @@ Before live sales, configure the real legal values, approved live payment creden
 This build embeds the private AutonomOS owner control plane at `/admin#autonomos` and a background 20-agent autonomous runtime under the existing QONVEXA server. It includes six x402-v2 machine products, Base/USDC receiver settlement to the configured public owner wallet, persistent market/profit/job state, bounded price optimization, child-worker replication, zero-spend policy enforcement and an emergency-stop latch.
 
 See `AUTONOMOS-1.0-REPORT.md` and `AUTONOMOS-DEPLOY.md` for the full architecture and activation notes. Never store a seed phrase/private key in this repository or in QONVEXA environment variables intended for the receive-only seller rail.
+
+## AutonomOS 2.0
+
+AutonomOS 2.0 adds a global marketplace job engine on top of the existing QONVEXA owner control plane. It normalizes external jobs, checks safety/capability/unit economics before claiming, can auto-bootstrap Clawlancer, supports t2000 Passport Connect over MCP when a session is supplied, discovers Agentverse functions, retains x402 seller/discovery, tracks multi-chain EVM treasury balances, and exposes separate Opportunity / Claimed / Delivered / Paid counters so heartbeat cycles are never confused with revenue-producing work.
+
+See `AUTONOMOS-2.0-REPORT.md` and `AUTONOMOS-2.0-DEPLOY.md`.

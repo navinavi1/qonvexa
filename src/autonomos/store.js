@@ -19,6 +19,16 @@ export class AutonomOSStore {
     return value;
   }
 
+  writeSecretJson(name, value) {
+    const target = this.file(name);
+    const tmp = `${target}.${process.pid}.${Date.now()}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify(value, null, 2), { mode: 0o600 });
+    try { fs.chmodSync(tmp, 0o600); } catch {}
+    fs.renameSync(tmp, target);
+    try { fs.chmodSync(target, 0o600); } catch {}
+    return value;
+  }
+
   append(name, value) {
     fs.appendFileSync(this.file(name), `${JSON.stringify(value)}\n`);
     return value;

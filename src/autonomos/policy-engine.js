@@ -13,6 +13,11 @@ export const DEFAULT_AUTONOMOS_CONFIG = Object.freeze({
   childSpawnConcurrencyThreshold: 3,
   childTtlMinutes: 180,
   maxPaidProcurementUsd: 0,
+  maxApiCostPercentOfPayout: 25,
+  maxJobsPerCycle: 2,
+  autoClaimJobs: true,
+  requireEscrowForAutoClaim: true,
+  minJobPayoutUsd: 0.01,
   autoReplication: true,
   treasuryAsset: 'USDC',
   updatedAt: ''
@@ -37,6 +42,11 @@ export function normalizeConfig(raw = {}) {
   cfg.childSpawnConcurrencyThreshold = Math.round(clampNumber(cfg.childSpawnConcurrencyThreshold, 2, 50, 3));
   cfg.childTtlMinutes = Math.round(clampNumber(cfg.childTtlMinutes, 5, 1440, 180));
   cfg.maxPaidProcurementUsd = clampNumber(cfg.maxPaidProcurementUsd, 0, 100000, 0);
+  cfg.maxApiCostPercentOfPayout = clampNumber(cfg.maxApiCostPercentOfPayout, 0, 80, 25);
+  cfg.maxJobsPerCycle = Math.round(clampNumber(cfg.maxJobsPerCycle, 0, 20, 2));
+  cfg.autoClaimJobs = cfg.autoClaimJobs !== false;
+  cfg.requireEscrowForAutoClaim = cfg.requireEscrowForAutoClaim !== false;
+  cfg.minJobPayoutUsd = clampNumber(cfg.minJobPayoutUsd, 0, 100000, 0.01);
   cfg.autoReplication = cfg.autoReplication !== false;
   cfg.genesisObjective = String(cfg.genesisObjective || DEFAULT_AUTONOMOS_CONFIG.genesisObjective).trim().slice(0, 1000);
   cfg.treasuryAsset = ['USDC','USDT','ETH','BTC','SOL'].includes(String(cfg.treasuryAsset).toUpperCase())
