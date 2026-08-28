@@ -64,3 +64,35 @@ services:
         generateValue: true
       - key: IP_HASH_SALT
         generateValue: true
+      - key: AUTONOMOS_OWNER_WALLET
+        value: "0x1f674bf085f6fed36fa198287d51edf0fe0bb9e2"
+      - key: AUTONOMOS_ENABLED
+        value: "true"
+      - key: AUTONOMOS_BASE_RPC_URL
+        value: "https://mainnet.base.org"
+      - key: AUTONOMOS_BAZAAR_URL
+        value: "https://api.cdp.coinbase.com/platform/v2/x402/discovery/resources?limit=50"
+      - key: AUTONOMOS_X402_ENABLED
+        value: "true"
+      - key: AUTONOMOS_X402_NETWORK
+        value: "eip155:8453"
+      - key: AUTONOMOS_X402_FACILITATOR_URL
+        value: "https://facilitator.xpay.sh"
+      - key: AUTONOMOS_X402_FACILITATOR_HEADERS_JSON
+        sync: false
+      - key: AUTONOMOS_LLM_BASE_URL
+        sync: false
+      - key: AUTONOMOS_LLM_API_KEY
+        sync: false
+      - key: AUTONOMOS_LLM_MODEL
+        sync: false
+      - key: VIRTUALS_ACP_WALLET_ID
+        sync: false
+      - key: VIRTUALS_ACP_SIGNER
+        sync: false
+      - key: VIRTUALS_ACP_AGENT_ID
+        sync: false
+      - key: NVM_API_KEY
+        sync: false
+      - key: NVM_PLAN_ID
+        sync: false

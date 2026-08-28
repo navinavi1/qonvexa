@@ -56,3 +56,6 @@ body{background:linear-gradient(180deg,#fbfcff 0%,#f8fbff 36%,#fff 100%);color:v
 @media(max-width:980px){.hero{grid-template-columns:1fr;padding-top:56px}.hero-reel{max-width:760px}.reel-frame{aspect-ratio:16/9}}
 @media(max-width:680px){.hero{padding-block:46px 70px}.hero-copy h1{font-size:45px}.reel-chrome{height:48px}.reel-float{display:none}.reel-footer span:nth-child(3){display:none}.reel-footer b{margin-left:0}.section{padding-block:82px}}
 @media(prefers-reduced-motion:reduce){.reel-chrome i,.reel-float{animation:none!important}.hero-video{display:none}.reel-frame{background:url('assets/qonvexa-hero-poster.jpg') center/cover no-repeat}}
+
+/* Private owner launcher: deliberately discreet; security still relies on authenticated /admin. */
+.footer-admin-link{display:inline-grid!important;place-items:center!important;width:9px;height:9px;padding:0!important;margin-left:4px;border-radius:50%;background:#6c7892!important;color:transparent!important;font-size:0!important;opacity:.12;overflow:hidden;vertical-align:middle;transition:opacity .2s ease,transform .2s ease}.footer-admin-link:hover,.footer-admin-link:focus-visible{opacity:.48;transform:scale(1.25);outline:2px solid #91a0bd;outline-offset:3px}

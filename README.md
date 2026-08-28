@@ -153,3 +153,9 @@ Key additions:
 - improved checkout accessibility.
 
 Before live sales, configure the real legal values, approved live payment credentials and persistent storage. See `QONVEXA-PRODUCTION-FINALIZATION-REPORT.md`.
+
+## AutonomOS 1.0 (QONVEXA 12.0)
+
+This build embeds the private AutonomOS owner control plane at `/admin#autonomos` and a background 20-agent autonomous runtime under the existing QONVEXA server. It includes six x402-v2 machine products, Base/USDC receiver settlement to the configured public owner wallet, persistent market/profit/job state, bounded price optimization, child-worker replication, zero-spend policy enforcement and an emergency-stop latch.
+
+See `AUTONOMOS-1.0-REPORT.md` and `AUTONOMOS-DEPLOY.md` for the full architecture and activation notes. Never store a seed phrase/private key in this repository or in QONVEXA environment variables intended for the receive-only seller rail.

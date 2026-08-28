@@ -28,7 +28,7 @@
       <header class="admin-top">
         <div>
           <div class="admin-brand"><span class="brand-mark">Q</span><strong>QONVEXA</strong></div>
-          <p>Owner dashboard · QONVEXA 11.0</p>
+          <p>Owner dashboard · QONVEXA 12.0 · AutonomOS 1.0</p>
         </div>
         <div class="admin-top-actions">
           <span id="admin-user" class="admin-user"></span>
@@ -42,6 +42,7 @@
         <button class="admin-tab" data-view="leads">Leads</button>
         <button class="admin-tab" data-view="orders">Orders</button>
         <button class="admin-tab" data-view="clients">Clients</button>
+        <button class="admin-tab autonomos-tab" data-view="autonomos">AutonomOS</button>
         <button class="admin-tab" data-view="activity">Activity</button>
         <button class="admin-tab" data-view="settings">Settings</button>
       </nav>
@@ -94,6 +95,91 @@
         <div class="view-heading"><div><small>RELATIONSHIPS</small><h1>Clients</h1></div><a class="admin-secondary export-link" href="/api/admin/export/clients.csv">Export CSV</a></div>
         <div class="admin-toolbar"><input class="table-search" data-target="clients" type="search" placeholder="Search client email, website or business…"></div>
         <div id="client-cards" class="client-grid"></div>
+      </section>
+
+      <section class="admin-view" data-panel="autonomos">
+        <div class="autonomos-hero">
+          <div>
+            <small>AUTONOMOUS AI COMPANY</small>
+            <h1>AutonomOS</h1>
+            <p>Discover → Evaluate → Build → Sell → Execute → Get Paid → Learn → Replicate.</p>
+          </div>
+          <div class="autonomos-controls">
+            <span id="autonomos-runtime-badge" class="autonomos-badge">Loading…</span>
+            <button id="autonomos-start" class="button" type="button">Start 24/7</button>
+            <button id="autonomos-stop" class="admin-secondary" type="button">Stop</button>
+            <button id="autonomos-cycle" class="admin-secondary" type="button">Run cycle</button>
+            <button id="autonomos-emergency" class="admin-secondary autonomos-danger" type="button">EMERGENCY STOP</button>
+          </div>
+        </div>
+
+        <div class="autonomos-stat-grid">
+          <article class="autonomos-stat"><small>OWNER TREASURY</small><strong id="auto-treasury">—</strong><span>USDC · Base</span></article>
+          <article class="autonomos-stat"><small>24H REVENUE</small><strong id="auto-revenue24">$0.00</strong><span>real settled revenue</span></article>
+          <article class="autonomos-stat"><small>24H COST</small><strong id="auto-cost24">$0.00</strong><span>tracked external cost</span></article>
+          <article class="autonomos-stat"><small>NET PROFIT</small><strong id="auto-net">$0.00</strong><span>lifetime</span></article>
+          <article class="autonomos-stat"><small>AGENTS</small><strong id="auto-agents">20</strong><span>core organization</span></article>
+          <article class="autonomos-stat"><small>CHILDREN</small><strong id="auto-children">0</strong><span>temporary workers</span></article>
+          <article class="autonomos-stat"><small>JOBS</small><strong id="auto-jobs">0</strong><span>completed</span></article>
+          <article class="autonomos-stat"><small>CYCLES</small><strong id="auto-cycles">0</strong><span>autonomous loops</span></article>
+        </div>
+
+        <div class="autonomos-two-col">
+          <section class="admin-panel autonomos-panel">
+            <div class="admin-panel-head"><div><small>TREASURY</small><h2>Owner wallet & profit policy</h2></div><button id="autonomos-refresh-wallet" class="admin-link" type="button">Refresh balance →</button></div>
+            <div id="autonomos-wallet" class="autonomos-wallet"></div>
+            <div id="autonomos-allocations" class="allocation-grid"></div>
+            <p class="settings-note">Private keys and seed phrases are never stored here. Revenue receivers use only the public wallet address.</p>
+          </section>
+
+          <form id="autonomos-config-form" class="admin-panel admin-form autonomos-panel">
+            <div class="admin-panel-head"><div><small>POLICY ENGINE</small><h2>Autonomy limits</h2></div></div>
+            <label>Genesis objective<textarea name="genesisObjective" rows="3" maxlength="1000"></textarea></label>
+            <div class="autonomos-form-grid">
+              <label>Heartbeat, seconds<input name="heartbeatSeconds" type="number" min="30" max="3600"></label>
+              <label>Minimum margin, %<input name="minMarginPercent" type="number" min="0" max="95" step="1"></label>
+              <label>Reserve, %<input name="reservePercent" type="number" min="0" max="100"></label>
+              <label>Growth, %<input name="growthPercent" type="number" min="0" max="100"></label>
+              <label>Experiments, %<input name="experimentPercent" type="number" min="0" max="100"></label>
+              <label>Max child agents<input name="maxChildren" type="number" min="0" max="100"></label>
+            </div>
+            <label class="autonomos-check"><input name="autoReplication" type="checkbox"> <span>Allow bounded automatic child-agent replication</span></label>
+            <button class="button" type="submit">Save AutonomOS policy</button>
+            <p id="autonomos-config-status" class="admin-status" role="status"></p>
+          </form>
+        </div>
+
+        <section class="admin-panel autonomos-panel">
+          <div class="admin-panel-head"><div><small>20-AGENT ORGANIZATION</small><h2>Core agents</h2></div><span id="autonomos-llm" class="autonomos-mini-badge"></span></div>
+          <div id="autonomos-agent-grid" class="autonomos-agent-grid"></div>
+        </section>
+
+        <div class="autonomos-two-col">
+          <section class="admin-panel autonomos-panel">
+            <div class="admin-panel-head"><div><small>MACHINE PRODUCTS</small><h2>Services agents can sell</h2></div></div>
+            <div id="autonomos-products" class="autonomos-product-list"></div>
+          </section>
+          <section class="admin-panel autonomos-panel">
+            <div class="admin-panel-head"><div><small>MARKET RAILS</small><h2>Connectors</h2></div></div>
+            <div id="autonomos-connectors" class="autonomos-connector-list"></div>
+          </section>
+        </div>
+
+        <div class="autonomos-two-col">
+          <section class="admin-panel autonomos-panel">
+            <div class="admin-panel-head"><div><small>REPLICATION TREE</small><h2>Child agents</h2></div></div>
+            <div id="autonomos-children" class="autonomos-event-list"></div>
+          </section>
+          <section class="admin-panel autonomos-panel">
+            <div class="admin-panel-head"><div><small>SETUP GAPS</small><h2>What still needs external credentials</h2></div></div>
+            <div id="autonomos-missing" class="autonomos-event-list"></div>
+          </section>
+        </div>
+
+        <section class="admin-panel autonomos-panel">
+          <div class="admin-panel-head"><div><small>LIVE AUDIT LOG</small><h2>AutonomOS events</h2></div></div>
+          <div id="autonomos-events" class="activity-list"></div>
+        </section>
       </section>
 
       <section class="admin-view" data-panel="activity">

@@ -6,6 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+import { createAutonomOS } from './src/autonomos/runtime.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -41,6 +42,17 @@ const stripe = process.env.STRIPE_SECRET_KEY
 validateProductionConfig();
 verifyPublicAssets();
 fs.mkdirSync(storageDir, { recursive: true });
+
+// AutonomOS is embedded into the existing QONVEXA service. It stores only
+// public wallet information and operational state; private keys are never
+// accepted by the browser or persisted by this application.
+const autonomos = createAutonomOS({
+  storageDir,
+  siteUrl,
+  ownerWallet: clean(process.env.AUTONOMOS_OWNER_WALLET || '0x1f674bf085f6fed36fa198287d51edf0fe0bb9e2', 80),
+  env: process.env,
+  logger: console
+});
 
 const rateBuckets = new Map();
 function rateLimit({ windowMs, max }) {
@@ -307,6 +319,67 @@ app.get('/api/admin/settings', requireAdmin, (_req, res) => {
     }
   });
 });
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// AutonomOS owner control plane (same authenticated owner session as QONVEXA).
+// ─────────────────────────────────────────────────────────────────────────────
+app.get('/api/admin/autonomos', requireAdmin, async (_req, res) => {
+  res.json(await autonomos.snapshot());
+});
+
+app.patch('/api/admin/autonomos/config', requireAdmin, requireSameSiteMutation, (req, res) => {
+  try {
+    const config = autonomos.updateConfig(req.body || {});
+    logAdminEvent('autonomos_config_updated', { heartbeatSeconds:config.heartbeatSeconds, minMarginPercent:config.minMarginPercent });
+    res.json({ ok:true, config });
+  } catch (error) {
+    res.status(400).json({ error:clean(error?.message || 'Invalid AutonomOS configuration.', 400) });
+  }
+});
+
+app.post('/api/admin/autonomos/start', requireAdmin, requireSameSiteMutation, (_req, res) => {
+  const result = autonomos.start();
+  logAdminEvent('autonomos_started', {});
+  res.json(result);
+});
+
+app.post('/api/admin/autonomos/stop', requireAdmin, requireSameSiteMutation, (_req, res) => {
+  const result = autonomos.stop();
+  logAdminEvent('autonomos_stopped', {});
+  res.json(result);
+});
+
+app.post('/api/admin/autonomos/emergency-stop', requireAdmin, requireSameSiteMutation, (_req, res) => {
+  const result = autonomos.emergencyStop();
+  logAdminEvent('autonomos_emergency_stop', {});
+  res.json(result);
+});
+
+app.post('/api/admin/autonomos/clear-emergency', requireAdmin, requireSameSiteMutation, (_req, res) => {
+  const result = autonomos.clearEmergencyStop();
+  logAdminEvent('autonomos_emergency_cleared', {});
+  res.json(result);
+});
+
+app.post('/api/admin/autonomos/cycle', requireAdmin, requireSameSiteMutation, async (_req, res) => {
+  res.json(await autonomos.runCycle());
+});
+
+app.post('/api/admin/autonomos/treasury/refresh', requireAdmin, requireSameSiteMutation, async (_req, res) => {
+  res.json(await autonomos.refreshTreasury());
+});
+
+app.get('/api/admin/autonomos/product-preview/:productId', requireAdmin,
+  rateLimit({ windowMs: 5 * 60 * 1000, max: 20 }),
+  async (req, res) => {
+    try {
+      res.json(await autonomos.previewProduct(clean(req.params.productId, 80), { url:clean(req.query.url || '', 1000) }));
+    } catch (error) {
+      res.status(Number(error?.status || 500)).json({ error:clean(error?.code || error?.message || 'Preview failed.', 300) });
+    }
+  }
+);
 
 app.patch('/api/admin/settings', requireAdmin, requireSameSiteMutation, (req, res) => {
   const current = readAdminSettings();
@@ -691,6 +764,40 @@ app.get('/api/checkout-session-status',
     }
   }
 );
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// AutonomOS machine-service surface. Catalog is free; product endpoints are
+// payment-gated by x402 when the selected facilitator/network are configured.
+// ─────────────────────────────────────────────────────────────────────────────
+app.get('/api/autonomos/catalog',
+  rateLimit({ windowMs: 5 * 60 * 1000, max: 120 }),
+  (_req, res) => res.json(autonomos.catalog())
+);
+
+app.get('/.well-known/autonomos.json', (_req, res) => {
+  res.setHeader('Cache-Control', 'public, max-age=300');
+  res.json(autonomos.catalog());
+});
+
+for (const product of autonomos.products) {
+  app.get(product.path,
+    rateLimit({ windowMs: 5 * 60 * 1000, max: 90 }),
+    (req, res) => autonomos.handleProductRequest(product.id, req, res)
+  );
+}
+
+// Do not expose stale deployment/source artifacts that happen to exist under
+// /public in older QONVEXA archives. They are not needed by the browser.
+app.use((req, res, next) => {
+  let pathname = '';
+  try { pathname = decodeURIComponent(req.path || '').toLowerCase(); } catch { return res.status(400).send('Bad Request'); }
+  if (
+    pathname === '/server.js' || pathname === '/package.json' || pathname === '/render.yaml' ||
+    pathname === '/procfile' || pathname.endsWith('.md') || pathname.startsWith('/scripts/')
+  ) return res.status(404).type('text').send('Not Found');
+  next();
+});
 
 // Serve public assets only after explicit dynamic/admin/SEO/API routes.
 // This prevents /admin, /robots.txt and /sitemap.xml from being intercepted
@@ -1258,6 +1365,6 @@ function escapeHtml(value) {
 }
 
 app.listen(port, '0.0.0.0', () => {
-  console.log(`QONVEXA running at ${siteUrl}`);
+  console.log(`QONVEXA + AutonomOS running at ${siteUrl}`);
   console.log(`Storage: ${storageDir}`);
 });
