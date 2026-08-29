@@ -26,10 +26,28 @@ export function classifyOpportunity(opportunity, { llmEnabled=false } = {}) {
 
 function canDoDeterministically(op, skill){
   const hay=`${op.title} ${op.description}`.toLowerCase();
-  if (skill==='translation') return /translate\s+["“']?[^\n]{1,100}\s+(to|into)\s+(spanish|ukrainian|english|french|german|italian|polish)/i.test(hay);
+  if (skill==='translation') return translationInDictionary(hay);
   if (skill==='data-transform') return false;
   if (skill==='web-research') return /public\s+(url|endpoint)|headers|robots|sitemap|http|website\s+(check|audit)|security header/i.test(hay);
   return false;
+}
+
+// Mirrors the tiny hardcoded dictionary in job-executor.js. A request only counts as
+// deterministically executable if the exact phrase is actually in the dictionary —
+// matching the request's wording alone previously caused the runtime to claim
+// translation jobs it had no real ability to complete, risking a failed delivery
+// after the job was already claimed (reputation/marketplace-standing risk).
+const TRANSLATION_DICTIONARY = {
+  spanish: ['agents hiring agents', 'hello world'],
+  ukrainian: ['agents hiring agents', 'hello world'],
+  english: ['агенти наймають агентів', 'hola mundo']
+};
+function translationInDictionary(hay){
+  const match = hay.match(/translate\s+["“']?([^"”'\n]{1,100})["”']?\s+(?:to|into)\s+(spanish|ukrainian|english|french|german|italian|polish)/i);
+  if (!match) return false;
+  const phrase = match[1].trim().toLowerCase().replace(/[“”"']/g,'');
+  const language = match[2].toLowerCase();
+  return Boolean(TRANSLATION_DICTIONARY[language]?.includes(phrase));
 }
 
 function estimateLlmCost(op){
