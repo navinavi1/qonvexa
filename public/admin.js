@@ -198,6 +198,7 @@ async function autonomosCommand(path,statusText){
 el('#autonomos-start')?.addEventListener('click',()=>autonomosCommand('/api/admin/autonomos/start','Starting…'));
 el('#autonomos-stop')?.addEventListener('click',()=>autonomosCommand('/api/admin/autonomos/stop','Stopping…'));
 el('#autonomos-cycle')?.addEventListener('click',()=>autonomosCommand('/api/admin/autonomos/cycle','Running cycle…'));
+el('#autonomos-reset-claims')?.addEventListener('click',()=>autonomosCommand('/api/admin/autonomos/reset-claim-history','Resetting claim history…'));
 el('#autonomos-refresh-wallet')?.addEventListener('click',()=>autonomosCommand('/api/admin/autonomos/treasury/refresh','Checking wallet…'));
 el('#autonomos-emergency')?.addEventListener('click',async()=>{
   if(!confirm('Emergency stop AutonomOS? This disables the runtime and all external spending permissions.'))return;
