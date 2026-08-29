@@ -3,7 +3,7 @@ import crypto from 'node:crypto';
 import { CORE_AGENTS, buildAgentState } from './agents.js';
 import { AutonomOSStore } from './store.js';
 import { normalizeConfig, DEFAULT_AUTONOMOS_CONFIG, validateAction } from './policy-engine.js';
-import { evaluateOpportunity, allocateRevenue } from './profit-engine.js';
+import { evaluateOpportunity, allocateRevenue, computeEarnedSpendBudgetUsd } from './profit-engine.js';
 import { readTreasuryBalances, isEvmAddress } from './treasury.js';
 import { MACHINE_PRODUCTS, executeProduct } from './products.js';
 import { createX402Gateway } from './x402.js';
@@ -37,6 +37,12 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
   const seen = new Set(store.readJson('seen-opportunities.json', []));
   const handled = new Set(store.readJson('handled-opportunities.json', []));
   const settledTx = new Set(store.readJson('settled-transactions.json', []));
+  // Tracks failed claim attempts per opportunity so transient errors (timeouts, 5xx,
+  // network blips) can be retried on a later cycle instead of the opportunity being
+  // silently abandoned after one failure — see MAX_CLAIM_ATTEMPTS / claim-retry logic below.
+  let claimAttempts = store.readJson('claim-attempts.json', {});
+  const MAX_CLAIM_ATTEMPTS = 5;
+  const CLAIM_RETRY_BACKOFF_MS = 90_000;
 
   let x402Idempotency = store.readJson('x402-idempotency.json', {});
   const x402 = createX402Gateway({ ownerWallet:wallet, siteUrl, env, onSettlement:recordSettlement, idempotency:{
@@ -121,11 +127,15 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
       const boot=await bootstrapMarketCredentials({env,credentials,storeCredential:(id,value)=>{credentials={...credentials,[id]:value};store.writeSecretJson('credentials.private.json',credentials);}});
       state.bootstrapHealth=boot;
       const discovery=await discoverMarketOpportunities({env,credentials,limit:100}); state.connectorHealth=discovery.health;
+      const cycleLedger=store.readNdjson('ledger.ndjson',4000);
+      const availableSpendUsd=computeEarnedSpendBudgetUsd(cycleLedger,config);
+      state.earnedSpendBudgetUsd=availableSpendUsd;
+      const cycleConfig={...config,availableSpendUsd};
       const normalized=[];
       for(const opportunity of discovery.signals){
         const cap=classifyOpportunity(opportunity,{llmEnabled:llm.enabled});
         const feeUsd=Number(opportunity.budgetUsd||0)*Number(opportunity.feePercent||0)/100;
-        const econ=evaluateOpportunity({expectedRevenueUsd:Number(opportunity.budgetUsd||0),successProbability:cap.confidence||0.5,modelCostUsd:cap.estimatedModelCostUsd,marketplaceFeeUsd:feeUsd,computeCostUsd:0},config);
+        const econ=evaluateOpportunity({expectedRevenueUsd:Number(opportunity.budgetUsd||0),successProbability:cap.confidence||0.5,modelCostUsd:cap.estimatedModelCostUsd,marketplaceFeeUsd:feeUsd,computeCostUsd:0},cycleConfig);
         const row={...opportunity,capability:cap,economics:econ}; normalized.push(row); recordOpportunity(row);
       }
       setAgentMetric('opportunity-radar',{tasks:1});
@@ -155,8 +165,20 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
     finally{cycleRunning=false;for(const agent of agents)if(agent.status==='working')agent.status='idle';persistAgents();}
   }
 
+  function isTransientClaimFailure(reason){
+    const text=String(reason||'').toLowerCase();
+    if(/http_5\d\d/.test(text))return true; // server-side error, worth retrying
+    if(/http_4\d\d/.test(text))return false; // e.g. 404 not found, 409 already claimed, 401/403 auth
+    if(/timeout|timed out|network|econnreset|fetch failed|abort|enotfound|econnrefused/.test(text))return true;
+    if(/missing|not_found|not_available/.test(text))return false;
+    return true; // unknown shape — default to retrying a few times rather than losing the job
+  }
   function isAutoClaimCandidate(op){
-    if(!config.autoClaimJobs||handled.has(opportunityKey(op)))return false;
+    if(!config.autoClaimJobs)return false;
+    const key=opportunityKey(op);
+    if(handled.has(key))return false;
+    const attempt=claimAttempts[key];
+    if(attempt&&Date.now()-Date.parse(attempt.lastAttemptAt||0)<CLAIM_RETRY_BACKOFF_MS)return false;
     if(!['clawlancer','t2000'].includes(op.source))return false;
     if(config.requireEscrowForAutoClaim&&!op.escrowed)return false;
     if(Number(op.budgetUsd||0)<Number(config.minJobPayoutUsd||0))return false;
@@ -167,25 +189,65 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
   function scoreCandidate(op){return Number(op.economics?.expectedProfitUsd||0)*Math.max(0.1,Number(op.capability?.confidence||0));}
 
   async function processMarketplaceOpportunity(op){
-    const key=opportunityKey(op); handled.add(key);persistSet('handled-opportunities.json',handled);
+    const key=opportunityKey(op);
     setAgent('job-router','working');setAgent('policy-agent','working');setAgent('economics-agent','working');
     const jobId=`ext_${Date.now().toString(36)}_${crypto.randomBytes(4).toString('hex')}`; const startedAt=new Date().toISOString();
     store.append('jobs.ndjson',{id:jobId,source:op.source,externalId:op.externalId,title:op.title,budgetUsd:op.budgetUsd,currency:op.currency,status:'claiming',startedAt});event('market_job_claiming',{jobId,source:op.source,externalId:op.externalId,budgetUsd:op.budgetUsd});
     const claim=await claimMarketplaceJob(op,{env,credentials});
-    if(!claim.ok){store.append('jobs.ndjson',{id:jobId,source:op.source,externalId:op.externalId,status:'claim_failed',at:new Date().toISOString(),reason:claim.reason||''});event('market_job_claim_failed',{jobId,source:op.source,externalId:op.externalId,reason:claim.reason||''});return{claimed:false,delivered:false};}
+    if(!claim.ok){
+      const attempts=Number(claimAttempts[key]?.count||0)+1;
+      const terminal=!isTransientClaimFailure(claim.reason)||attempts>=MAX_CLAIM_ATTEMPTS;
+      claimAttempts[key]={count:attempts,lastAttemptAt:new Date().toISOString(),reason:claim.reason||''};persistSet('claim-attempts.json',claimAttempts);
+      if(terminal){handled.add(key);persistSet('handled-opportunities.json',handled);delete claimAttempts[key];persistSet('claim-attempts.json',claimAttempts);}
+      store.append('jobs.ndjson',{id:jobId,source:op.source,externalId:op.externalId,status:'claim_failed',attempts,terminal,at:new Date().toISOString(),reason:claim.reason||''});
+      event('market_job_claim_failed',{jobId,source:op.source,externalId:op.externalId,attempts,terminal,reason:claim.reason||''});
+      return{claimed:false,delivered:false};
+    }
+    // Claim succeeded: this opportunity is now truly spoken for, so it's safe to mark handled.
+    handled.add(key);persistSet('handled-opportunities.json',handled);
+    if(claimAttempts[key]){delete claimAttempts[key];persistSet('claim-attempts.json',claimAttempts);}
     setAgentMetric('job-router',{tasks:1});maybeSpawnChild(op.category||op.source);
     const worker=pickExternalWorker(op.capability?.skill);setWorkerStatus(worker,'working');activeJobs.set(jobId,{id:jobId,source:op.source,externalId:op.externalId,workerId:worker.id,cancelled:false});
     store.append('jobs.ndjson',{id:jobId,source:op.source,externalId:op.externalId,status:'claimed',transactionId:claim.transactionId||'',workerId:worker.id,at:new Date().toISOString()});event('market_job_claimed',{jobId,source:op.source,externalId:op.externalId,transactionId:claim.transactionId||''});
     try{
-      const deliverable=await executeExternalOpportunity(op,op.capability,{llm,siteUrl});
-      setAgent('qa-evaluator','working'); validateExternalDeliverable(deliverable,op);
+      if(op.source==='t2000'&&claim.workOrderMissing){throw new Error('t2000_work_order_unavailable_refusing_blind_delivery');}
+      const execOp=claim.workOrder?{...op,__workOrderRaw:claim.workOrder,description:`${op.description}\n\n[t2000 job_status work order]\n${typeof claim.workOrder==='string'?claim.workOrder:JSON.stringify(claim.workOrder).slice(0,4000)}`}:op;
+      const deliverable=await executeExternalOpportunity(execOp,op.capability,{llm,siteUrl});
+      setAgent('qa-evaluator','working'); validateExternalDeliverable(deliverable,execOp);
       const delivery=await deliverMarketplaceJob(op,claim,deliverable,{env,credentials});
       if(!delivery.ok)throw new Error(`delivery_failed:${delivery.reason||'unknown'}`);
       store.append('jobs.ndjson',{id:jobId,source:op.source,externalId:op.externalId,status:'delivered',transactionId:delivery.transactionId||claim.transactionId||'',workerId:worker.id,deliverableHash:deliverable.hash,at:new Date().toISOString()});
-      setWorkerMetric(worker,{tasks:1,cost:Number(op.capability?.estimatedModelCostUsd||0)});setAgentMetric('qa-evaluator',{tasks:1});event('market_job_delivered',{jobId,source:op.source,externalId:op.externalId,transactionId:delivery.transactionId||''});
+      const actualCostUsd=computeActualCostUsd(deliverable,op.capability);
+      setWorkerMetric(worker,{tasks:1,cost:actualCostUsd});setAgentMetric('qa-evaluator',{tasks:1});event('market_job_delivered',{jobId,source:op.source,externalId:op.externalId,transactionId:delivery.transactionId||''});
+      recordCost({jobId,source:op.source,externalId:op.externalId,amountUsd:actualCostUsd,kind:'model',estimated:!deliverable.evidence?.usage});
       return{claimed:true,delivered:true};
-    }catch(error){store.append('jobs.ndjson',{id:jobId,source:op.source,externalId:op.externalId,status:'execution_failed',workerId:worker.id,error:String(error?.message||error).slice(0,300),at:new Date().toISOString()});incrementWorkerError(worker);event('market_job_failed',{jobId,source:op.source,externalId:op.externalId,error:String(error?.message||error).slice(0,220)});return{claimed:true,delivered:false};}
+    }catch(error){
+      store.append('jobs.ndjson',{id:jobId,source:op.source,externalId:op.externalId,status:'execution_failed',workerId:worker.id,error:String(error?.message||error).slice(0,300),at:new Date().toISOString()});
+      incrementWorkerError(worker);event('market_job_failed',{jobId,source:op.source,externalId:op.externalId,error:String(error?.message||error).slice(0,220)});
+      // The LLM call (if any) may already have been billed even though the job failed
+      // afterwards (bad output, delivery rejected, etc). Record that spend so it isn't
+      // silently absorbed as free — this is exactly the "Revenue $1 / Cost $0" bug.
+      const incurredCostUsd=Number(op.capability?.estimatedModelCostUsd||0);
+      if(incurredCostUsd>0)recordCost({jobId,source:op.source,externalId:op.externalId,amountUsd:incurredCostUsd,kind:'model',estimated:true,note:'job_failed_after_model_call'});
+      return{claimed:true,delivered:false};
+    }
     finally{activeJobs.delete(jobId);setWorkerStatus(worker,'idle');}
+  }
+
+  function computeActualCostUsd(deliverable,capability){
+    const usage=deliverable?.evidence?.usage;
+    if(usage&&(usage.prompt_tokens||usage.completion_tokens)){
+      const inPerM=Number(env.AUTONOMOS_LLM_INPUT_USD_PER_MILLION||0.25);
+      const outPerM=Number(env.AUTONOMOS_LLM_OUTPUT_USD_PER_MILLION||2);
+      const inputCost=(Number(usage.prompt_tokens||0)/1e6)*inPerM;
+      const outputCost=(Number(usage.completion_tokens||0)/1e6)*outPerM;
+      return round(inputCost+outputCost);
+    }
+    return round(Number(capability?.estimatedModelCostUsd||0));
+  }
+  function recordCost({jobId,source,externalId,amountUsd,kind,estimated,note}){
+    const amount=Math.max(0,Number(amountUsd||0)); if(amount<=0)return;
+    store.append('ledger.ndjson',{id:`cost_${Date.now().toString(36)}_${crypto.randomBytes(3).toString('hex')}`,type:'cost',source,jobId,externalId,kind:kind||'model',amountUsd:amount,estimated:Boolean(estimated),note:note||'',at:new Date().toISOString()});
   }
 
   async function syncSettlements(){
@@ -230,7 +292,44 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
   function setWorkerMetric(worker,{tasks=0,revenue=0,cost=0}={}){if(!worker?.isChild)return setAgentMetric(worker?.id,{tasks,revenue,cost});const child=children.find(c=>c.id===worker.id);if(!child)return;child.tasksCompleted=Number(child.tasksCompleted||0)+Number(tasks||0);child.revenueUsd=round(Number(child.revenueUsd||0)+Number(revenue||0));child.costUsd=round(Number(child.costUsd||0)+Number(cost||0));child.lastActiveAt=new Date().toISOString();store.writeJson('children.json',children);}
   function incrementWorkerError(worker){if(!worker?.isChild)return incrementAgentError(worker?.id);const child=children.find(c=>c.id===worker.id);if(!child)return;child.errors=Number(child.errors||0)+1;child.lastActiveAt=new Date().toISOString();store.writeJson('children.json',children);}
   function validateProductResult(result,productId){if(!result||typeof result!=='object')throw Object.assign(new Error('qa_invalid_result'),{status:502});if(result.product!==productId)throw Object.assign(new Error('qa_product_mismatch'),{status:502});if(!result.generatedAt)throw Object.assign(new Error('qa_timestamp_missing'),{status:502});}
-  function validateExternalDeliverable(d,op){if(!d||!String(d.content||'').trim())throw new Error('qa_empty_deliverable');if(String(d.content).length>100000)throw new Error('qa_deliverable_too_large');if(/password|seed phrase|private key/i.test(op.description)&&!/public key/i.test(op.description))throw new Error('qa_sensitive_task_rejected');return true;}
+  function validateExternalDeliverable(d,op){
+    if(!d||!String(d.content||'').trim())throw new Error('qa_empty_deliverable');
+    const content=String(d.content);
+    if(content.length>100000)throw new Error('qa_deliverable_too_large');
+    if(/password|seed phrase|private key/i.test(op.description)&&!/public key/i.test(op.description))throw new Error('qa_sensitive_task_rejected');
+
+    // Deterministic outputs (dictionary translation, security-header audits, etc.) come
+    // from code, not an LLM, so they cannot contain a refusal/echo and are trusted as-is.
+    if(d.evidence?.mode==='deterministic_dictionary'||d.evidence?.mode==='deterministic_product')return true;
+
+    // Below this point the deliverable came from an LLM call — check it actually
+    // attempted the task instead of refusing, apologizing, or padding with filler.
+    const REFUSAL_PATTERNS=/\b(i cannot|i can'?t|i'm unable|i am unable|as an ai|i don'?t have access|i'm not able to|sorry,? (i|but))\b/i;
+    if(REFUSAL_PATTERNS.test(content.slice(0,400)))throw new Error('qa_refusal_or_apology_detected');
+
+    // A deliverable that's mostly a verbatim echo of the task text is not completed work.
+    const normalizedContent=content.toLowerCase().replace(/\s+/g,' ').trim();
+    const normalizedTask=String(op.description||'').toLowerCase().replace(/\s+/g,' ').trim();
+    if(normalizedTask.length>40&&normalizedContent.length<normalizedTask.length*1.2&&normalizedContent.includes(normalizedTask.slice(0,Math.min(80,normalizedTask.length)))){
+      throw new Error('qa_deliverable_echoes_task_not_completed');
+    }
+
+    // Sanity floor: a real deliverable for a paid job is essentially never single-digit
+    // characters long (empty check above catches truly empty, this catches near-empty).
+    if(content.trim().length<15)throw new Error('qa_deliverable_too_short');
+
+    // Best-effort acceptance-criteria check against t2000's real work order, when we
+    // managed to fetch one via job_status. Not a full grader, but catches the most
+    // common t2000 rejection cause the audit flagged: ignoring a stated required format.
+    const workOrderText=typeof op.__workOrderRaw==='string'?op.__workOrderRaw:op.__workOrderRaw?JSON.stringify(op.__workOrderRaw):'';
+    if(workOrderText){
+      const requiredFormat=(workOrderText.match(/required format:?\s*["'`]?([a-z0-9./+-]{2,20})/i)||[])[1];
+      if(requiredFormat&&!content.toLowerCase().includes(requiredFormat.toLowerCase())&&!(d.format||'').toLowerCase().includes(requiredFormat.toLowerCase())){
+        throw new Error(`qa_required_format_mismatch:${requiredFormat}`);
+      }
+    }
+    return true;
+  }
   function setAgent(id,status){const a=agents.find(x=>x.id===id);if(!a)return;a.status=status;if(status==='working')a.lastActiveAt=new Date().toISOString();}
   function setAgentMetric(id,{tasks=0,revenue=0,cost=0}={}){const a=agents.find(x=>x.id===id);if(!a)return;a.tasksCompleted+=Number(tasks||0);a.revenueUsd=round(a.revenueUsd+Number(revenue||0));a.costUsd=round(a.costUsd+Number(cost||0));a.lastActiveAt=new Date().toISOString();persistAgents();}
   function incrementAgentError(id){const a=agents.find(x=>x.id===id);if(!a)return;a.errors+=1;a.lastActiveAt=new Date().toISOString();persistAgents();}
