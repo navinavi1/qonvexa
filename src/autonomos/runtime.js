@@ -205,7 +205,7 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
     if(Number(op.budgetUsd||0)<Number(config.minJobPayoutUsd||0))return false;
     if(!op.capability?.executable||!op.economics?.allowed)return false;
     if(op.capability.estimatedModelCostUsd>Number(op.budgetUsd||0)*(Number(config.maxApiCostPercentOfPayout||25)/100))return false;
-    return ['open','active','available',''].includes(String(op.status||''));
+    return ['open','active','available','posted',''].includes(String(op.status||''));
   }
   function scoreCandidate(op){return Number(op.economics?.expectedProfitUsd||0)*Math.max(0.1,Number(op.capability?.confidence||0));}
 
