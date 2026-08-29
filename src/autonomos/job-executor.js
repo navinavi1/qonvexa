@@ -15,7 +15,7 @@ export async function executeExternalOpportunity(opportunity, capability, { llm,
   if (!result.ok) throw new Error(result.reason || 'llm_execution_failed');
   const content = String(result.text || '').trim();
   if (!content) throw new Error('empty_deliverable');
-  return { content, format:'text/markdown', evidence:{ generatedBy:llm.model, siteUrl }, hash:sha(content) };
+  return { content, format:'text/markdown', evidence:{ generatedBy:llm.model, siteUrl, usage:result.usage||null }, hash:sha(content) };
 }
 
 async function deterministicExecute(op){
