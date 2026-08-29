@@ -4,6 +4,7 @@ import { normalizeOpportunity } from '../job-normalizer.js';
 const CONNECTOR_DEFS = Object.freeze([
   { id:'x402-bazaar', name:'x402 / Bazaar', kind:'seller+discovery', description:'Machine-payable API discovery and seller rail.', requiredEnv:[] },
   { id:'clawlancer', name:'Clawlancer', kind:'jobs', description:'Pre-funded Base/USDC bounties: discover → claim → deliver → paid.', requiredEnv:[], optionalEnv:['CLAWLANCER_API_KEY','CLAWLANCER_AGENT_ID'] },
+  { id:'dealwork', name:'dealwork.ai', kind:'jobs', description:'Human+AI hybrid marketplace, USD via Stripe escrow, open-task instant claim.', requiredEnv:[], optionalEnv:['DEALWORK_API_KEY','DEALWORK_AGENT_ID'] },
   { id:'virtuals-acp', name:'Virtuals ACP', kind:'jobs+seller', description:'Agent Commerce Protocol jobs and USDC escrow.', requiredEnv:['VIRTUALS_ACP_WALLET_ID','VIRTUALS_ACP_SIGNER'], optionalEnv:['VIRTUALS_ACP_AGENT_ID'] },
   { id:'t2000', name:'t2000', kind:'jobs+seller', description:'Sui/USDC open jobs with pre-funded escrow via Passport Connect.', requiredEnv:['T2000_MCP_URL','T2000_SESSION_TOKEN'], optionalEnv:['T2000_PASSPORT_ADDRESS'] },
   { id:'olas-mech', name:'Olas Mech Marketplace', kind:'seller+discovery', description:'Agent-to-agent paid Mech services.', requiredEnv:['OLAS_MECH_API_KEY'], optionalEnv:['OLAS_MECH_ENDPOINT'] },
@@ -17,6 +18,10 @@ export function connectorStatuses(env = process.env, x402Status = {}, persistedC
     if (def.id === 'x402-bazaar') return { ...def, status:x402Status.configured?'ready':x402Status.enabled?'needs_configuration':'available', configured:Boolean(x402Status.configured), missing:x402Status.configured?[]:['AUTONOMOS_X402_ENABLED + supported facilitator'], mode:x402Status.mode||'disabled' };
     if (def.id === 'clawlancer') {
       const hasKey=Boolean(String(env.CLAWLANCER_API_KEY||persistedCredentials?.clawlancer?.apiKey||'').trim());
+      return { ...def, status:hasKey?'ready':'auto_bootstrap_available', configured:hasKey, missing:hasKey?[]:['agent registration will be created automatically on first cycle'] };
+    }
+    if (def.id === 'dealwork') {
+      const hasKey=Boolean(String(env.DEALWORK_API_KEY||persistedCredentials?.dealwork?.apiKey||'').trim());
       return { ...def, status:hasKey?'ready':'auto_bootstrap_available', configured:hasKey, missing:hasKey?[]:['agent registration will be created automatically on first cycle'] };
     }
     if (def.id === 'agentverse') return { ...def, status:'discovery_ready', configured:true, missing:[] };
@@ -43,6 +48,22 @@ export async function bootstrapMarketCredentials({ env=process.env, credentials=
       } else health.clawlancer={ok:false,error:`http_${response.status}`,detail:body?.error||body?.message||''};
     } catch(error){ health.clawlancer={ok:false,error:String(error?.message||error).slice(0,180)}; }
   }
+  if (!String(env.DEALWORK_API_KEY||credentials?.dealwork?.apiKey||'').trim()) {
+    try {
+      // identityKey must be stable across restarts/redeploys — the docs warn that onboarding
+      // without one creates a NEW duplicate agent account every time credentials are lost.
+      // Base it on the owner wallet (stable, unique to this deployment) rather than a random value.
+      const identityKey=`autonomos-${String(env.AUTONOMOS_OWNER_WALLET||env.AUTONOMOS_AGENT_NAME||'default').toLowerCase().replace(/[^a-z0-9]/g,'').slice(0,64)||'autonomos-default'}`;
+      const response=await fetch('https://dealwork.ai/api/v1/agents/onboard',{method:'POST',headers:{'content-type':'application/json','accept':'application/json','user-agent':'AutonomOS/2.0'},body:JSON.stringify({autonomous:true,agentName:String(env.AUTONOMOS_AGENT_NAME||'AutonomOS').slice(0,48),description:'Autonomous digital-services worker: public web research, data extraction, structured writing, translation and QA. Typical turnaround: minutes.',capabilityTags:['research','writing','data','translation','automation'],identityKey}),signal:AbortSignal.timeout(15000)});
+      const body=await safeJson(response);
+      const data=body?.data||body;
+      if (response.ok && data?.apiKey) {
+        const value={ apiKey:String(data.apiKey), agentAccountId:String(data.agentAccountId||''), hmacSecret:String(data.hmacSecret||''), createdAt:new Date().toISOString(), source:data.recovered?'recovered':'auto_registration' };
+        storeCredential('dealwork',value); credentials.dealwork=value;
+        health.dealwork={ok:true,bootstrapped:true,recovered:Boolean(data.recovered),agentAccountId:value.agentAccountId};
+      } else health.dealwork={ok:false,error:response.ok?'onboard_response_missing_api_key':`http_${response.status}`,detail:data?.error?.message||body?.error||''};
+    } catch(error){ health.dealwork={ok:false,error:String(error?.message||error).slice(0,180)}; }
+  }
   return health;
 }
 
@@ -52,6 +73,7 @@ export async function discoverMarketOpportunities({ env=process.env, credentials
   const jobs=[
     ['x402-bazaar',()=>discoverX402(env,limit)],
     ['clawlancer',()=>discoverClawlancer(env,credentials,limit)],
+    ['dealwork',()=>discoverDealwork(env,credentials,limit)],
     ['agentverse',()=>discoverAgentverse(limit)],
     ['t2000',()=>discoverT2000(env,limit)]
   ].filter(([id])=>!want||want.has(id));
@@ -66,12 +88,14 @@ export async function discoverMarketOpportunities({ env=process.env, credentials
 
 export async function claimMarketplaceJob(opportunity,{env=process.env,credentials={}}={}) {
   if (opportunity.source==='clawlancer') return clawlancerAction('claim',opportunity,{env,credentials});
+  if (opportunity.source==='dealwork') return dealworkAction('claim',opportunity,{env,credentials});
   if (opportunity.source==='t2000') return t2000Action('claim',opportunity,{env});
   return {ok:false,reason:'connector_claim_not_available'};
 }
 
 export async function deliverMarketplaceJob(opportunity,claim,deliverable,{env=process.env,credentials={}}={}) {
   if (opportunity.source==='clawlancer') return clawlancerAction('deliver',opportunity,{env,credentials,claim,deliverable});
+  if (opportunity.source==='dealwork') return dealworkAction('deliver',opportunity,{env,credentials,claim,deliverable});
   if (opportunity.source==='t2000') return t2000Action('deliver',opportunity,{env,claim,deliverable});
   return {ok:false,reason:'connector_delivery_not_available'};
 }
@@ -83,6 +107,11 @@ export async function readMarketplaceWallets({env=process.env,credentials={}}={}
   if (key && agentId) {
     try { const r=await fetch(`https://clawlancer.ai/api/wallet/balance?agent_id=${encodeURIComponent(agentId)}`,{headers:auth(key),signal:AbortSignal.timeout(12000)}); out.clawlancer={ok:r.ok,...await safeJson(r)}; }
     catch(error){ out.clawlancer={ok:false,error:String(error?.message||error)}; }
+  }
+  const dwKey=String(env.DEALWORK_API_KEY||credentials?.dealwork?.apiKey||'');
+  if (dwKey) {
+    try { const r=await fetch('https://dealwork.ai/api/v1/wallet/balance',{headers:auth(dwKey),signal:AbortSignal.timeout(12000)}); const body=await safeJson(r); out.dealwork={ok:r.ok,...(body?.data||body)}; }
+    catch(error){ out.dealwork={ok:false,error:String(error?.message||error)}; }
   }
   return out;
 }
@@ -99,6 +128,21 @@ async function discoverX402(env,limit){
     signals.push(normalizeOpportunity('x402-bazaar',{externalId:rawUrl,title:resource.resource?.description||resource.description||rawUrl,url:rawUrl,priceUsd:Number(accepted?.amount||0)/1e6,network:accepted?.network||'',currency:accepted?.extra?.name||'USDC',tags:resource.resource?.tags||resource.tags||[],status:'available'},{claimMode:'buy',escrowed:false}));
   }
   return {signals,health:{ok:true,count:signals.length,url}};
+}
+
+async function discoverDealwork(env,credentials,limit){
+  const key=String(env.DEALWORK_API_KEY||credentials?.dealwork?.apiKey||'');
+  if(!key) return {signals:[],health:{ok:false,error:'dealwork_api_key_missing'}};
+  const response=await fetch(`https://dealwork.ai/api/v1/jobs?per_page=${Math.min(50,limit)}&sort=newest`,{headers:{accept:'application/json','user-agent':'AutonomOS/2.0',authorization:`Bearer ${key}`},signal:AbortSignal.timeout(12000)});
+  const body=await safeJson(response); if(!response.ok) return {signals:[],health:{ok:false,status:response.status,error:body?.error?.message||body?.error||''}};
+  const rows=Array.isArray(body?.data)?body.data:[];
+  // Only jobMode:'open' jobs support instant claim (POST /jobs/{id}/claim) which matches our
+  // claim->execute->deliver state machine. jobMode:'bid' jobs require submitting a bid and
+  // waiting for the buyer to accept it — a different, asynchronous flow we don't implement
+  // yet, so they're filtered out here rather than claimed and failing.
+  const openRows=rows.filter(row=>!row.jobMode||row.jobMode==='open');
+  const signals=openRows.map(row=>normalizeOpportunity('dealwork',{...row,budgetUsd:Number(row.fixedPrice??row.budget_max??row.budgetMax??row.budget_min??0)},{feePercent:10,currency:'USD',network:'stripe',escrowed:true,claimMode:'automatic',status:row.status||'open'}));
+  return {signals,health:{ok:true,count:signals.length,totalOpenJobs:rows.length,filteredOutBidMode:rows.length-openRows.length}};
 }
 
 async function discoverClawlancer(env,credentials,limit){
@@ -197,6 +241,36 @@ async function clawlancerAction(kind,opportunity,{env,credentials,claim,delivera
   }catch(error){return{ok:false,reason:String(error?.message||error).slice(0,200)}}
 }
 
+async function dealworkAction(kind,opportunity,{env,credentials,claim,deliverable}={}){
+  const key=String(env.DEALWORK_API_KEY||credentials?.dealwork?.apiKey||''); if(!key)return{ok:false,reason:'dealwork_api_key_missing'};
+  const headers={...auth(key),'content-type':'application/json'};
+  try{
+    if(kind==='claim'){
+      const claimResp=await fetch(`https://dealwork.ai/api/v1/jobs/${encodeURIComponent(opportunity.externalId)}/claim`,{method:'POST',headers,body:JSON.stringify({acceptedCriteriaIds:[]}),signal:AbortSignal.timeout(20000)});
+      const claimBody=await safeJson(claimResp); if(!claimResp.ok)return{ok:false,reason:`http_${claimResp.status}`,body:claimBody};
+      const contract=claimBody?.data?.contract||claimBody?.contract||claimBody?.data;
+      const contractId=String(contract?.id||''); if(!contractId)return{ok:false,reason:'dealwork_claim_missing_contract_id',body:claimBody};
+      // Platform's own rule: "Never work before escrow locks. Verify contract state is
+      // escrow_locked before START_WORK." Claiming an open task locks escrow immediately,
+      // so this should always be safe, but we still check the returned state defensively.
+      if(contract?.state&&contract.state!=='escrow_locked')return{ok:false,reason:`dealwork_unexpected_state:${contract.state}`,body:claimBody};
+      const startResp=await fetch(`https://dealwork.ai/api/v1/contracts/${encodeURIComponent(contractId)}/events`,{method:'POST',headers,body:JSON.stringify({type:'START_WORK'}),signal:AbortSignal.timeout(15000)});
+      const startBody=await safeJson(startResp); if(!startResp.ok)return{ok:false,reason:`dealwork_start_work_http_${startResp.status}`,body:startBody};
+      return{ok:true,jobId:contractId,transactionId:'',body:startBody};
+    }
+    const contractId=claim?.jobId; if(!contractId)return{ok:false,reason:'dealwork_missing_contract_id'};
+    const deliverableResp=await fetch(`https://dealwork.ai/api/v1/contracts/${encodeURIComponent(contractId)}/deliverables`,{method:'POST',headers,body:JSON.stringify({description:opportunity.title||'Completed task',outputData:{result:deliverable.content,format:deliverable.format||'text/markdown'}}),signal:AbortSignal.timeout(20000)});
+    const deliverableBody=await safeJson(deliverableResp); if(!deliverableResp.ok)return{ok:false,reason:`dealwork_deliverable_http_${deliverableResp.status}`,body:deliverableBody};
+    const deliverableId=String(deliverableBody?.data?.id||deliverableBody?.id||''); if(!deliverableId)return{ok:false,reason:'dealwork_deliverable_missing_id',body:deliverableBody};
+    const submitResp=await fetch(`https://dealwork.ai/api/v1/contracts/${encodeURIComponent(contractId)}/events`,{method:'POST',headers,body:JSON.stringify({type:'SUBMIT_WORK',deliverableId}),signal:AbortSignal.timeout(15000)});
+    const submitBody=await safeJson(submitResp); if(!submitResp.ok)return{ok:false,reason:`dealwork_submit_work_http_${submitResp.status}`,body:submitBody};
+    // NOTE: this moves the contract to in_review, not paid. The buyer (human or agent) must
+    // APPROVE — or it auto-approves after 24h. Real revenue is only recorded once
+    // syncMarketplaceTransactions sees the contract in a 'paid' state (see below).
+    return{ok:true,jobId:contractId,transactionId:contractId,body:submitBody,pendingReview:true};
+  }catch(error){return{ok:false,reason:String(error?.message||error).slice(0,220)}}
+}
+
 function auth(key){return{accept:'application/json','user-agent':'AutonomOS/2.0',authorization:`Bearer ${key}`}}
 async function safeJson(response){try{return await response.json()}catch{return{}}}
 function dedupe(rows){const seen=new Set();return rows.filter(row=>{const key=`${row.source}:${row.externalId}`;if(seen.has(key))return false;seen.add(key);return true})}
@@ -221,6 +295,19 @@ export async function syncMarketplaceTransactions({env=process.env,credentials={
         health.clawlancer={ok:true,count:rows.length};
       } else health.clawlancer={ok:false,status:r.status,error:body?.error||body?.message||''};
     }catch(error){health.clawlancer={ok:false,error:String(error?.message||error).slice(0,180)}}
+  }
+  const dwKey=String(env.DEALWORK_API_KEY||credentials?.dealwork?.apiKey||'');
+  if(dwKey){
+    try{
+      const r=await fetch('https://dealwork.ai/api/v1/contracts?role=worker&state=paid&per_page=50',{headers:auth(dwKey),signal:AbortSignal.timeout(12000)});
+      const body=await safeJson(r); const contracts=Array.isArray(body?.data)?body.data:[];
+      if(r.ok){
+        for(const c of contracts){
+          rows.push({source:'dealwork',externalTransactionId:String(c.id||''),listingId:String(c.jobId||''),status:'paid',amountUsd:Number(c.amount||0),currency:'USD',network:'stripe',payoutAddress:'',raw:c});
+        }
+        health.dealwork={ok:true,count:contracts.length};
+      } else health.dealwork={ok:false,status:r.status,error:body?.error?.message||body?.error||''};
+    }catch(error){health.dealwork={ok:false,error:String(error?.message||error).slice(0,180)}}
   }
   return {transactions:rows,health};
 }
