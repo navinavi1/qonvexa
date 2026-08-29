@@ -200,15 +200,15 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
     if(!claim.ok){
       const attempts=Number(claimAttempts[key]?.count||0)+1;
       const terminal=!isTransientClaimFailure(claim.reason)||attempts>=MAX_CLAIM_ATTEMPTS;
-      claimAttempts[key]={count:attempts,lastAttemptAt:new Date().toISOString(),reason:claim.reason||''};persistSet('claim-attempts.json',claimAttempts);
-      if(terminal){handled.add(key);persistSet('handled-opportunities.json',handled);delete claimAttempts[key];persistSet('claim-attempts.json',claimAttempts);}
+      claimAttempts[key]={count:attempts,lastAttemptAt:new Date().toISOString(),reason:claim.reason||''};store.writeJson('claim-attempts.json',claimAttempts);
+      if(terminal){handled.add(key);persistSet('handled-opportunities.json',handled);delete claimAttempts[key];store.writeJson('claim-attempts.json',claimAttempts);}
       store.append('jobs.ndjson',{id:jobId,source:op.source,externalId:op.externalId,status:'claim_failed',attempts,terminal,at:new Date().toISOString(),reason:claim.reason||''});
       event('market_job_claim_failed',{jobId,source:op.source,externalId:op.externalId,attempts,terminal,reason:claim.reason||''});
       return{claimed:false,delivered:false};
     }
     // Claim succeeded: this opportunity is now truly spoken for, so it's safe to mark handled.
     handled.add(key);persistSet('handled-opportunities.json',handled);
-    if(claimAttempts[key]){delete claimAttempts[key];persistSet('claim-attempts.json',claimAttempts);}
+    if(claimAttempts[key]){delete claimAttempts[key];store.writeJson('claim-attempts.json',claimAttempts);}
     setAgentMetric('job-router',{tasks:1});maybeSpawnChild(op.category||op.source);
     const worker=pickExternalWorker(op.capability?.skill);setWorkerStatus(worker,'working');activeJobs.set(jobId,{id:jobId,source:op.source,externalId:op.externalId,workerId:worker.id,cancelled:false});
     store.append('jobs.ndjson',{id:jobId,source:op.source,externalId:op.externalId,status:'claimed',transactionId:claim.transactionId||'',workerId:worker.id,at:new Date().toISOString()});event('market_job_claimed',{jobId,source:op.source,externalId:op.externalId,transactionId:claim.transactionId||''});
