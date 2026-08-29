@@ -127,7 +127,7 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
     setAgent('prime-governor','working'); setAgent('policy-agent','working'); setAgent('opportunity-radar','working');
     try{
       cleanupExpiredChildren();
-      const boot=await bootstrapMarketCredentials({env,credentials,storeCredential:(id,value)=>{credentials={...credentials,[id]:value};store.writeSecretJson('credentials.private.json',credentials);}});
+      const boot=await bootstrapMarketCredentials({env,credentials,ownerWallet:wallet,storeCredential:(id,value)=>{credentials={...credentials,[id]:value};store.writeSecretJson('credentials.private.json',credentials);}});
       state.bootstrapHealth=boot;
       const discovery=await discoverMarketOpportunities({env,credentials,limit:100}); state.connectorHealth=discovery.health;
       const cycleLedger=store.readNdjson('ledger.ndjson',4000);
