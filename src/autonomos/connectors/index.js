@@ -1,5 +1,6 @@
 import { McpHttpClient, extractMcpToolPayload } from '../mcp-client.js';
 import { normalizeOpportunity } from '../job-normalizer.js';
+import { isEvmAddress as isEvmAddressLike } from '../treasury.js';
 
 const CONNECTOR_DEFS = Object.freeze([
   { id:'x402-bazaar', name:'x402 / Bazaar', kind:'seller+discovery', description:'Machine-payable API discovery and seller rail.', requiredEnv:[] },
@@ -30,11 +31,18 @@ export function connectorStatuses(env = process.env, x402Status = {}, persistedC
   });
 }
 
-export async function bootstrapMarketCredentials({ env=process.env, credentials={}, storeCredential=()=>{} }={}) {
+export async function bootstrapMarketCredentials({ env=process.env, credentials={}, storeCredential=()=>{}, ownerWallet='' }={}) {
   const health={};
   if (!String(env.CLAWLANCER_API_KEY||credentials?.clawlancer?.apiKey||'').trim()) {
     try {
-      const response=await fetch('https://clawlancer.ai/api/agents/register',{method:'POST',headers:{'content-type':'application/json','accept':'application/json','user-agent':'AutonomOS/2.0'},body:JSON.stringify({name:String(env.AUTONOMOS_AGENT_NAME||'AutonomOS').slice(0,48),bio:'Autonomous digital-services worker: public web research, data extraction, code analysis, structured writing and QA.'}),signal:AbortSignal.timeout(15000)});
+      const registerBody={agent_name:String(env.AUTONOMOS_AGENT_NAME||'AutonomOS').slice(0,48),description:'Autonomous digital-services worker: public web research, data extraction, code analysis, structured writing and QA.'};
+      // Per Clawlancer's documented "Wallet Options": leaving this out defaults to their
+      // custodial "Oracle" wallet — USDC would accumulate there, not with the owner, and
+      // would need a separate (currently undocumented/unverified) withdraw step. Passing
+      // our own address here is their documented "Custom" option: USDC pays out directly
+      // to the owner's wallet on every job, automatically, no withdraw step needed at all.
+      if (isEvmAddressLike(ownerWallet)) registerBody.wallet_address = ownerWallet;
+      const response=await fetch('https://clawlancer.ai/api/agents/register',{method:'POST',headers:{'content-type':'application/json','accept':'application/json','user-agent':'AutonomOS/2.0'},body:JSON.stringify(registerBody),signal:AbortSignal.timeout(15000)});
       const body=await safeJson(response);
       if (response.ok) {
         const apiKey=body?.api_key||body?.apiKey||body?.key||body?.agent?.api_key||'';
@@ -47,6 +55,23 @@ export async function bootstrapMarketCredentials({ env=process.env, credentials=
         } else health.clawlancer={ok:false,error:'registration_response_missing_api_key'};
       } else health.clawlancer={ok:false,error:`http_${response.status}`,detail:body?.error||body?.message||''};
     } catch(error){ health.clawlancer={ok:false,error:String(error?.message||error).slice(0,180)}; }
+  } else if (isEvmAddressLike(ownerWallet)) {
+    // Already registered (from a previous cycle, possibly before this owner-wallet fix
+    // existed) — check whether the stored payout address still matches, and fix it once
+    // via the documented profile-update endpoint rather than leaving USDC stuck on
+    // Clawlancer's custodial default wallet.
+    const existing=credentials?.clawlancer||{};
+    const key=String(env.CLAWLANCER_API_KEY||existing.apiKey||'');
+    if (key && String(existing.walletAddress||'').toLowerCase()!==ownerWallet.toLowerCase() && !existing.walletFixAttemptedAt) {
+      try {
+        const response=await fetch('https://clawlancer.ai/api/agents/me',{method:'PATCH',headers:{'content-type':'application/json',accept:'application/json',authorization:`Bearer ${key}`,'user-agent':'AutonomOS/2.0'},body:JSON.stringify({wallet_address:ownerWallet}),signal:AbortSignal.timeout(15000)});
+        const body=await safeJson(response);
+        const updated={...existing,walletFixAttemptedAt:new Date().toISOString()};
+        if (response.ok) { updated.walletAddress=ownerWallet; }
+        storeCredential('clawlancer',updated); credentials.clawlancer=updated;
+        health.clawlancer={ok:response.ok,walletUpdated:response.ok,status:response.ok?undefined:response.status,detail:response.ok?undefined:(body?.error||body?.message||'')};
+      } catch(error){ health.clawlancer={ok:false,error:String(error?.message||error).slice(0,180)}; }
+    }
   }
   if (!String(env.DEALWORK_API_KEY||credentials?.dealwork?.apiKey||'').trim()) {
     try {
@@ -231,7 +256,8 @@ async function clawlancerAction(kind,opportunity,{env,credentials,claim,delivera
   const key=String(env.CLAWLANCER_API_KEY||credentials?.clawlancer?.apiKey||''); if(!key)return{ok:false,reason:'clawlancer_api_key_missing'};
   try{
     if(kind==='claim'){
-      const r=await fetch(`https://clawlancer.ai/api/listings/${encodeURIComponent(opportunity.externalId)}/claim`,{method:'POST',headers:{...auth(key),'content-type':'application/json'},body:'{}',signal:AbortSignal.timeout(20000)}); const body=await safeJson(r);
+      const agentId=String(credentials?.clawlancer?.agentId||'');
+      const r=await fetch(`https://clawlancer.ai/api/listings/${encodeURIComponent(opportunity.externalId)}/claim`,{method:'POST',headers:{...auth(key),'content-type':'application/json'},body:JSON.stringify(agentId?{agent_id:agentId}:{}),signal:AbortSignal.timeout(20000)}); const body=await safeJson(r);
       return r.ok?{ok:true,transactionId:String(body.transaction_id||body.transactionId||body.id||body.transaction?.id||''),body}:{ok:false,reason:`http_${r.status}`,body};
     }
     const txId=String(claim?.transactionId||claim?.body?.transaction_id||claim?.body?.transaction?.id||''); if(!txId)return{ok:false,reason:'transaction_id_missing_after_claim'};
