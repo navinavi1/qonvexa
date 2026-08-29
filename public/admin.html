@@ -167,7 +167,9 @@
               <label class="autonomos-check"><input name="zeroSpendMode" type="checkbox"> <span>Zero-spend mode (block ANY job with API/model cost)</span></label>
               <label class="autonomos-check"><input name="earnedFundsOnly" type="checkbox"> <span>Earned-funds-only (spend only already-earned growth+experiment budget)</span></label>
               <label class="autonomos-check"><input name="allowExternalSpending" type="checkbox"> <span>Allow unrestricted spending (ignores earned-funds cap — use with care)</span></label>
+              <label>One-time seed budget, $<input name="seedSpendBudgetUsd" type="number" min="0" max="50" step="0.5"></label>
             </div>
+            <p class="settings-note">Seed budget is the one-time head start (before any revenue) that lets Earned-funds-only mode take the first jobs at all — without it, a brand-new deployment with $0 revenue can never afford its first paid job.</p>
             <p class="settings-note">Precedence: Zero-spend wins if on. Otherwise Earned-funds-only (default) caps spend to money AutonomOS has actually already earned. Unrestricted only applies once both of the above are off.</p>
             <label class="autonomos-check"><input name="autoClaimJobs" type="checkbox"> <span>Automatically claim qualified escrow-funded jobs</span></label>
             <label class="autonomos-check"><input name="requireEscrowForAutoClaim" type="checkbox"> <span>Require escrow/pre-funded status for automatic claims</span></label>
