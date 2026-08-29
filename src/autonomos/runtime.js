@@ -103,6 +103,19 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
     clearEmergencyStop(){config=normalizeConfig({...config,killSwitch:false,enabled:false,allowExternalSpending:false,zeroSpendMode:true});store.writeJson('config.json',config);event('emergency_stop_cleared',{});return{ok:true,status:'stopped'};},
     async runCycle(){return cycle('manual');},
 
+    // One-time recovery for the 'credentials missing during bootstrap' misclassification
+    // bug: opportunities discovered in the few seconds before a connector finished
+    // bootstrapping got permanently blacklisted. This clears that blacklist so the
+    // (now-fixed) retry logic gets a fresh chance at the same opportunities. Does NOT
+    // touch seen-opportunities.json (pure discovery dedup, safe to keep) or any ledger/
+    // treasury data — only the claim-retry bookkeeping.
+    resetClaimHistory(){
+      handled.clear(); claimAttempts={};
+      persistSet('handled-opportunities.json',handled); store.writeJson('claim-attempts.json',claimAttempts);
+      event('claim_history_reset',{});
+      return {ok:true};
+    },
+
     async refreshTreasury(){
       state.treasury=await readTreasuryBalances({address:wallet,env});
       state.marketplaceWallets=await readMarketplaceWallets({env,credentials});
@@ -173,7 +186,12 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
     if(/http_5\d\d/.test(text))return true; // server-side error, worth retrying
     if(/http_4\d\d/.test(text))return false; // e.g. 404 not found, 409 already claimed, 401/403 auth
     if(/timeout|timed out|network|econnreset|fetch failed|abort|enotfound|econnrefused/.test(text))return true;
-    if(/missing|not_found|not_available/.test(text))return false;
+    // '..._api_key_missing' fires during the few seconds a connector's bootstrap
+    // registration is still in flight — it is NOT a permanent condition, and treating
+    // it as terminal was silently blacklisting good opportunities forever the moment
+    // they were unlucky enough to be discovered before bootstrap finished.
+    if(/api_key_missing/.test(text))return true;
+    if(/not_found|not_available/.test(text))return false;
     return true; // unknown shape — default to retrying a few times rather than losing the job
   }
   function isAutoClaimCandidate(op){
