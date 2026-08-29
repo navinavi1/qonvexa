@@ -10,6 +10,7 @@ export const DEFAULT_AUTONOMOS_CONFIG = Object.freeze({
   growthPercent: 10,
   experimentPercent: 5,
   heartbeatSeconds: 60,
+  fastClaimPollSeconds: 15,
   maxChildren: 12,
   childSpawnConcurrencyThreshold: 3,
   childTtlMinutes: 180,
@@ -40,6 +41,7 @@ export function normalizeConfig(raw = {}) {
     cfg.reservePercent = 85; cfg.growthPercent = 10; cfg.experimentPercent = 5;
   }
   cfg.heartbeatSeconds = Math.round(clampNumber(cfg.heartbeatSeconds, 30, 3600, 60));
+  cfg.fastClaimPollSeconds = Math.round(clampNumber(cfg.fastClaimPollSeconds, 10, cfg.heartbeatSeconds, 15));
   cfg.maxChildren = Math.round(clampNumber(cfg.maxChildren, 0, 100, 12));
   cfg.childSpawnConcurrencyThreshold = Math.round(clampNumber(cfg.childSpawnConcurrencyThreshold, 2, 50, 3));
   cfg.childTtlMinutes = Math.round(clampNumber(cfg.childTtlMinutes, 5, 1440, 180));
