@@ -105,7 +105,7 @@ async function discoverClawlancer(env,credentials,limit){
 }
 
 async function discoverAgentverse(limit){
-  const response=await fetch('https://agentverse.ai/v1/search/functions',{method:'POST',headers:{'content-type':'application/json','accept':'application/json','user-agent':'AutonomOS/2.0'},body:JSON.stringify({limit:Math.min(limit,50),offset:0,sort:'recent_interactions'}),signal:AbortSignal.timeout(12000)});
+  const response=await fetch('https://agentverse.ai/v1/search/functions',{method:'POST',headers:{'content-type':'application/json','accept':'application/json','user-agent':'AutonomOS/2.0'},body:JSON.stringify({limit:Math.min(limit,50),offset:0,sort:'last-modified'}),signal:AbortSignal.timeout(12000)});
   const body=await safeJson(response); if(!response.ok)return{signals:[],health:{ok:false,status:response.status}};
   const rows=Array.isArray(body?.functions)?body.functions:[];
   const signals=rows.map(raw=>normalizeOpportunity('agentverse',{externalId:raw.id,title:raw.name,description:raw.description||raw.name,url:'https://agentverse.ai/marketplace',status:'discovery',priceUsd:0},{claimMode:'route/discovery',escrowed:false,currency:'UNKNOWN'}));
@@ -117,7 +117,7 @@ async function discoverT2000(env,limit){
   if(mcpUrl&&token){
     try{
       const client=new McpHttpClient({url:mcpUrl,token,timeoutMs:18000}); await client.initialize(); const tools=await client.listTools();
-      const jobsTool=tools.find(t=>t.name==='t2000_jobs')||tools.find(t=>/jobs|openings|market/i.test(t.name));
+      const jobsTool=tools.find(t=>t.name==='t2000_job_board')||tools.find(t=>/job_board|openings|market/i.test(t.name))||tools.find(t=>t.name==='t2000_jobs')||tools.find(t=>/jobs/i.test(t.name));
       if(!jobsTool)return{signals:[],health:{ok:false,connected:true,error:'jobs_tool_not_found',tools:tools.map(t=>t.name).slice(0,30)}};
       let result; for(const args of [{},{role:'seller'},{role:'buyer'}]){try{result=extractMcpToolPayload(await client.callTool(jobsTool.name,args));if(result)break}catch{}}
       const openings=findArrayByKey(result,['openings','jobs','items','results']);
@@ -137,14 +137,35 @@ async function t2000Action(kind,opportunity,{env,claim,deliverable}={}){
   const mcpUrl=String(env.T2000_MCP_URL||''),token=String(env.T2000_SESSION_TOKEN||''); if(!mcpUrl||!token)return{ok:false,reason:'t2000_passport_connect_missing'};
   try{
     const client=new McpHttpClient({url:mcpUrl,token,timeoutMs:22000}); await client.initialize(); const tools=await client.listTools();
-    const want=kind==='claim'?/claim/i:/deliver|submit/i; const tool=tools.find(t=>want.test(t.name)); if(!tool)return{ok:false,reason:`t2000_${kind}_tool_not_found`,tools:tools.map(t=>t.name).slice(0,30)};
-    const ext=opportunity.externalId; const candidates=kind==='claim'?[{openingId:ext},{opening_id:ext},{jobId:ext},{id:ext}]:[
-      {jobId:claim?.jobId||claim?.transactionId||ext,deliverable:deliverable.content},
-      {job_id:claim?.jobId||claim?.transactionId||ext,content:deliverable.content},
-      {id:claim?.jobId||claim?.transactionId||ext,work:deliverable.content}
+    const ext=opportunity.externalId;
+    if(kind==='claim'){
+      const claimTool=tools.find(t=>t.name==='t2000_job_claim')||tools.find(t=>/job_claim|claim/i.test(t.name));
+      if(!claimTool)return{ok:false,reason:'t2000_claim_tool_not_found',tools:tools.map(t=>t.name).slice(0,30)};
+      const claimCandidates=[{openingId:ext},{opening_id:ext},{jobId:ext},{id:ext}];
+      let last='',claimed=null;
+      for(const args of claimCandidates){try{claimed=extractMcpToolPayload(await client.callTool(claimTool.name,args));if(claimed)break}catch(error){last=String(error?.message||error)}}
+      if(!claimed)return{ok:false,reason:last.slice(0,200)||'t2000_claim_failed'};
+      const jobId=String(claimed?.jobId||claimed?.job_id||claimed?.id||ext);
+      // Mandatory per t2000 flow: job_claim only reserves the job. The full work order
+      // (requirements, deliverable format, acceptance criteria) lives in job_status and
+      // is required before execution — delivering without it risks a rejected/failed job.
+      const statusTool=tools.find(t=>t.name==='t2000_job_status')||tools.find(t=>/job_status|status/i.test(t.name));
+      let workOrder=null;
+      if(statusTool){
+        for(const args of [{jobId},{job_id:jobId},{id:jobId}]){try{workOrder=extractMcpToolPayload(await client.callTool(statusTool.name,args));if(workOrder)break}catch{}}
+      }
+      return{ok:true,tool:claimTool.name,jobId,transactionId:String(claimed?.transactionId||claimed?.tx||''),body:claimed,workOrder:workOrder||null,workOrderMissing:!workOrder};
+    }
+    const deliverTool=tools.find(t=>t.name==='t2000_job_deliver')||tools.find(t=>/job_deliver|deliver|submit/i.test(t.name));
+    if(!deliverTool)return{ok:false,reason:'t2000_deliver_tool_not_found',tools:tools.map(t=>t.name).slice(0,30)};
+    const jobId=claim?.jobId||ext;
+    const deliverCandidates=[
+      {jobId,deliverable:deliverable.content},
+      {job_id:jobId,content:deliverable.content},
+      {id:jobId,work:deliverable.content}
     ];
-    let last=''; for(const args of candidates){try{const result=extractMcpToolPayload(await client.callTool(tool.name,args));return{ok:true,tool:tool.name,jobId:String(result?.jobId||result?.job_id||result?.id||claim?.jobId||ext),transactionId:String(result?.transactionId||result?.tx||''),body:result}}catch(error){last=String(error?.message||error)}}
-    return{ok:false,reason:last.slice(0,200)||`t2000_${kind}_failed`};
+    let last=''; for(const args of deliverCandidates){try{const result=extractMcpToolPayload(await client.callTool(deliverTool.name,args));return{ok:true,tool:deliverTool.name,jobId:String(result?.jobId||result?.job_id||result?.id||jobId),transactionId:String(result?.transactionId||result?.tx||''),body:result}}catch(error){last=String(error?.message||error)}}
+    return{ok:false,reason:last.slice(0,200)||'t2000_deliver_failed'};
   }catch(error){return{ok:false,reason:String(error?.message||error).slice(0,220)}}
 }
 
