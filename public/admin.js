@@ -163,7 +163,7 @@ function renderAutonomOS(){
   const allocations=el('#autonomos-allocations');
   if(allocations){
     const al=a.treasury?.allocations||{};
-    allocations.innerHTML=[['Reserve',al.reserveUsd],['Growth',al.growthUsd],['Experiments',al.experimentUsd]].map(([k,v])=>`<article><small>${esc(k.toUpperCase())}</small><b>${usd(v)}</b></article>`).join('');
+    allocations.innerHTML=[['Reserve',al.reserveUsd],['Growth',al.growthUsd],['Experiments',al.experimentUsd],['Earned spend budget',a.runtime?.earnedSpendBudgetUsd]].map(([k,v])=>`<article><small>${esc(k.toUpperCase())}</small><b>${usd(v)}</b></article>`).join('');
   }
 
   const form=el('#autonomos-config-form');
@@ -211,8 +211,8 @@ el('#autonomos-runtime-badge')?.addEventListener('dblclick',async()=>{
 el('#autonomos-config-form')?.addEventListener('submit',async e=>{
   e.preventDefault();const f=e.currentTarget;const status=el('#autonomos-config-status');status.textContent='Saving…';
   const raw=Object.fromEntries(new FormData(f).entries());
-  const payload={...raw,autoReplication:f.elements.autoReplication.checked,autoClaimJobs:f.elements.autoClaimJobs.checked,requireEscrowForAutoClaim:f.elements.requireEscrowForAutoClaim.checked};
-  for(const key of ['heartbeatSeconds','minMarginPercent','reservePercent','growthPercent','experimentPercent','maxChildren','maxJobsPerCycle','minJobPayoutUsd','maxApiCostPercentOfPayout'])payload[key]=Number(payload[key]);
+  const payload={...raw,autoReplication:f.elements.autoReplication.checked,autoClaimJobs:f.elements.autoClaimJobs.checked,requireEscrowForAutoClaim:f.elements.requireEscrowForAutoClaim.checked,zeroSpendMode:f.elements.zeroSpendMode.checked,earnedFundsOnly:f.elements.earnedFundsOnly.checked,allowExternalSpending:f.elements.allowExternalSpending.checked};
+  for(const key of ['heartbeatSeconds','fastClaimPollSeconds','minMarginPercent','reservePercent','growthPercent','experimentPercent','maxChildren','maxJobsPerCycle','minJobPayoutUsd','maxApiCostPercentOfPayout'])payload[key]=Number(payload[key]);
   try{await api('/api/admin/autonomos/config',{method:'PATCH',body:JSON.stringify(payload)});status.textContent='Saved.';await loadDashboard()}catch(err){status.textContent=err.message}
 });
 
