@@ -28,7 +28,27 @@ export function isEvmAddress(value){return /^0x[a-fA-F0-9]{40}$/.test(String(val
 export function configuredEvmChains(env=process.env){
   const custom=parseJson(env.AUTONOMOS_EVM_CHAINS_JSON,[]);
   if(Array.isArray(custom)&&custom.length) return custom.filter(validChain);
-  return DEFAULT_CHAINS.map(chain=>({...chain,rpc:String(env[chain.rpcEnv]||chain.rpc)}));
+  const base=DEFAULT_CHAINS.map(chain=>({...chain,rpc:String(env[chain.rpcEnv]||chain.rpc),tokens:[...chain.tokens]}));
+  // AUTONOMOS_EXTRA_TOKENS_JSON lets you add tokens (EURC, DAI, etc.) per chain WITHOUT
+  // touching code — deliberately not hardcoded here, because a wrong stablecoin contract
+  // address is a real-money risk (silently monitoring/trusting the wrong token). Copy the
+  // exact address from the token issuer's own docs or a block explorer (Basescan/Arbiscan/
+  // Polygonscan) before adding it. Format:
+  // AUTONOMOS_EXTRA_TOKENS_JSON='{"eip155:8453":[{"symbol":"EURC","address":"0x...","decimals":6}]}'
+  const extra=parseJson(env.AUTONOMOS_EXTRA_TOKENS_JSON,{});
+  if(extra&&typeof extra==='object'){
+    for(const chain of base){
+      const additions=Array.isArray(extra[chain.id])?extra[chain.id]:[];
+      for(const token of additions){
+        if(token&&/^0x[a-fA-F0-9]{40}$/.test(String(token.address||''))&&token.symbol&&Number.isInteger(Number(token.decimals))){
+          if(!chain.tokens.some(t=>t.address.toLowerCase()===String(token.address).toLowerCase())){
+            chain.tokens.push({symbol:String(token.symbol).toUpperCase().slice(0,12),address:token.address,decimals:Number(token.decimals)});
+          }
+        }
+      }
+    }
+  }
+  return base;
 }
 
 export async function readTreasuryBalances({address,env=process.env,timeoutMs=8000}={}){
@@ -41,9 +61,12 @@ export async function readTreasuryBalances({address,env=process.env,timeoutMs=80
     for(const token of chain.tokens||[])assets.push({network:chain.name,chainId:chain.chainId,symbol:token.symbol,balance:token.balance,address:token.address,kind:'erc20'});
   }
   const base=results.find(x=>x.chainId===8453)||{};
+  const baseTokenBalances=Object.fromEntries((base.tokens||[]).map(t=>[t.symbol.toLowerCase(),Number(t.balance||0)]));
   return {
     ok:results.some(x=>x.ok), address, chains:results, assets,
-    network:'Base',chainId:8453,eth:Number(base.native?.balance||0),usdc:Number((base.tokens||[]).find(x=>x.symbol==='USDC')?.balance||0),usdt:Number((base.tokens||[]).find(x=>x.symbol==='USDT')?.balance||0),
+    network:'Base',chainId:8453,eth:Number(base.native?.balance||0),
+    usdc:baseTokenBalances.usdc||0,usdt:baseTokenBalances.usdt||0,
+    tokenBalances:baseTokenBalances,
     checkedAt:new Date().toISOString(), errors:results.filter(x=>!x.ok).map(x=>({network:x.name,error:x.error}))
   };
 }
