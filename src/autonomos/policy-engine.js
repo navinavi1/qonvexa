@@ -3,6 +3,7 @@ export const DEFAULT_AUTONOMOS_CONFIG = Object.freeze({
   killSwitch: false,
   genesisObjective: 'Maximize sustainable net revenue by providing legitimate digital services to humans and autonomous agents.',
   zeroSpendMode: true,
+  earnedFundsOnly: true,
   allowExternalSpending: false,
   minMarginPercent: 35,
   reservePercent: 85,
@@ -28,6 +29,7 @@ export function normalizeConfig(raw = {}) {
   cfg.enabled = Boolean(cfg.enabled);
   cfg.killSwitch = Boolean(cfg.killSwitch);
   cfg.zeroSpendMode = cfg.zeroSpendMode !== false;
+  cfg.earnedFundsOnly = cfg.earnedFundsOnly !== false;
   cfg.allowExternalSpending = Boolean(cfg.allowExternalSpending) && !cfg.zeroSpendMode;
   cfg.minMarginPercent = clampNumber(cfg.minMarginPercent, 0, 95, 35);
   cfg.reservePercent = clampNumber(cfg.reservePercent, 0, 100, 85);
