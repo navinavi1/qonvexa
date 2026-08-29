@@ -88,7 +88,7 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
         'genesisObjective','minMarginPercent','reservePercent','growthPercent','experimentPercent',
         'heartbeatSeconds','fastClaimPollSeconds','maxChildren','childSpawnConcurrencyThreshold','childTtlMinutes','autoReplication',
         'maxApiCostPercentOfPayout','maxJobsPerCycle','autoClaimJobs','requireEscrowForAutoClaim','minJobPayoutUsd',
-        'zeroSpendMode','earnedFundsOnly','allowExternalSpending'
+        'zeroSpendMode','earnedFundsOnly','allowExternalSpending','seedSpendBudgetUsd'
       ];
       const next={...config};
       for(const key of allowed) if(Object.prototype.hasOwnProperty.call(patch,key)) next[key]=patch[key];
