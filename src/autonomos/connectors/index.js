@@ -46,15 +46,21 @@ export async function bootstrapMarketCredentials({ env=process.env, credentials=
   return health;
 }
 
-export async function discoverMarketOpportunities({ env=process.env, credentials={}, limit=100 }={}) {
+export async function discoverMarketOpportunities({ env=process.env, credentials={}, limit=100, sources=null }={}) {
   const all=[]; const health={};
-  const [x402,claw,agentverse,t2000]=await Promise.allSettled([
-    discoverX402(env,limit), discoverClawlancer(env,credentials,limit), discoverAgentverse(limit), discoverT2000(env,limit)
-  ]);
-  for (const [id,result] of [['x402-bazaar',x402],['clawlancer',claw],['agentverse',agentverse],['t2000',t2000]]) {
+  const want=Array.isArray(sources)&&sources.length?new Set(sources):null;
+  const jobs=[
+    ['x402-bazaar',()=>discoverX402(env,limit)],
+    ['clawlancer',()=>discoverClawlancer(env,credentials,limit)],
+    ['agentverse',()=>discoverAgentverse(limit)],
+    ['t2000',()=>discoverT2000(env,limit)]
+  ].filter(([id])=>!want||want.has(id));
+  const results=await Promise.allSettled(jobs.map(([,fn])=>fn()));
+  jobs.forEach(([id],i)=>{
+    const result=results[i];
     if (result.status==='fulfilled') { all.push(...result.value.signals); health[id]=result.value.health; }
     else health[id]={ok:false,error:String(result.reason?.message||result.reason).slice(0,180)};
-  }
+  });
   return { signals:dedupe(all).slice(0,limit*4), health };
 }
 
