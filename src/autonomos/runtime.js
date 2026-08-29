@@ -32,7 +32,9 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
   let children = store.readJson('children.json', []);
   let offers = store.readJson('offers.json', defaultOffers());
   let timer = null;
+  let fastTimer = null;
   let cycleRunning = false;
+  let fastCycleRunning = false;
   const activeJobs = new Map();
   const seen = new Set(store.readJson('seen-opportunities.json', []));
   const handled = new Set(store.readJson('handled-opportunities.json', []));
@@ -84,8 +86,9 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
     updateConfig(patch = {}) {
       const allowed = [
         'genesisObjective','minMarginPercent','reservePercent','growthPercent','experimentPercent',
-        'heartbeatSeconds','maxChildren','childSpawnConcurrencyThreshold','childTtlMinutes','autoReplication',
-        'maxApiCostPercentOfPayout','maxJobsPerCycle','autoClaimJobs','requireEscrowForAutoClaim','minJobPayoutUsd'
+        'heartbeatSeconds','fastClaimPollSeconds','maxChildren','childSpawnConcurrencyThreshold','childTtlMinutes','autoReplication',
+        'maxApiCostPercentOfPayout','maxJobsPerCycle','autoClaimJobs','requireEscrowForAutoClaim','minJobPayoutUsd',
+        'zeroSpendMode','earnedFundsOnly','allowExternalSpending'
       ];
       const next={...config};
       for(const key of allowed) if(Object.prototype.hasOwnProperty.call(patch,key)) next[key]=patch[key];
@@ -337,8 +340,34 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
   function latestStatuses(jobs){const out={};for(const row of [...jobs].reverse()){const k=row.id||`${row.source}:${row.externalId}`;out[k]=row;}return out;}
   function missingSetup(){const statuses=connectorStatuses(env,x402.status(),credentials);const missing=[];if(!isEvmAddress(wallet))missing.push({item:'Owner treasury wallet',status:'missing',detail:'Set AUTONOMOS_OWNER_WALLET to a public EVM address.'});if(!x402.status().configured)missing.push({item:'Live x402 seller rail',status:'missing',detail:'Enable x402 with a facilitator.'});if(!llm.enabled)missing.push({item:'Reasoning model',status:'optional_but_limits_jobs',detail:'Without an LLM, AutonomOS only auto-claims jobs it can complete deterministically.'});for(const c of statuses.filter(x=>['needs_credentials','needs_configuration'].includes(x.status)))missing.push({item:c.name,status:'external_setup',detail:`Needs: ${(c.missing||[]).join(', ')}`});return missing;}
   function safeConfig(value){const{allowExternalSpending,maxPaidProcurementUsd,...rest}=value;return{...rest,allowExternalSpending:Boolean(allowExternalSpending),maxPaidProcurementUsd:Number(maxPaidProcurementUsd||0),ownerWallet:wallet,privateKeysStored:false};}
-  function schedule(){clearTimer();if(!config.enabled||config.killSwitch)return;timer=setInterval(()=>cycle('heartbeat').catch(()=>{}),config.heartbeatSeconds*1000);timer.unref?.();setTimeout(()=>cycle('startup').catch(()=>{}),1200).unref?.();}
-  function reschedule(){if(config.enabled&&!config.killSwitch)schedule();} function clearTimer(){if(timer)clearInterval(timer);timer=null;} function persistAgents(){store.writeJson('agents.json',agents);} function persistCore(){store.writeJson('config.json',config);store.writeJson('state.json',state);persistAgents();store.writeJson('children.json',children);store.writeJson('offers.json',offers);} function event(type,detail){store.append('events.ndjson',{at:new Date().toISOString(),type,...detail});}
+  function schedule(){clearTimer();if(!config.enabled||config.killSwitch)return;timer=setInterval(()=>cycle('heartbeat').catch(()=>{}),config.heartbeatSeconds*1000);timer.unref?.();setTimeout(()=>cycle('startup').catch(()=>{}),1200).unref?.();if(config.autoClaimJobs){fastTimer=setInterval(()=>fastClaimCycle().catch(()=>{}),config.fastClaimPollSeconds*1000);fastTimer.unref?.();}}
+  function clearTimer(){if(timer)clearInterval(timer);timer=null;if(fastTimer)clearInterval(fastTimer);fastTimer=null;}
+  // Fast lane: on Clawlancer/t2000, first-claim-wins, so the audit flagged the default
+  // 60s heartbeat as too slow. This polls ONLY those two connectors' already-verified
+  // listing endpoints (no new/unverified APIs) and runs the same claim state machine as
+  // the full cycle, so it shares seen/handled/claimAttempts safely — it just does none of
+  // the heavier per-cycle work (treasury refresh, offer pricing, competition snapshot).
+  async function fastClaimCycle(){
+    if(fastCycleRunning||cycleRunning)return{ok:false,reason:'cycle_busy'};
+    if(config.killSwitch||!config.enabled||!config.autoClaimJobs)return{ok:false,reason:'not_applicable'};
+    fastCycleRunning=true;
+    try{
+      const discovery=await discoverMarketOpportunities({env,credentials,limit:60,sources:['clawlancer','t2000']});
+      const cycleLedger=store.readNdjson('ledger.ndjson',4000);
+      const cycleConfig={...config,availableSpendUsd:computeEarnedSpendBudgetUsd(cycleLedger,config)};
+      const normalized=discovery.signals.map(opportunity=>{
+        const cap=classifyOpportunity(opportunity,{llmEnabled:llm.enabled});
+        const feeUsd=Number(opportunity.budgetUsd||0)*Number(opportunity.feePercent||0)/100;
+        const econ=evaluateOpportunity({expectedRevenueUsd:Number(opportunity.budgetUsd||0),successProbability:cap.confidence||0.5,modelCostUsd:cap.estimatedModelCostUsd,marketplaceFeeUsd:feeUsd,computeCostUsd:0},cycleConfig);
+        const row={...opportunity,capability:cap,economics:econ}; recordOpportunity(row); return row;
+      });
+      const candidates=normalized.filter(isAutoClaimCandidate).sort((a,b)=>scoreCandidate(b)-scoreCandidate(a)).slice(0,config.maxJobsPerCycle);
+      for(const op of candidates)await processMarketplaceOpportunity(op);
+      return{ok:true,found:normalized.length,claimed:candidates.length};
+    }catch(error){return{ok:false,reason:String(error?.message||error).slice(0,200)};}
+    finally{fastCycleRunning=false;}
+  }
+  function reschedule(){if(config.enabled&&!config.killSwitch)schedule();} function persistAgents(){store.writeJson('agents.json',agents);} function persistCore(){store.writeJson('config.json',config);store.writeJson('state.json',state);persistAgents();store.writeJson('children.json',children);store.writeJson('offers.json',offers);} function event(type,detail){store.append('events.ndjson',{at:new Date().toISOString(),type,...detail});}
 }
 
 function defaultOffers(){return Object.fromEntries(MACHINE_PRODUCTS.map(p=>[p.id,{priceUsd:p.priceUsd,updatedAt:'',basis:'initial'}]));}
