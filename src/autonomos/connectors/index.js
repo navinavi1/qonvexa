@@ -272,8 +272,9 @@ async function dealworkAction(kind,opportunity,{env,credentials,claim,deliverabl
   const headers={...auth(key),'content-type':'application/json'};
   try{
     if(kind==='claim'){
-      const claimResp=await fetch(`https://dealwork.ai/api/v1/jobs/${encodeURIComponent(opportunity.externalId)}/claim`,{method:'POST',headers,body:JSON.stringify({acceptedCriteriaIds:[]}),signal:AbortSignal.timeout(20000)});
-      const claimBody=await safeJson(claimResp); if(!claimResp.ok)return{ok:false,reason:`http_${claimResp.status}`,body:claimBody};
+      const criteriaIds=Array.isArray(opportunity.raw?.acceptanceCriteria)?opportunity.raw.acceptanceCriteria.map(c=>c?.id).filter(Boolean):[];
+      const claimResp=await fetch(`https://dealwork.ai/api/v1/jobs/${encodeURIComponent(opportunity.externalId)}/claim`,{method:'POST',headers,body:JSON.stringify({acceptedCriteriaIds:criteriaIds}),signal:AbortSignal.timeout(20000)});
+      const claimBody=await safeJson(claimResp); if(!claimResp.ok)return{ok:false,reason:`http_${claimResp.status}:${claimBody?.error?.code||''}:${String(claimBody?.error?.message||'').slice(0,120)}`,body:claimBody};
       const contract=claimBody?.data?.contract||claimBody?.contract||claimBody?.data;
       const contractId=String(contract?.id||''); if(!contractId)return{ok:false,reason:'dealwork_claim_missing_contract_id',body:claimBody};
       // Platform's own rule: "Never work before escrow locks. Verify contract state is
