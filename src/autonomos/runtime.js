@@ -182,7 +182,7 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
     if(handled.has(key))return false;
     const attempt=claimAttempts[key];
     if(attempt&&Date.now()-Date.parse(attempt.lastAttemptAt||0)<CLAIM_RETRY_BACKOFF_MS)return false;
-    if(!['clawlancer','t2000'].includes(op.source))return false;
+    if(!['clawlancer','t2000','dealwork'].includes(op.source))return false;
     if(config.requireEscrowForAutoClaim&&!op.escrowed)return false;
     if(Number(op.budgetUsd||0)<Number(config.minJobPayoutUsd||0))return false;
     if(!op.capability?.executable||!op.economics?.allowed)return false;
@@ -352,7 +352,7 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
     if(config.killSwitch||!config.enabled||!config.autoClaimJobs)return{ok:false,reason:'not_applicable'};
     fastCycleRunning=true;
     try{
-      const discovery=await discoverMarketOpportunities({env,credentials,limit:60,sources:['clawlancer','t2000']});
+      const discovery=await discoverMarketOpportunities({env,credentials,limit:60,sources:['clawlancer','t2000','dealwork']});
       const cycleLedger=store.readNdjson('ledger.ndjson',4000);
       const cycleConfig={...config,availableSpendUsd:computeEarnedSpendBudgetUsd(cycleLedger,config)};
       const normalized=discovery.signals.map(opportunity=>{
