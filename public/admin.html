@@ -152,6 +152,7 @@
             <label>Genesis objective<textarea name="genesisObjective" rows="3" maxlength="1000"></textarea></label>
             <div class="autonomos-form-grid">
               <label>Heartbeat, seconds<input name="heartbeatSeconds" type="number" min="30" max="3600"></label>
+              <label>Fast claim poll, seconds<input name="fastClaimPollSeconds" type="number" min="10" max="3600"></label>
               <label>Minimum margin, %<input name="minMarginPercent" type="number" min="0" max="95" step="1"></label>
               <label>Reserve, %<input name="reservePercent" type="number" min="0" max="100"></label>
               <label>Growth, %<input name="growthPercent" type="number" min="0" max="100"></label>
@@ -161,6 +162,13 @@
               <label>Minimum job payout, $<input name="minJobPayoutUsd" type="number" min="0" max="100000" step="0.01"></label>
               <label>Max API/model cost, % payout<input name="maxApiCostPercentOfPayout" type="number" min="0" max="80"></label>
             </div>
+            <p class="settings-note">Fast claim poll only re-checks Clawlancer/t2000 open listings — it does not redo treasury/offer/competition work, so it can safely run much more often than the full heartbeat.</p>
+            <div class="autonomos-form-grid">
+              <label class="autonomos-check"><input name="zeroSpendMode" type="checkbox"> <span>Zero-spend mode (block ANY job with API/model cost)</span></label>
+              <label class="autonomos-check"><input name="earnedFundsOnly" type="checkbox"> <span>Earned-funds-only (spend only already-earned growth+experiment budget)</span></label>
+              <label class="autonomos-check"><input name="allowExternalSpending" type="checkbox"> <span>Allow unrestricted spending (ignores earned-funds cap — use with care)</span></label>
+            </div>
+            <p class="settings-note">Precedence: Zero-spend wins if on. Otherwise Earned-funds-only (default) caps spend to money AutonomOS has actually already earned. Unrestricted only applies once both of the above are off.</p>
             <label class="autonomos-check"><input name="autoClaimJobs" type="checkbox"> <span>Automatically claim qualified escrow-funded jobs</span></label>
             <label class="autonomos-check"><input name="requireEscrowForAutoClaim" type="checkbox"> <span>Require escrow/pre-funded status for automatic claims</span></label>
             <label class="autonomos-check"><input name="autoReplication" type="checkbox"> <span>Allow bounded automatic child-agent replication</span></label>
