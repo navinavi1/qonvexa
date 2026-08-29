@@ -64,7 +64,7 @@ function round(value){return Math.round((value+Number.EPSILON)*1e6)/1e6;}
 // draws from (the reserve share is never touched by API/model spend). Cost ledger entries
 // are subtracted so the same earned dollar can't fund two jobs.
 export function computeEarnedSpendBudgetUsd(ledger = [], config = {}) {
-  let earnedPool = 0;
+  let earnedPool = Math.max(0, finite(config.seedSpendBudgetUsd, 0));
   let spent = 0;
   for (const row of ledger) {
     if (row.type === 'revenue' && !row.testnet) {
