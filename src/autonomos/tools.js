@@ -130,30 +130,60 @@ export async function githubOpenPullRequest({ repoUrl, baseBranch = 'main', newB
   if (!token) return { ok: false, error: 'github_token_missing' };
   const match = String(repoUrl || '').match(/^https:\/\/github\.com\/([\w.-]+)\/([\w.-]+?)(?:\.git)?\/?$/i);
   if (!match) return { ok: false, error: 'invalid_repo_url_must_be_https_github_com_owner_repo' };
-  const [, owner, repo] = match;
+  const [, upstreamOwner, repo] = match;
   const branch = String(newBranch || '').trim();
   if (!branch || PROTECTED_BRANCH_NAMES.test(branch)) return { ok: false, error: 'refusing_protected_or_missing_branch_name' };
   if (!Array.isArray(files) || !files.length) return { ok: false, error: 'no_files_provided' };
   const cleanFiles = files.slice(0, 15).map(f => ({ path: String(f?.path || '').replace(/^\/+/, ''), content: String(f?.content ?? '') }))
     .filter(f => f.path && !f.path.includes('..') && f.content.length <= 200000);
   if (!cleanFiles.length) return { ok: false, error: 'no_valid_files_after_path_safety_filter' };
-  const api = `https://api.github.com/repos/${owner}/${repo}`;
   const headers = { authorization: `Bearer ${token}`, accept: 'application/vnd.github+json', 'content-type': 'application/json', 'user-agent': 'AutonomOS/2.0' };
+  const upstreamApi = `https://api.github.com/repos/${upstreamOwner}/${repo}`;
   try {
     if (signal?.aborted) return { ok: false, error: 'aborted_by_emergency_stop' };
-    const baseRefResp = await fetch(`${api}/git/ref/heads/${encodeURIComponent(baseBranch)}`, { headers, signal: withTimeout(15000, signal) });
+    // P0 fix (found while verifying against real GitHub docs before the owner spent time
+    // setting up a token): the bot account almost never has write access to a bounty's
+    // repo directly — every previous version of this function tried to create a branch
+    // and commit files straight into the UPSTREAM repo, which 403/404s for literally any
+    // repo the bot doesn't already own. The only way to propose a change to a repo you
+    // don't own is the standard open-source flow: fork it into the bot's own account,
+    // commit there (full write access, guaranteed), then open the PR against upstream
+    // with head formatted as "<fork_owner>:<branch>" — see GitHub's own docs on
+    // "Creating a pull request from a fork".
+    const forkResp = await fetch(`${upstreamApi}/forks`, { method: 'POST', headers, signal: withTimeout(20000, signal) });
+    const forkBody = await forkResp.json().catch(() => ({}));
+    // 202 = fork queued/created, 200/201 = already exists and returned directly — both fine.
+    if (!forkResp.ok && forkResp.status !== 202) return { ok: false, error: `fork_failed_http_${forkResp.status}` };
+    const forkOwner = String(forkBody?.owner?.login || '');
+    if (!forkOwner) return { ok: false, error: 'fork_response_missing_owner_login' };
+    const forkApi = `https://api.github.com/repos/${forkOwner}/${repo}`;
+    // Forking is asynchronous on GitHub's side — a freshly created fork can 404 for a few
+    // seconds before it's actually ready to accept writes. Poll briefly instead of assuming
+    // it's instant (this is the single most common cause of "works sometimes" fork-then-PR bugs).
+    let forkReady = false;
+    for (let attempt = 0; attempt < 6; attempt++) {
+      if (signal?.aborted) return { ok: false, error: 'aborted_by_emergency_stop' };
+      const checkResp = await fetch(forkApi, { headers, signal: withTimeout(10000, signal) });
+      if (checkResp.ok) { forkReady = true; break; }
+      await new Promise(resolve => setTimeout(resolve, 2000));
+    }
+    if (!forkReady) return { ok: false, error: 'fork_not_ready_after_polling' };
+    const baseRefResp = await fetch(`${forkApi}/git/ref/heads/${encodeURIComponent(baseBranch)}`, { headers, signal: withTimeout(15000, signal) });
     const baseRefBody = await baseRefResp.json().catch(() => ({}));
     const baseSha = baseRefBody?.object?.sha;
-    if (!baseRefResp.ok || !baseSha) return { ok: false, error: `base_branch_not_found_http_${baseRefResp.status}` };
-    const createRefResp = await fetch(`${api}/git/refs`, { method: 'POST', headers, body: JSON.stringify({ ref: `refs/heads/${branch}`, sha: baseSha }), signal: withTimeout(15000, signal) });
+    if (!baseRefResp.ok || !baseSha) return { ok: false, error: `base_branch_not_found_on_fork_http_${baseRefResp.status}` };
+    const createRefResp = await fetch(`${forkApi}/git/refs`, { method: 'POST', headers, body: JSON.stringify({ ref: `refs/heads/${branch}`, sha: baseSha }), signal: withTimeout(15000, signal) });
     if (!createRefResp.ok && createRefResp.status !== 422) return { ok: false, error: `branch_create_failed_http_${createRefResp.status}` }; // 422 = branch already exists, fine to reuse
     for (const file of cleanFiles) {
       if (signal?.aborted) return { ok: false, error: 'aborted_by_emergency_stop' };
-      let existingSha; try { const existingResp = await fetch(`${api}/contents/${encodeURIComponent(file.path)}?ref=${encodeURIComponent(branch)}`, { headers, signal: withTimeout(15000, signal) }); const existingBody = await existingResp.json().catch(() => ({})); existingSha = existingBody?.sha; } catch { /* file doesn't exist yet on this branch, that's fine */ }
-      const putResp = await fetch(`${api}/contents/${encodeURIComponent(file.path)}`, { method: 'PUT', headers, body: JSON.stringify({ message: String(commitMessage || 'AutonomOS: automated change').slice(0, 200), content: Buffer.from(file.content, 'utf8').toString('base64'), branch, ...(existingSha ? { sha: existingSha } : {}) }), signal: withTimeout(20000, signal) });
+      let existingSha; try { const existingResp = await fetch(`${forkApi}/contents/${encodeURIComponent(file.path)}?ref=${encodeURIComponent(branch)}`, { headers, signal: withTimeout(15000, signal) }); const existingBody = await existingResp.json().catch(() => ({})); existingSha = existingBody?.sha; } catch { /* file doesn't exist yet on this branch, that's fine */ }
+      const putResp = await fetch(`${forkApi}/contents/${encodeURIComponent(file.path)}`, { method: 'PUT', headers, body: JSON.stringify({ message: String(commitMessage || 'AutonomOS: automated change').slice(0, 200), content: Buffer.from(file.content, 'utf8').toString('base64'), branch, ...(existingSha ? { sha: existingSha } : {}) }), signal: withTimeout(20000, signal) });
       if (!putResp.ok) return { ok: false, error: `file_commit_failed_http_${putResp.status}:${file.path}` };
     }
-    const prResp = await fetch(`${api}/pulls`, { method: 'POST', headers, body: JSON.stringify({ title: String(commitMessage || 'AutonomOS automated change').slice(0, 200), head: branch, base: baseBranch, body: 'Opened automatically by AutonomOS for a marketplace job. Not merged automatically — please review before merging.' }), signal: withTimeout(15000, signal) });
+    // The PR itself is opened against the UPSTREAM repo (that's where a human reviewer
+    // actually is), with head pointing at the fork — exactly the cross-fork format GitHub
+    // documents: "<fork_owner>:<branch>".
+    const prResp = await fetch(`${upstreamApi}/pulls`, { method: 'POST', headers, body: JSON.stringify({ title: String(commitMessage || 'AutonomOS automated change').slice(0, 200), head: `${forkOwner}:${branch}`, base: baseBranch, body: 'Opened automatically by AutonomOS for a marketplace job. Not merged automatically — please review before merging.' }), signal: withTimeout(15000, signal) });
     const prBody = await prResp.json().catch(() => ({}));
     if (!prResp.ok) return { ok: false, error: `pr_create_failed_http_${prResp.status}`, detail: prBody?.message || '' };
     return { ok: true, prUrl: String(prBody?.html_url || ''), prNumber: prBody?.number ?? null };
