@@ -8,7 +8,7 @@ export function createLlmClient(env = process.env) {
     enabled,
     provider: enabled ? 'openai-compatible' : 'deterministic',
     model: model || 'none',
-    async complete({ system, user, messages, tools, maxTokens = 700, temperature = 0.2 }) {
+    async complete({ system, user, messages, tools, maxTokens = 700, temperature = 0.2, signal }) {
       if (!enabled) return { ok:false, reason:'llm_not_configured' };
       try {
         const body = {
@@ -18,6 +18,11 @@ export function createLlmClient(env = process.env) {
           temperature
         };
         if (Array.isArray(tools) && tools.length) { body.tools = tools; body.tool_choice = 'auto'; }
+        // P0 fix (external audit — Emergency Stop was not a real abort): accept an
+        // external AbortSignal (from runtime's per-job AbortController) and combine it
+        // with the existing request timeout, so pressing Emergency Stop actually cancels
+        // an in-flight LLM call instead of only preventing the *next* one.
+        const combinedSignal = signal ? AbortSignal.any([AbortSignal.timeout(45000), signal]) : AbortSignal.timeout(45000);
         const response = await fetch(`${baseUrl}/chat/completions`, {
           method:'POST',
           headers:{
@@ -25,7 +30,7 @@ export function createLlmClient(env = process.env) {
             ...(apiKey ? { authorization:`Bearer ${apiKey}` } : {})
           },
           body:JSON.stringify(body),
-          signal:AbortSignal.timeout(45000)
+          signal:combinedSignal
         });
         if (!response.ok) return { ok:false, reason:`llm_http_${response.status}` };
         const respBody = await response.json();
@@ -35,7 +40,8 @@ export function createLlmClient(env = process.env) {
         if (!text) return { ok:false, reason:'llm_empty_response' };
         return { ok:true, text:String(text), message, usage:respBody.usage || null };
       } catch (error) {
-        return { ok:false, reason:String(error?.message || error).slice(0,200) };
+        const reason = signal?.aborted ? 'aborted_by_emergency_stop' : String(error?.message || error).slice(0,200);
+        return { ok:false, reason };
       }
     }
   };
