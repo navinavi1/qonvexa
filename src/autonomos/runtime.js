@@ -175,7 +175,15 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
       setAgentMetric('opportunity-radar',{tasks:1});
       setAgent('demand-analyst','working');state.marketSummary=summarizeOpportunities(normalized);setAgentMetric('demand-analyst',{tasks:1});
       setAgent('competition-agent','working');state.competition=competitionSnapshot(normalized);setAgentMetric('competition-agent',{tasks:1});
-      setAgent('economics-agent','working');state.opportunityEconomics=normalized.slice(0,100).map(x=>({source:x.source,externalId:x.externalId,title:x.title,budgetUsd:x.budgetUsd,capability:x.capability,economics:x.economics,candidacy:explainCandidacy(x)}));setAgentMetric('economics-agent',{tasks:1});
+      setAgent('economics-agent','working');
+      // P1 fix: slice(0,100) in raw discovery order (x402-bazaar first, then clawlancer
+      // with up to 100 signals of its own) could fill the entire 100-item cap before
+      // Dealwork or t2000 opportunities were ever included — so the diagnostic panel
+      // could show 0 Dealwork/t2000 entries not because none existed, but because they
+      // never survived the slice. Now it samples per-source so every auto-claimable
+      // source is represented regardless of how many x402/clawlancer signals came in.
+      state.opportunityEconomics=sampleAcrossSources(normalized,['clawlancer','dealwork','t2000'],40).map(x=>({source:x.source,externalId:x.externalId,title:x.title,budgetUsd:x.budgetUsd,capability:x.capability,economics:x.economics,candidacy:explainCandidacy(x)}));
+      setAgentMetric('economics-agent',{tasks:1});
 
       setAgent('pricing-agent','working');state.offerOptimization=optimizeOffers(normalized.filter(x=>x.source==='x402-bazaar'));setAgentMetric('pricing-agent',{tasks:1});
       setAgent('offer-architect','working');setAgentMetric('offer-architect',{tasks:1}); setAgent('distribution-agent','working');state.catalogReady=true;setAgentMetric('distribution-agent',{tasks:1});
@@ -486,3 +494,4 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
 function defaultOffers(){return Object.fromEntries(MACHINE_PRODUCTS.map(p=>[p.id,{priceUsd:p.priceUsd,updatedAt:'',basis:'initial'}]));}
 function defaultState(){return{createdAt:new Date().toISOString(),updatedAt:new Date().toISOString(),startedAt:'',cycles:0,lastCycleAt:'',lastCycleMs:0,lastCycleId:'',lastCycleTrigger:'',lastError:'',treasury:{ok:false,usdc:0,usdt:0,eth:0,checkedAt:''},marketplaceWallets:{},connectorHealth:{},marketSummary:{},competition:{},catalogReady:false};}
 function median(values){if(!values.length)return 0;const s=[...values].sort((a,b)=>a-b),m=Math.floor(s.length/2);return round(s.length%2?s[m]:(s[m-1]+s[m])/2);}function round(v){return Math.round((Number(v||0)+Number.EPSILON)*1e6)/1e6;}
+function sampleAcrossSources(rows,sources,perSource){const out=[];for(const source of sources)out.push(...rows.filter(r=>r.source===source).slice(0,perSource));return out;}
