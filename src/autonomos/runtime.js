@@ -45,6 +45,9 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
   let claimAttempts = store.readJson('claim-attempts.json', {});
   const MAX_CLAIM_ATTEMPTS = 5;
   const CLAIM_RETRY_BACKOFF_MS = 90_000;
+  // Jobs that survived past a successful marketplace claim but not yet past delivery —
+  // see writeInFlightJob/recoverInFlightJobs for why this exists (P1: claimed-job/restart protection).
+  let inFlightJobs = store.readJson('in-flight-jobs.json', {});
 
   let x402Idempotency = store.readJson('x402-idempotency.json', {});
   const x402 = createX402Gateway({ ownerWallet:wallet, siteUrl, env, onSettlement:recordSettlement, idempotency:{
@@ -53,6 +56,7 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
   } });
   cleanupExpiredChildren();
   persistCore();
+  recoverInFlightJobs().catch(()=>{});
   if (config.enabled && !config.killSwitch) schedule();
 
   return {
@@ -230,17 +234,31 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
     setAgentMetric('job-router',{tasks:1});maybeSpawnChild(op.category||op.source);
     const worker=pickExternalWorker(op.capability?.skill);setWorkerStatus(worker,'working');activeJobs.set(jobId,{id:jobId,source:op.source,externalId:op.externalId,workerId:worker.id,cancelled:false});
     store.append('jobs.ndjson',{id:jobId,source:op.source,externalId:op.externalId,status:'claimed',transactionId:claim.transactionId||'',workerId:worker.id,at:new Date().toISOString()});event('market_job_claimed',{jobId,source:op.source,externalId:op.externalId,transactionId:claim.transactionId||''});
+    // P1 fix: persist everything needed to resume AFTER a successful claim. Previously,
+    // a claim locked real escrow on the marketplace, but the only record that execution
+    // still needed to happen lived in the in-memory activeJobs Map — a Render restart
+    // between claim and delivery silently orphaned an already-claimed job forever (no
+    // retry path existed since `handled` already excludes it from re-discovery). Now the
+    // full op/claim/worker is written to disk and only cleared once delivered — see
+    // recoverInFlightJobs() below, called once at startup.
+    writeInFlightJob(jobId,{jobId,op,claim,workerId:worker.id,startedAt:new Date().toISOString()});
     try{
       if(op.source==='t2000'&&claim.workOrderMissing){throw new Error('t2000_work_order_unavailable_refusing_blind_delivery');}
       const execOp=claim.workOrder?{...op,__workOrderRaw:claim.workOrder,description:`${op.description}\n\n[t2000 job_status work order]\n${typeof claim.workOrder==='string'?claim.workOrder:JSON.stringify(claim.workOrder).slice(0,4000)}`}:op;
-      const deliverable=await executeExternalOpportunity(execOp,op.capability,{llm,siteUrl,env});
+      const deliverable=await executeExternalOpportunity(execOp,op.capability,{llm,siteUrl,env,config});
       setAgent('qa-evaluator','working'); validateExternalDeliverable(deliverable,execOp);
       const delivery=await deliverMarketplaceJob(op,claim,deliverable,{env,credentials});
       if(!delivery.ok)throw new Error(`delivery_failed:${delivery.reason||'unknown'}`);
       store.append('jobs.ndjson',{id:jobId,source:op.source,externalId:op.externalId,status:'delivered',transactionId:delivery.transactionId||claim.transactionId||'',workerId:worker.id,deliverableHash:deliverable.hash,at:new Date().toISOString()});
       const actualCostUsd=computeActualCostUsd(deliverable,op.capability);
-      setWorkerMetric(worker,{tasks:1,cost:actualCostUsd});setAgentMetric('qa-evaluator',{tasks:1});event('market_job_delivered',{jobId,source:op.source,externalId:op.externalId,transactionId:delivery.transactionId||''});
+      const toolCostUsd=Number(deliverable.evidence?.toolCostUsd||0);
+      setWorkerMetric(worker,{tasks:1,cost:actualCostUsd+toolCostUsd});setAgentMetric('qa-evaluator',{tasks:1});event('market_job_delivered',{jobId,source:op.source,externalId:op.externalId,transactionId:delivery.transactionId||''});
       recordCost({jobId,source:op.source,externalId:op.externalId,amountUsd:actualCostUsd,kind:'model',estimated:!deliverable.evidence?.usage});
+      // P1 fix: Firecrawl/E2B spend was previously invisible to the ledger entirely —
+      // recorded here as its own 'tool_api' cost row so Profit Engine accounting
+      // (computeEarnedSpendBudgetUsd, netProfitUsd) reflects real tool spend, not just LLM tokens.
+      if(toolCostUsd>0)recordCost({jobId,source:op.source,externalId:op.externalId,amountUsd:toolCostUsd,kind:'tool_api',estimated:true,note:'firecrawl_e2b_call_cost_estimate'});
+      clearInFlightJob(jobId);
       return{claimed:true,delivered:true};
     }catch(error){
       store.append('jobs.ndjson',{id:jobId,source:op.source,externalId:op.externalId,status:'execution_failed',workerId:worker.id,error:String(error?.message||error).slice(0,300),at:new Date().toISOString()});
@@ -250,9 +268,48 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
       // silently absorbed as free — this is exactly the "Revenue $1 / Cost $0" bug.
       const incurredCostUsd=Number(op.capability?.estimatedModelCostUsd||0);
       if(incurredCostUsd>0)recordCost({jobId,source:op.source,externalId:op.externalId,amountUsd:incurredCostUsd,kind:'model',estimated:true,note:'job_failed_after_model_call'});
+      clearInFlightJob(jobId);
       return{claimed:true,delivered:false};
     }
     finally{activeJobs.delete(jobId);setWorkerStatus(worker,'idle');}
+  }
+
+  function writeInFlightJob(jobId,record){inFlightJobs[jobId]=record;store.writeJson('in-flight-jobs.json',inFlightJobs);}
+  function clearInFlightJob(jobId){if(!(jobId in inFlightJobs))return;delete inFlightJobs[jobId];store.writeJson('in-flight-jobs.json',inFlightJobs);}
+
+  // Runs once at startup: any job that made it past claimMarketplaceJob (escrow already
+  // locked on the marketplace) but never reached a terminal 'delivered'/'execution_failed'
+  // status before the process stopped gets exactly one resume attempt — re-running
+  // execute+deliver (never re-claiming, since the claim already succeeded and re-claiming
+  // an already-claimed job would just fail or double-spend escrow). This is best-effort:
+  // if the underlying opportunity object is missing fields the connector needs, it fails
+  // like any other execution_failed job and is cleared, rather than retried forever.
+  async function recoverInFlightJobs(){
+    const pending=Object.values(inFlightJobs);
+    for(const record of pending){
+      const {jobId,op,claim}=record;
+      const worker=agents.find(a=>a.id===record.workerId)||pickExternalWorker(op.capability?.skill);
+      setWorkerStatus(worker,'working');activeJobs.set(jobId,{id:jobId,source:op.source,externalId:op.externalId,workerId:worker.id,cancelled:false});
+      event('market_job_recovery_attempt',{jobId,source:op.source,externalId:op.externalId});
+      try{
+        if(op.source==='t2000'&&claim.workOrderMissing){throw new Error('t2000_work_order_unavailable_refusing_blind_delivery');}
+        const execOp=claim.workOrder?{...op,__workOrderRaw:claim.workOrder,description:`${op.description}\n\n[t2000 job_status work order]\n${typeof claim.workOrder==='string'?claim.workOrder:JSON.stringify(claim.workOrder).slice(0,4000)}`}:op;
+        const deliverable=await executeExternalOpportunity(execOp,op.capability,{llm,siteUrl,env,config});
+        validateExternalDeliverable(deliverable,execOp);
+        const delivery=await deliverMarketplaceJob(op,claim,deliverable,{env,credentials});
+        if(!delivery.ok)throw new Error(`delivery_failed:${delivery.reason||'unknown'}`);
+        store.append('jobs.ndjson',{id:jobId,source:op.source,externalId:op.externalId,status:'delivered',transactionId:delivery.transactionId||claim.transactionId||'',workerId:worker.id,deliverableHash:deliverable.hash,at:new Date().toISOString(),recovered:true});
+        const actualCostUsd=computeActualCostUsd(deliverable,op.capability);
+        const toolCostUsd=Number(deliverable.evidence?.toolCostUsd||0);
+        setWorkerMetric(worker,{tasks:1,cost:actualCostUsd+toolCostUsd});
+        recordCost({jobId,source:op.source,externalId:op.externalId,amountUsd:actualCostUsd,kind:'model',estimated:!deliverable.evidence?.usage});
+        if(toolCostUsd>0)recordCost({jobId,source:op.source,externalId:op.externalId,amountUsd:toolCostUsd,kind:'tool_api',estimated:true,note:'firecrawl_e2b_call_cost_estimate'});
+        event('market_job_delivered',{jobId,source:op.source,externalId:op.externalId,transactionId:delivery.transactionId||'',recovered:true});
+      }catch(error){
+        store.append('jobs.ndjson',{id:jobId,source:op.source,externalId:op.externalId,status:'execution_failed',workerId:worker.id,error:String(error?.message||error).slice(0,300),at:new Date().toISOString(),recovered:true});
+        incrementWorkerError(worker);event('market_job_failed',{jobId,source:op.source,externalId:op.externalId,error:String(error?.message||error).slice(0,220),recovered:true});
+      }finally{activeJobs.delete(jobId);setWorkerStatus(worker,'idle');clearInFlightJob(jobId);}
+    }
   }
 
   function computeActualCostUsd(deliverable,capability){
