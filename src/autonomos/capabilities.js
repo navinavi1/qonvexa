@@ -6,30 +6,32 @@ const RULES = [
   { skill:'data-transform', categories:['data'], words:['csv','json','normalize','extract','transform','parse','structured'] }
 ];
 
-// P1 fix: the Code Worker only has run_python (an isolated E2B sandbox, no persistent
-// filesystem/repo, no network-accessible git remote, no shell, no browser). A job asking
-// for repo/deploy/PR/CI work matched the 'code-analysis' skill on words like "code" or
-// "test" alone and was scored executable=true purely because an LLM was configured —
-// there was no check for whether the *specific* tooling the task needs actually exists.
-// This is a hard capability ceiling, independent of confidence score or llmEnabled.
-const REQUIRES_DEV_WORKSTATION = /\b(git\s+(clone|push|pull|checkout|commit)|pull request|\bpr\b|open (a |an )?pr\b|merge request|npm install|yarn install|pip install|docker(file)?|kubernetes|k8s|ci\/cd|github actions|ssh\b|shell access|terminal access|deploy(ment)?\b|production server|upload (an? )?artifact|browser automation|headless browser|screenshot of the (site|app|page))\b/i;
+// P1 fix (kept): the Code Worker still only has run_python (isolated E2B sandbox, no
+// persistent filesystem/repo, no shell, no browser) — jobs needing THESE remain a hard
+// capability ceiling no matter what, independent of confidence score or llmEnabled.
+const REQUIRES_UNAVAILABLE_TOOLING = /\b(docker(file)?|kubernetes|k8s|ci\/cd|github actions|ssh\b|shell access|terminal access|deploy(ment)?\b|production server|upload (an? )?artifact|browser automation|headless browser|screenshot of the (site|app|page)|npm install|yarn install|pip install)\b/i;
+// A git/PR job IS now within capability — but only once a real open_pull_request tool
+// exists (i.e. GITHUB_TOKEN is configured). Without it, this still needs to fall
+// through to the hard-block above via the generic dev-workstation phrasing.
+const REQUIRES_GITHUB_PR = /\b(git\s+(clone|push|pull|checkout|commit)|pull request|\bpr\b|open (a |an )?pr\b|merge request|github repo|fix.{0,30}(bug|issue).{0,30}repo)\b/i;
 
-export function classifyOpportunity(opportunity, { llmEnabled=false } = {}) {
+export function classifyOpportunity(opportunity, { llmEnabled=false, hasGithubPrTool=false } = {}) {
   const hay = `${opportunity.category} ${opportunity.title} ${opportunity.description}`.toLowerCase();
   const safety = safetyCheck(hay);
   const matched = RULES.map(rule=>({ rule, score:rule.categories.includes(opportunity.category)?3:rule.words.reduce((n,w)=>n+(hay.includes(w)?1:0),0) }))
     .sort((a,b)=>b.score-a.score)[0];
   const skill = matched?.score > 0 ? matched.rule.skill : 'unknown';
   const deterministic = canDoDeterministically(opportunity, skill);
-  const needsDevWorkstation = REQUIRES_DEV_WORKSTATION.test(hay);
+  const needsGithubPr = REQUIRES_GITHUB_PR.test(hay);
+  const needsUnavailableTooling = REQUIRES_UNAVAILABLE_TOOLING.test(hay) || (needsGithubPr && !hasGithubPrTool);
   return {
     skill,
     confidence:Math.min(1, (matched?.score || 0)/5),
     safe:safety.safe,
     safetyReason:safety.reason,
-    executable:safety.safe && !needsDevWorkstation && (deterministic || llmEnabled),
-    mode:needsDevWorkstation ? 'unsupported_missing_tooling' : deterministic ? 'deterministic' : llmEnabled ? 'llm' : 'unsupported_without_llm',
-    missingTooling:needsDevWorkstation,
+    executable:safety.safe && !needsUnavailableTooling && (deterministic || llmEnabled),
+    mode:needsUnavailableTooling ? 'unsupported_missing_tooling' : needsGithubPr ? 'llm_with_github_pr' : deterministic ? 'deterministic' : llmEnabled ? 'llm' : 'unsupported_without_llm',
+    missingTooling:needsUnavailableTooling,
     estimatedModelCostUsd:deterministic ? 0 : llmEnabled ? estimateLlmCost(opportunity) : 0
   };
 }
