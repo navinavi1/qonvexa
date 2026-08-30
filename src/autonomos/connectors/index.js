@@ -20,7 +20,8 @@ const CONNECTOR_DEFS = Object.freeze([
   // or that the account has remaining quota (that requires a live, billable call this
   // audit intentionally avoids making just to render a status dot).
   { id:'firecrawl', name:'Firecrawl (web_search/web_scrape tool)', kind:'tool', description:'Live web search/scrape tool available to worker agents during job execution.', requiredEnv:['FIRECRAWL_API_KEY'] },
-  { id:'e2b', name:'E2B (run_python tool)', kind:'tool', description:'Sandboxed Python execution tool available to worker agents during job execution.', requiredEnv:['E2B_API_KEY'] }
+  { id:'e2b', name:'E2B (run_python tool)', kind:'tool', description:'Sandboxed Python execution tool available to worker agents during job execution.', requiredEnv:['E2B_API_KEY'] },
+  { id:'github-pr', name:'GitHub (open_pull_request tool)', kind:'tool', description:'Lets worker agents propose code changes to a GitHub repo via Pull Request — never merges automatically. Needs a fine-grained PAT (Contents + Pull requests permission) for a dedicated bot account, not a personal account.', requiredEnv:['GITHUB_TOKEN'] }
 ]);
 
 export function connectorStatuses(env = process.env, x402Status = {}, persistedCredentials = {}) {
@@ -357,7 +358,15 @@ export async function syncMarketplaceTransactions({env=process.env,credentials={
   if(t2000Url&&t2000Token){
     try{
       const client=new McpHttpClient({url:t2000Url,token:t2000Token,timeoutMs:18000}); await client.initialize(); const tools=await client.listTools();
-      const txTool=tools.find(t=>/transaction|payment|settlement|payout|earnings/i.test(t.name));
+      // P0/P1 fix (external audit): matching purely on /transaction|payment|.../i risked
+      // picking a MUTATING tool (e.g. something like "initiate_payment" or
+      // "process_withdrawal") purely because its name contains "payment" — for a
+      // financial connector, calling the wrong tool automatically is a real-money risk.
+      // Now the name must ALSO look explicitly read-only (list/get/history/view/status)
+      // and must NOT contain any action verb that suggests it moves funds.
+      const READ_ONLY_HINT = /list|history|get|view|status|read|fetch/i;
+      const MUTATING_HINT = /withdraw|transfer|send\b|initiate|process|create|execute|claim|pay(?!ment|out|ments)|deposit|approve|cancel|delete/i;
+      const txTool=tools.find(t=>/transaction|payment|settlement|payout|earnings/i.test(t.name)&&READ_ONLY_HINT.test(t.name)&&!MUTATING_HINT.test(t.name));
       if(txTool){
         let payload; for(const args of [{},{status:'settled'},{status:'paid'}]){try{payload=extractMcpToolPayload(await client.callTool(txTool.name,args));if(payload)break}catch{}}
         const txs=findArrayByKey(payload,['transactions','payments','settlements','payouts','items']);
@@ -367,7 +376,12 @@ export async function syncMarketplaceTransactions({env=process.env,credentials={
           rows.push({source:'t2000',externalTransactionId:String(tx.id||tx.transactionId||tx.transaction_id||''),listingId:String(tx.jobId||tx.job_id||''),status,amountUsd,currency:'USDC',network:'Sui',payoutAddress:String(tx.payoutAddress||tx.payout_address||''),raw:tx});
         }
         health.t2000={ok:true,connected:true,count:txs.length,tool:txTool.name};
-      } else health.t2000={ok:false,connected:true,error:'transactions_tool_not_found',tools:tools.map(t=>t.name).slice(0,30)};
+      } else {
+        const loosematch=tools.find(t=>/transaction|payment|settlement|payout|earnings/i.test(t.name));
+        health.t2000=loosematch
+          ? {ok:false,connected:true,error:'candidate_tool_not_confirmed_readonly_skipping_auto_call',candidate:loosematch.name,tools:tools.map(t=>t.name).slice(0,30)}
+          : {ok:false,connected:true,error:'transactions_tool_not_found',tools:tools.map(t=>t.name).slice(0,30)};
+      }
     }catch(error){health.t2000={ok:false,connected:false,error:String(error?.message||error).slice(0,180)}}
   }
   return {transactions:rows,health};
