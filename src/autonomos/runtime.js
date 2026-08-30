@@ -16,6 +16,7 @@ import { createLlmClient } from './llm.js';
 import { classifyOpportunity } from './capabilities.js';
 import { executeExternalOpportunity } from './job-executor.js';
 import { opportunityKey } from './job-normalizer.js';
+import { createT2000OAuth } from './t2000-oauth.js';
 
 export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = process.env, logger = console } = {}) {
   if (!storageDir) throw new Error('AutonomOS requires storageDir');
@@ -23,6 +24,7 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
   const store = new AutonomOSStore(rootDir);
   const llm = createLlmClient(env);
   const wallet = isEvmAddress(ownerWallet) ? ownerWallet : String(env.AUTONOMOS_OWNER_WALLET || '');
+  const t2000OAuth = createT2000OAuth({ store, siteUrl, env, logger });
   let credentials = store.readJson('credentials.private.json', {});
   let config = normalizeConfig(store.readJson('config.json', {
     ...DEFAULT_AUTONOMOS_CONFIG,
@@ -59,7 +61,7 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
   } });
   cleanupExpiredChildren();
   persistCore();
-  recoverInFlightJobs().catch(()=>{});
+  recoverStartup().catch(()=>{});
   if (config.enabled && !config.killSwitch) schedule();
 
   return {
@@ -68,6 +70,7 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
     get ownerWallet(){ return wallet; },
 
     async snapshot() {
+      await syncT2000Credential().catch(()=>{});
       const ledger = store.readNdjson('ledger.ndjson', 4000);
       const events = store.readNdjson('events.ndjson', 500).reverse();
       const opportunities = store.readNdjson('opportunities.ndjson', 500).reverse();
@@ -86,6 +89,7 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
         metrics, agents, children,
         products:currentProducts().map(product=>({ ...product, payment:x402.status() })),
         connectors:connectorStatuses(env, x402.status(), credentials).map(c=>{ const h=state.connectorHealth?.[c.id]||state.connectorHealth?.[`${c.id}-public`]||null; return h&&c.configured&&!h.ok?{...c,status:'degraded',health:h}:{...c,health:h}; }),
+        t2000:{...t2000OAuth.status(),health:state.connectorHealth?.t2000||null,wallet:state.marketplaceWallets?.t2000||null},
         opportunities, jobs, events, missing:missingSetup(), pendingHumanClaims, pendingDealworkBidsCount:Object.keys(pendingDealworkBids).length
       };
     },
@@ -137,7 +141,34 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
       return {ok:true};
     },
 
+    t2000ClientMetadata(){ return t2000OAuth.clientMetadata(); },
+    async beginT2000Connect(){
+      const result=await t2000OAuth.beginConnect();
+      event('t2000_oauth_started',{});
+      return result;
+    },
+    async finishT2000Connect(query={}){
+      const status=await t2000OAuth.finishConnect(query);
+      await syncT2000Credential({required:true});
+      const discovery=await discoverMarketOpportunities({env,credentials,limit:20,sources:['t2000']});
+      state.connectorHealth={...(state.connectorHealth||{}),t2000:discovery.health?.t2000||{ok:false,error:'t2000_probe_failed'}};
+      state.marketplaceWallets=await readMarketplaceWallets({env,credentials});
+      state.updatedAt=new Date().toISOString();store.writeJson('state.json',state);
+      event('t2000_oauth_connected',{openCount:state.connectorHealth.t2000?.openCount||0,sellerQueueCount:state.connectorHealth.t2000?.sellerQueueCount||0});
+      return {...status,health:state.connectorHealth.t2000,wallet:state.marketplaceWallets?.t2000||null};
+    },
+    disconnectT2000(){
+      const result=t2000OAuth.disconnect();
+      const next={...credentials};delete next.t2000;credentials=next;
+      state.connectorHealth={...(state.connectorHealth||{}),t2000:{ok:false,connected:false,error:'t2000_oauth_required'}};
+      if(state.marketplaceWallets?.t2000)delete state.marketplaceWallets.t2000;
+      state.updatedAt=new Date().toISOString();store.writeJson('state.json',state);
+      event('t2000_oauth_disconnected',{});
+      return result;
+    },
+
     async refreshTreasury(){
+      await syncT2000Credential().catch(()=>{});
       state.treasury=await readTreasuryBalances({address:wallet,env});
       state.marketplaceWallets=await readMarketplaceWallets({env,credentials});
       state.updatedAt=new Date().toISOString();store.writeJson('state.json',state);
@@ -161,6 +192,7 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
     setAgent('prime-governor','working'); setAgent('policy-agent','working'); setAgent('opportunity-radar','working');
     try{
       cleanupExpiredChildren();
+      await syncT2000Credential().catch(()=>{});
       await pollDealworkBids().catch(()=>{});
       const boot=await bootstrapMarketCredentials({env,credentials,ownerWallet:wallet,storeCredential:(id,value)=>{credentials={...credentials,[id]:value};store.writeSecretJson('credentials.private.json',credentials);}});
       state.bootstrapHealth=boot;
@@ -231,6 +263,7 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
   // themselves, and that explanation gets stored per-opportunity for the dashboard.
   function explainCandidacy(op){
     const reasons=[];
+    const paidAssignedT2000Order=op.source==='t2000'&&op.claimMode==='already_assigned';
     if(!config.autoClaimJobs)reasons.push('auto_claim_disabled_in_policy');
     const key=opportunityKey(op);
     if(handled.has(key))reasons.push('already_handled_permanently_rejected_or_delivered');
@@ -243,16 +276,22 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
     // Dealwork bid-mode jobs are the same shape while a bid is outstanding: escrow only
     // locks once the buyer accepts a bid, which hasn't happened yet at discovery time.
     if(config.requireEscrowForAutoClaim&&!op.escrowed&&op.source!=='superteam'&&!(op.source==='dealwork'&&op.claimMode==='bid'))reasons.push('not_escrowed_and_escrow_required');
-    if(Number(op.budgetUsd||0)<Number(config.minJobPayoutUsd||0))reasons.push(`budget_below_minJobPayoutUsd:${config.minJobPayoutUsd}`);
+    // A t2000 seller-queue item is not an opportunity we are deciding whether to accept:
+    // the buyer has already purchased our published Service and funded/assigned the job.
+    // Some seller-queue responses omit the service price; applying discovery-time payout
+    // floors or payout-percentage economics to a missing price would strand a real paid
+    // order. Capability/safety, owner auto-work policy and execution spend controls still
+    // apply, while t2000_job_status supplies the authoritative work order before execution.
+    if(!paidAssignedT2000Order&&Number(op.budgetUsd||0)<Number(config.minJobPayoutUsd||0))reasons.push(`budget_below_minJobPayoutUsd:${config.minJobPayoutUsd}`);
     if(!op.capability?.executable)reasons.push(`capability_not_executable:${op.capability?.mode||'unknown'}`);
-    if(!op.economics?.allowed)reasons.push(`economics_blocked:${op.economics?.reason||'unknown'}`);
+    if(!paidAssignedT2000Order&&!op.economics?.allowed)reasons.push(`economics_blocked:${op.economics?.reason||'unknown'}`);
     const apiCostCeiling=Number(op.budgetUsd||0)*(Number(config.maxApiCostPercentOfPayout||25)/100);
-    if(Number(op.capability?.estimatedModelCostUsd||0)>apiCostCeiling)reasons.push(`estimated_model_cost_${op.capability?.estimatedModelCostUsd}_exceeds_${Math.round(Number(config.maxApiCostPercentOfPayout||25))}pct_of_payout_ceiling_${apiCostCeiling.toFixed(4)}`);
+    if(!paidAssignedT2000Order&&Number(op.capability?.estimatedModelCostUsd||0)>apiCostCeiling)reasons.push(`estimated_model_cost_${op.capability?.estimatedModelCostUsd}_exceeds_${Math.round(Number(config.maxApiCostPercentOfPayout||25))}pct_of_payout_ceiling_${apiCostCeiling.toFixed(4)}`);
     if(!['open','active','available','posted',''].includes(String(op.status||'')))reasons.push(`status_not_open:${op.status}`);
     return { isCandidate:reasons.length===0, reasons };
   }
   function isAutoClaimCandidate(op){ return explainCandidacy(op).isCandidate; }
-  function scoreCandidate(op){return Number(op.economics?.expectedProfitUsd||0)*Math.max(0.1,Number(op.capability?.confidence||0));}
+  function scoreCandidate(op){const paidOrder=op.source==='t2000'&&op.claimMode==='already_assigned';return (paidOrder?1_000_000:0)+Number(op.economics?.expectedProfitUsd||0)*Math.max(0.1,Number(op.capability?.confidence||0));}
 
   async function processMarketplaceOpportunity(op){
     const key=opportunityKey(op);
@@ -285,7 +324,11 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
       return{claimed:false,delivered:false,bidSubmitted:true};
     }
     store.append('jobs.ndjson',{id:jobId,source:op.source,externalId:op.externalId,title:op.title,budgetUsd:op.budgetUsd,currency:op.currency,status:'claiming',startedAt});event('market_job_claiming',{jobId,source:op.source,externalId:op.externalId,budgetUsd:op.budgetUsd});
-    const claim=await claimMarketplaceJob(op,{env,credentials});
+    let claim;
+    try{
+      if(op.source==='t2000')await syncT2000Credential({required:true});
+      claim=await claimMarketplaceJob(op,{env,credentials});
+    }catch(error){claim={ok:false,reason:String(error?.message||error).slice(0,220)}}
     if(!claim.ok){
       const attempts=Number(claimAttempts[key]?.count||0)+1;
       const terminal=!isTransientClaimFailure(claim.reason)||attempts>=MAX_CLAIM_ATTEMPTS;
@@ -318,9 +361,10 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
     let deliverable; // hoisted so the catch block below can still see partial tool spend
     try{
       if(op.source==='t2000'&&claim.workOrderMissing){throw new Error('t2000_work_order_unavailable_refusing_blind_delivery');}
-      const execOp=claim.workOrder?{...op,__workOrderRaw:claim.workOrder,description:`${op.description}\n\n[t2000 job_status work order]\n${typeof claim.workOrder==='string'?claim.workOrder:JSON.stringify(claim.workOrder).slice(0,4000)}`}:op;
+      const execOp=claim.workOrder?{...op,__workOrderRaw:claim.workOrder,description:`${op.description}\n\n[t2000 job_status work order]\n${typeof claim.workOrder==='string'?claim.workOrder:JSON.stringify(claim.workOrder).slice(0,4000)}${op.source==='t2000'?'\n\n[t2000 delivery constraint] Final delivery body must be at most 16 KiB UTF-8. If the result is larger, summarize it and include stable links/hashes where the work order permits.':''}`}:op;
       deliverable=await executeExternalOpportunity(execOp,op.capability,{llm,siteUrl,env,config,abortSignal:abortController.signal});
       setAgent('qa-evaluator','working'); validateExternalDeliverable(deliverable,execOp);
+      if(op.source==='t2000')await syncT2000Credential({required:true});
       const delivery=await deliverMarketplaceJob(op,claim,deliverable,{env,credentials,recordPendingClaim});
       if(!delivery.ok)throw new Error(`delivery_failed:${delivery.reason||'unknown'}`);
       store.append('jobs.ndjson',{id:jobId,source:op.source,externalId:op.externalId,status:'delivered',transactionId:delivery.transactionId||claim.transactionId||'',workerId:worker.id,deliverableHash:deliverable.hash,at:new Date().toISOString()});
@@ -432,9 +476,10 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
       event('market_job_recovery_attempt',{jobId,source:op.source,externalId:op.externalId});
       try{
         if(op.source==='t2000'&&claim.workOrderMissing){throw new Error('t2000_work_order_unavailable_refusing_blind_delivery');}
-        const execOp=claim.workOrder?{...op,__workOrderRaw:claim.workOrder,description:`${op.description}\n\n[t2000 job_status work order]\n${typeof claim.workOrder==='string'?claim.workOrder:JSON.stringify(claim.workOrder).slice(0,4000)}`}:op;
+        const execOp=claim.workOrder?{...op,__workOrderRaw:claim.workOrder,description:`${op.description}\n\n[t2000 job_status work order]\n${typeof claim.workOrder==='string'?claim.workOrder:JSON.stringify(claim.workOrder).slice(0,4000)}${op.source==='t2000'?'\n\n[t2000 delivery constraint] Final delivery body must be at most 16 KiB UTF-8. If the result is larger, summarize it and include stable links/hashes where the work order permits.':''}`}:op;
         const deliverable=await executeExternalOpportunity(execOp,op.capability,{llm,siteUrl,env,config,abortSignal:abortController.signal});
         validateExternalDeliverable(deliverable,execOp);
+        if(op.source==='t2000')await syncT2000Credential({required:true});
         const delivery=await deliverMarketplaceJob(op,claim,deliverable,{env,credentials,recordPendingClaim});
         if(!delivery.ok)throw new Error(`delivery_failed:${delivery.reason||'unknown'}`);
         store.append('jobs.ndjson',{id:jobId,source:op.source,externalId:op.externalId,status:'delivered',transactionId:delivery.transactionId||claim.transactionId||'',workerId:worker.id,deliverableHash:deliverable.hash,at:new Date().toISOString(),recovered:true});
@@ -468,6 +513,7 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
   }
 
   async function syncSettlements(){
+    await syncT2000Credential().catch(()=>{});
     const sync=await syncMarketplaceTransactions({env,credentials});state.settlementHealth=sync.health;
     for(const tx of sync.transactions){
       if(!tx.externalTransactionId||settledTx.has(`${tx.source}:${tx.externalTransactionId}`))continue;
@@ -554,6 +600,14 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
   function latestStatuses(jobs){const out={};for(const row of [...jobs].reverse()){const k=row.id||`${row.source}:${row.externalId}`;out[k]=row;}return out;}
   function missingSetup(){const statuses=connectorStatuses(env,x402.status(),credentials);const missing=[];if(!isEvmAddress(wallet))missing.push({item:'Owner treasury wallet',status:'missing',detail:'Set AUTONOMOS_OWNER_WALLET to a public EVM address.'});if(!x402.status().configured)missing.push({item:'Live x402 seller rail',status:'missing',detail:'Enable x402 with a facilitator.'});if(!llm.enabled)missing.push({item:'Reasoning model',status:'optional_but_limits_jobs',detail:'Without an LLM, AutonomOS only auto-claims jobs it can complete deterministically.'});for(const c of statuses.filter(x=>['needs_credentials','needs_configuration'].includes(x.status)))missing.push({item:c.name,status:'external_setup',detail:`Needs: ${(c.missing||[]).join(', ')}`});return missing;}
   function safeConfig(value){const{allowExternalSpending,maxPaidProcurementUsd,...rest}=value;return{...rest,allowExternalSpending:Boolean(allowExternalSpending),maxPaidProcurementUsd:Number(maxPaidProcurementUsd||0),ownerWallet:wallet,privateKeysStored:false};}
+  async function syncT2000Credential({required=false}={}){
+    const token=await t2000OAuth.getAccessToken({required});
+    const next={...credentials};
+    if(token)next.t2000={accessToken:token,source:'passport_connect_oauth'};else delete next.t2000;
+    credentials=next;
+    return token;
+  }
+  async function recoverStartup(){await syncT2000Credential().catch(()=>{});await recoverInFlightJobs();}
   function schedule(){clearTimer();if(!config.enabled||config.killSwitch)return;timer=setInterval(()=>cycle('heartbeat').catch(()=>{}),config.heartbeatSeconds*1000);timer.unref?.();setTimeout(()=>cycle('startup').catch(()=>{}),1200).unref?.();if(config.autoClaimJobs){fastTimer=setInterval(()=>fastClaimCycle().catch(()=>{}),config.fastClaimPollSeconds*1000);fastTimer.unref?.();}}
   function clearTimer(){if(timer)clearInterval(timer);timer=null;if(fastTimer)clearInterval(fastTimer);fastTimer=null;}
   // Fast lane: on Clawlancer/t2000, first-claim-wins, so the audit flagged the default
@@ -566,6 +620,7 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
     if(config.killSwitch||!config.enabled||!config.autoClaimJobs)return{ok:false,reason:'not_applicable'};
     fastCycleRunning=true;
     try{
+      await syncT2000Credential().catch(()=>{});
       const discovery=await discoverMarketOpportunities({env,credentials,limit:60,sources:['clawlancer','t2000','dealwork']});
       const cycleLedger=store.readNdjson('ledger.ndjson',4000);
       const cycleConfig={...config,availableSpendUsd:computeEarnedSpendBudgetUsd(cycleLedger,config)};
