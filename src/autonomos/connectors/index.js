@@ -6,6 +6,11 @@ const CONNECTOR_DEFS = Object.freeze([
   { id:'x402-bazaar', name:'x402 / Bazaar', kind:'seller+discovery', description:'Machine-payable API discovery and seller rail.', requiredEnv:[] },
   { id:'clawlancer', name:'Clawlancer', kind:'jobs', description:'Pre-funded Base/USDC bounties: discover → claim → deliver → paid.', requiredEnv:[], optionalEnv:['CLAWLANCER_API_KEY','CLAWLANCER_AGENT_ID'] },
   { id:'dealwork', name:'dealwork.ai', kind:'jobs', description:'Human+AI hybrid marketplace, USD via Stripe escrow, open-task instant claim.', requiredEnv:[], optionalEnv:['DEALWORK_API_KEY','DEALWORK_AGENT_ID'] },
+  // Real bounties run $500-$1500+ USDC/SOL — a different tier from Clawlancer's mostly-$0.01
+  // test listings. No escrow lock: it's a competitive submission a human sponsor judges,
+  // and payout requires a HUMAN to visit a claim URL with their own wallet (agents can't
+  // hold/sign for themselves here) — see claimUrl surfaced in state.pendingHumanClaims.
+  { id:'superteam', name:'Superteam Earn', kind:'jobs', description:'Solana ecosystem bounties/projects, $500-$1500+ USDC/SOL. Competitive (not escrow-guaranteed); payout requires a human to claim with claimCode.', requiredEnv:[], optionalEnv:['SUPERTEAM_HUMAN_TELEGRAM'] },
   { id:'virtuals-acp', name:'Virtuals ACP', kind:'jobs+seller', description:'Agent Commerce Protocol jobs and USDC escrow.', requiredEnv:['VIRTUALS_ACP_WALLET_ID','VIRTUALS_ACP_SIGNER'], optionalEnv:['VIRTUALS_ACP_AGENT_ID'] },
   { id:'t2000', name:'t2000', kind:'jobs+seller', description:'Sui/USDC open jobs with pre-funded escrow via Passport Connect.', requiredEnv:['T2000_MCP_URL','T2000_SESSION_TOKEN'], optionalEnv:['T2000_PASSPORT_ADDRESS'] },
   { id:'olas-mech', name:'Olas Mech Marketplace', kind:'seller+discovery', description:'Agent-to-agent paid Mech services.', requiredEnv:['OLAS_MECH_API_KEY'], optionalEnv:['OLAS_MECH_ENDPOINT'] },
@@ -33,6 +38,10 @@ export function connectorStatuses(env = process.env, x402Status = {}, persistedC
     }
     if (def.id === 'dealwork') {
       const hasKey=Boolean(String(env.DEALWORK_API_KEY||persistedCredentials?.dealwork?.apiKey||'').trim());
+      return { ...def, status:hasKey?'ready':'auto_bootstrap_available', configured:hasKey, missing:hasKey?[]:['agent registration will be created automatically on first cycle'] };
+    }
+    if (def.id === 'superteam') {
+      const hasKey=Boolean(persistedCredentials?.superteam?.apiKey);
       return { ...def, status:hasKey?'ready':'auto_bootstrap_available', configured:hasKey, missing:hasKey?[]:['agent registration will be created automatically on first cycle'] };
     }
     if (def.id === 'agentverse') return { ...def, status:'discovery_ready', configured:true, missing:[] };
@@ -99,6 +108,22 @@ export async function bootstrapMarketCredentials({ env=process.env, credentials=
       } else health.dealwork={ok:false,error:response.ok?'onboard_response_missing_api_key':`http_${response.status}`,detail:data?.error?.message||body?.error||''};
     } catch(error){ health.dealwork={ok:false,error:String(error?.message||error).slice(0,180)}; }
   }
+  // Superteam Earn: per their own agent skill spec (superteam.fun/skill.md), registration
+  // is a single POST returning an apiKey + a claimCode. The claimCode is NOT a secret to
+  // protect like an API key — it's meant to be handed to the human owner so THEY can claim
+  // payouts (agents never hold funds here: "Agents do not complete OAuth, wallet signing,
+  // or KYC"). We store it so the dashboard can show the owner exactly which URL to visit.
+  if (!credentials?.superteam?.apiKey) {
+    try {
+      const response=await fetch('https://superteam.fun/api/agents',{method:'POST',headers:{'content-type':'application/json','accept':'application/json','user-agent':'AutonomOS/2.0'},body:JSON.stringify({name:String(env.AUTONOMOS_AGENT_NAME||'AutonomOS').slice(0,48)}),signal:AbortSignal.timeout(15000)});
+      const body=await safeJson(response);
+      if (response.ok && body?.apiKey) {
+        const value={ apiKey:String(body.apiKey), claimCode:String(body.claimCode||''), agentId:String(body.agentId||''), username:String(body.username||''), createdAt:new Date().toISOString(), source:'auto_registration' };
+        storeCredential('superteam',value); credentials.superteam=value;
+        health.superteam={ok:true,bootstrapped:true,claimCode:value.claimCode,username:value.username};
+      } else health.superteam={ok:false,error:response.ok?'registration_response_missing_api_key':`http_${response.status}`,detail:body?.error||body?.message||''};
+    } catch(error){ health.superteam={ok:false,error:String(error?.message||error).slice(0,180)}; }
+  }
   return health;
 }
 
@@ -110,7 +135,8 @@ export async function discoverMarketOpportunities({ env=process.env, credentials
     ['clawlancer',()=>discoverClawlancer(env,credentials,limit)],
     ['dealwork',()=>discoverDealwork(env,credentials,limit)],
     ['agentverse',()=>discoverAgentverse(limit)],
-    ['t2000',()=>discoverT2000(env,limit)]
+    ['t2000',()=>discoverT2000(env,limit)],
+    ['superteam',()=>discoverSuperteam(credentials,limit)]
   ].filter(([id])=>!want||want.has(id));
   const results=await Promise.allSettled(jobs.map(([,fn])=>fn()));
   jobs.forEach(([id],i)=>{
@@ -125,13 +151,15 @@ export async function claimMarketplaceJob(opportunity,{env=process.env,credentia
   if (opportunity.source==='clawlancer') return clawlancerAction('claim',opportunity,{env,credentials});
   if (opportunity.source==='dealwork') return dealworkAction('claim',opportunity,{env,credentials});
   if (opportunity.source==='t2000') return t2000Action('claim',opportunity,{env});
+  if (opportunity.source==='superteam') return superteamAction('claim',opportunity,{credentials});
   return {ok:false,reason:'connector_claim_not_available'};
 }
 
-export async function deliverMarketplaceJob(opportunity,claim,deliverable,{env=process.env,credentials={}}={}) {
+export async function deliverMarketplaceJob(opportunity,claim,deliverable,{env=process.env,credentials={},recordPendingClaim}={}) {
   if (opportunity.source==='clawlancer') return clawlancerAction('deliver',opportunity,{env,credentials,claim,deliverable});
   if (opportunity.source==='dealwork') return dealworkAction('deliver',opportunity,{env,credentials,claim,deliverable});
   if (opportunity.source==='t2000') return t2000Action('deliver',opportunity,{env,claim,deliverable});
+  if (opportunity.source==='superteam') return superteamAction('deliver',opportunity,{credentials,deliverable,recordPendingClaim});
   return {ok:false,reason:'connector_delivery_not_available'};
 }
 
@@ -195,6 +223,54 @@ async function discoverAgentverse(limit){
   const rows=Array.isArray(body?.functions)?body.functions:[];
   const signals=rows.map(raw=>normalizeOpportunity('agentverse',{externalId:raw.id,title:raw.name,description:raw.description||raw.name,url:'https://agentverse.ai/marketplace',status:'discovery',priceUsd:0},{claimMode:'route/discovery',escrowed:false,currency:'UNKNOWN'}));
   return {signals,health:{ok:true,count:signals.length,total:Number(body?.total||0)}};
+}
+
+// Superteam Earn: only listings with agentAccess = AGENT_ALLOWED or AGENT_ONLY accept
+// agent submissions — that filtering happens server-side on this endpoint per their own
+// docs, so no extra check is needed here. Field names below use the same defensive
+// multi-fallback pattern as the rest of this file (title/name, id/slug, reward/amount)
+// since Superteam's docs show request bodies but not a full listing response schema —
+// unknown/missing fields degrade to 0/empty rather than throwing, same as t2000 above.
+async function discoverSuperteam(credentials,limit){
+  const key=String(credentials?.superteam?.apiKey||'');
+  if(!key) return {signals:[],health:{ok:false,error:'superteam_not_registered_yet'}};
+  try{
+    const response=await fetch(`https://superteam.fun/api/agents/listings/live?take=${Math.min(limit,50)}`,{headers:{accept:'application/json','user-agent':'AutonomOS/2.0',authorization:`Bearer ${key}`},signal:AbortSignal.timeout(15000)});
+    const body=await safeJson(response);
+    if(!response.ok) return {signals:[],health:{ok:false,status:response.status,error:body?.error||body?.message||''}};
+    const rows=findArrayByKey(body,['listings','data','items','results']);
+    const signals=rows.map(raw=>normalizeOpportunity('superteam',{
+      id:raw.id||raw.slug||raw._id,
+      title:raw.title||raw.name,
+      description:raw.description||raw.summary||raw.requirements||raw.title,
+      budgetUsd:raw.usdValue??raw.rewardInUsd??raw.reward??raw.rewardAmount??raw.compensationAmount??0,
+      category:raw.type||raw.skills?.[0]||'research',
+      url:raw.url||`https://superteam.fun/earn/listing/${raw.slug||raw.id||''}`,
+      status:'open'
+    },{feePercent:0,currency:'USDC',network:'Solana',escrowed:false,claimMode:'competitive_submission'}));
+    return {signals,health:{ok:true,count:signals.length}};
+  }catch(error){return {signals:[],health:{ok:false,error:String(error?.message||error).slice(0,180)}}}
+}
+
+async function superteamAction(kind,opportunity,{credentials,deliverable,recordPendingClaim}={}){
+  const cred=credentials?.superteam; const key=String(cred?.apiKey||''); if(!key)return{ok:false,reason:'superteam_api_key_missing'};
+  // No escrow/reservation step exists on this platform — "claiming" is just proceeding
+  // straight to a submission, so there is nothing to reserve here and no network call is
+  // needed or possible; the actual work happens at 'deliver'.
+  if(kind==='claim')return{ok:true,jobId:opportunity.externalId,transactionId:''};
+  try{
+    const payload={listingId:opportunity.externalId,link:'',otherInfo:String(deliverable.content||'').slice(0,3000),eligibilityAnswers:[]};
+    const response=await fetch('https://superteam.fun/api/agents/submissions/create',{method:'POST',headers:{'content-type':'application/json',accept:'application/json',authorization:`Bearer ${key}`,'user-agent':'AutonomOS/2.0'},body:JSON.stringify(payload),signal:AbortSignal.timeout(20000)});
+    const body=await safeJson(response);
+    if(!response.ok)return{ok:false,reason:`http_${response.status}:${body?.error||body?.message||''}`.slice(0,200)};
+    // This is the one marketplace where "delivered" genuinely does NOT mean "will be
+    // paid soon" — Superteam judges submissions over days/weeks, and even a win pays out
+    // to the human's own wallet only after they visit the claim URL below. Nothing about
+    // this can be automated further (by design — see superteam.fun/skill.md), so the
+    // dashboard needs to surface it clearly rather than implying it's handled.
+    if(cred.claimCode)recordPendingClaim?.({listingId:opportunity.externalId,title:opportunity.title,claimUrl:`https://superteam.fun/earn/claim/${cred.claimCode}`,submittedAt:new Date().toISOString()});
+    return{ok:true,transactionId:opportunity.externalId,body,pendingHumanClaim:true};
+  }catch(error){return{ok:false,reason:String(error?.message||error).slice(0,200)}}
 }
 
 async function discoverT2000(env,limit){
