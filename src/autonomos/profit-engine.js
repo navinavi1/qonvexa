@@ -16,21 +16,25 @@ export function evaluateOpportunity(input = {}, config = {}) {
   const minMarginPercent = finite(config.minMarginPercent, 35);
   const zeroSpendMode = config.zeroSpendMode !== false;
   const earnedFundsOnly = config.earnedFundsOnly !== false;
-  // P0/P1 fix: allowExternalSpending was defined in policy-engine.js and enforced by
-  // validateAction() for generic 'spend' actions, but this function — the one that
-  // actually decides whether an opportunity gets taken — never looked at it. That meant
-  // as soon as zeroSpendMode was turned off, a job with real out-of-pocket cost (LLM
-  // tokens, Firecrawl, E2B) could be approved purely because it fit inside the earned-
-  // funds budget, even with allowExternalSpending left false. allowExternalSpending is
-  // now the base gate for ANY external spend; earnedFundsOnly narrows what it permits
-  // (spend only self-earned money), it no longer bypasses it.
+  // P0 fix (corrected): the previous version of this fix made allowExternalSpending a
+  // blanket AND-requirement for any spend, which directly contradicted the admin UI's own
+  // documented precedence ("Earned-funds-only (default) caps spend to money AutonomOS has
+  // actually already earned... Unrestricted only applies once both of the above are off")
+  // — a correctly-configured Earned-funds-only setup (the sane, safer default) was left
+  // unable to spend anything at all unless the scarier "unrestricted spending" toggle was
+  // ALSO enabled. This now matches that documented precedence exactly: zeroSpendMode wins
+  // if on; otherwise earnedFundsOnly (default) gates spend to the earned budget on its
+  // own; allowExternalSpending is the separate permission for spending beyond that budget,
+  // and only matters once earnedFundsOnly is off.
   const allowExternalSpending = Boolean(config.allowExternalSpending) && !zeroSpendMode;
   const availableSpendUsd = Math.max(0, finite(config.availableSpendUsd, 0));
   const hasExternalSpend = outOfPocketCost > 0.000001;
   const withinEarnedBudget = outOfPocketCost <= availableSpendUsd + 0.000001;
   const spendBlocked = zeroSpendMode
     ? hasExternalSpend
-    : hasExternalSpend && (!allowExternalSpending || (earnedFundsOnly && !withinEarnedBudget));
+    : earnedFundsOnly
+      ? (hasExternalSpend && !withinEarnedBudget)
+      : (hasExternalSpend && !allowExternalSpending);
   const allowed = expectedProfit > 0 && marginPercent >= minMarginPercent && !spendBlocked;
 
   return {
@@ -45,10 +49,10 @@ export function evaluateOpportunity(input = {}, config = {}) {
       ? 'positive_unit_economics'
       : zeroSpendMode && hasExternalSpend
         ? 'blocked_by_zero_spend_mode'
-        : hasExternalSpend && !allowExternalSpending
-          ? 'blocked_by_external_spending_disabled'
-          : earnedFundsOnly && hasExternalSpend && !withinEarnedBudget
-            ? 'blocked_by_earned_funds_cap'
+        : earnedFundsOnly && hasExternalSpend && !withinEarnedBudget
+          ? 'blocked_by_earned_funds_cap'
+          : !earnedFundsOnly && hasExternalSpend && !allowExternalSpending
+            ? 'blocked_by_external_spending_disabled'
             : expectedProfit <= 0
               ? 'non_positive_profit'
               : 'margin_below_floor'
