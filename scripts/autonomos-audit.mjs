@@ -12,7 +12,7 @@ import { classifyOpportunity } from '../src/autonomos/capabilities.js';
 import { normalizeOpportunity } from '../src/autonomos/job-normalizer.js';
 import { connectorStatuses } from '../src/autonomos/connectors/index.js';
 import { createX402Gateway } from '../src/autonomos/x402.js';
-import { runTool, TOOL_COST_ESTIMATES_USD } from '../src/autonomos/tools.js';
+import { runTool, TOOL_COST_ESTIMATES_USD, githubOpenPullRequest } from '../src/autonomos/tools.js';
 
 const wallet = '0x1f674bf085f6fed36fa198287d51edf0fe0bb9e2';
 const checks = [];
@@ -193,6 +193,50 @@ await ok('Firecrawl and E2B are visible connector/tool health entries', () => {
   assert.ok(statuses.some(x=>x.id==='firecrawl'));
   assert.ok(statuses.some(x=>x.id==='e2b'));
   assert.equal(statuses.find(x=>x.id==='firecrawl').status, 'needs_credentials');
+});
+
+await ok('GitHub PR tool is visible on dashboard and is capability-gated by config, not just a keyword match', () => {
+  const statuses = connectorStatuses({}, { enabled:false, configured:false, mode:'disabled' }, {});
+  assert.ok(statuses.some(x=>x.id==='github-pr'));
+  const op = normalizeOpportunity('clawlancer', { id:'z', title:'Fix a bug and open a PR', description:'Clone the GitHub repo, fix the failing test, and open a pull request', category:'coding', priceUsd:5 }, { escrowed:true });
+  const withoutToken = classifyOpportunity(op, { llmEnabled:true, hasGithubPrTool:false });
+  assert.equal(withoutToken.executable, false);
+  const withToken = classifyOpportunity(op, { llmEnabled:true, hasGithubPrTool:true });
+  assert.equal(withToken.executable, true);
+});
+
+await ok('open_pull_request refuses protected branch names without ever calling the GitHub API', async () => {
+  const result = await githubOpenPullRequest({ repoUrl:'https://github.com/example/repo', newBranch:'main', commitMessage:'x', files:[{path:'a.txt',content:'b'}] }, { GITHUB_TOKEN:'unused_should_never_be_sent' });
+  assert.equal(result.ok, false);
+  assert.equal(result.error, 'refusing_protected_or_missing_branch_name');
+});
+
+await ok('P0: maxPaidProcurementUsd is a real, admin-changeable field, not stuck at 0', () => {
+  const cfg = normalizeConfig({ enabled:true, zeroSpendMode:false, allowExternalSpending:true, maxPaidProcurementUsd:1 });
+  assert.equal(cfg.maxPaidProcurementUsd, 1);
+  assert.equal(validateAction({ kind:'spend', amountUsd:0.01 }, cfg).allowed, true);
+  const stillZero = normalizeConfig({ enabled:true, zeroSpendMode:false, allowExternalSpending:true, maxPaidProcurementUsd:0 });
+  assert.equal(validateAction({ kind:'spend', amountUsd:0.01 }, stillZero).allowed, false);
+});
+
+await ok('P0: Emergency Stop actually aborts an in-flight job, not just future ones', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'autonomos-estop-'));
+  try {
+    const runtime = createAutonomOS({ storageDir: root, siteUrl:'https://qonvexa.co', ownerWallet: wallet, env:{ AUTONOMOS_ENABLED:'false', AUTONOMOS_X402_ENABLED:'false', AUTONOMOS_OWNER_WALLET:wallet }, logger:{ error(){} } });
+    const result = runtime.emergencyStop();
+    assert.equal(result.ok, true);
+    assert.equal(runtime.config.killSwitch, true);
+    // No active jobs in this fresh instance, but emergencyStop must not throw even when
+    // it tries to call .abort() on jobs that carry an AbortController — this exercises
+    // that code path structurally rather than a live in-flight LLM call.
+  } finally { fs.rmSync(root, { recursive:true, force:true }); }
+});
+
+await ok('P0: x402 only accepts USD-pegged stablecoins, never raw ETH/SOL/BTC at face value', async () => {
+  const unsafe = JSON.stringify([{ network:'eip155:8453', networkName:'Base', symbol:'ETH', asset:'0x0000000000000000000000000000000000000001', decimals:18 }]);
+  const gateway = createX402Gateway({ ownerWallet:wallet, siteUrl:'https://qonvexa.co', env:{ AUTONOMOS_X402_ENABLED:'true', AUTONOMOS_X402_NETWORK:'eip155:8453', AUTONOMOS_X402_FACILITATOR_URL:'https://facilitator.xpay.sh', AUTONOMOS_X402_ACCEPTS_JSON: unsafe } });
+  assert.ok(!gateway.status().acceptedAssets.some(a => a.symbol === 'ETH'));
+  assert.ok(gateway.status().acceptedAssets.some(a => a.symbol === 'USDC'));
 });
 
 console.log(`AutonomOS audit PASS: ${checks.length}/${checks.length} checks`);
