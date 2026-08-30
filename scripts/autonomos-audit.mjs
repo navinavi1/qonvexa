@@ -253,6 +253,12 @@ await ok('Superteam Earn is a visible connector and is exempt from the escrow re
   const op = normalizeOpportunity('superteam', { id:'s1', title:'Write a Solana ecosystem report', description:'Research and write a report on Solana DeFi', category:'research', priceUsd:800 }, { escrowed:false, feePercent:0, currency:'USDC' });
   assert.equal(op.escrowed, false);
 });
+await ok('Dealwork bid-mode jobs are discoverable with the correct shape (claimMode:bid, not escrowed yet)', () => {
+  const op = normalizeOpportunity('dealwork', { id:'d1', title:'Write a blog post about AI collaboration', description:'800+ words', category:'writing', budgetUsd:50 }, { escrowed:false, feePercent:10, currency:'USD', claimMode:'bid' });
+  assert.equal(op.claimMode, 'bid');
+  assert.equal(op.escrowed, false);
+  assert.equal(op.budgetUsd, 50);
+});
 
 console.log(`AutonomOS audit PASS: ${checks.length}/${checks.length} checks`);
 for (const check of checks) console.log(`  ✓ ${check.name}`);
