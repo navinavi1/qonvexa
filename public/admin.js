@@ -153,6 +153,26 @@ function renderAutonomOS(){
   setText('#auto-cycles',String(a.runtime?.cycles??0));
   setText('#autonomos-llm',a.runtime?.llm?.enabled?`LLM · ${a.runtime.llm.model}`:'Deterministic · no paid LLM');
 
+  const t=a.t2000||{};
+  const tBadge=el('#autonomos-t2000-badge');
+  const tConnect=el('#autonomos-t2000-connect');
+  const tDisconnect=el('#autonomos-t2000-disconnect');
+  const tDetails=el('#autonomos-t2000-details');
+  if(tBadge){
+    tBadge.textContent=t.connected?'Connected':t.lastError?'Reconnect required':'Not connected';
+    tBadge.className=`autonomos-mini-badge ${t.connected?'t2000-online':t.lastError?'t2000-error':'t2000-offline'}`;
+  }
+  if(tConnect)tConnect.hidden=Boolean(t.connected);
+  if(tDisconnect)tDisconnect.hidden=!t.connected;
+  if(tDetails){
+    const h=t.health||{};const w=t.wallet||{};
+    const address=typeof w.address==='string'?w.address:(w.address?.address||'');
+    const bal=w.balance||{};const usdc=Number(bal.usdc??bal.spendableUsdc??bal.spendable_usdc??bal.balance??0);
+    tDetails.innerHTML=t.connected
+      ? `<span><b>Passport:</b> ${esc(address||'connected')}</span><span><b>USDC:</b> ${Number.isFinite(usdc)?usdc.toFixed(2):'—'}</span><span><b>Open jobs:</b> ${Number(h.openCount||0)}</span><span><b>Seller queue:</b> ${Number(h.sellerQueueCount||0)}</span>${t.expiresAt?`<span><b>Session:</b> reconnect by ${esc(formatDate(t.expiresAt))}</span>`:''}`
+      : `<span>Click Connect t2000 → approve Google OAuth → return here automatically. AutonomOS will use that Passport for Open Jobs and your paid Service orders.</span>${t.lastError?`<span class="job-fail-reason">${esc(t.lastError)}</span>`:''}`;
+  }
+
   const radar=el('#autonomos-market-radar');
   if(radar){ const m=a.runtime?.marketSummary||{}; const health=a.runtime?.connectorHealth||{}; radar.innerHTML=`<article class="autonomos-event"><div class="event-row"><b>Latest cycle</b><span class="status s-ready">${Number(m.observed||0)} seen</span></div><p>${Number(m.escrowedJobs||0)} escrowed · ${Number(m.executable||0)} executable · ${Number(m.profitable||0)} profitable · median ${usd(m.medianPayoutUsd||0)}</p></article>`+Object.entries(health).map(([name,h])=>`<article class="autonomos-event"><div class="event-row"><b>${esc(pretty(name))}</b><span class="connector-${h?.ok?'ready':'needs_credentials'}">${h?.ok?'Healthy':'Unavailable'}</span></div><p>${esc(h?.count!==undefined?`${h.count} signals`:h?.error||h?.status||'')}</p></article>`).join(''); }
   const marketJobs=el('#autonomos-market-jobs');
@@ -221,6 +241,17 @@ el('#autonomos-stop')?.addEventListener('click',()=>autonomosCommand('/api/admin
 el('#autonomos-cycle')?.addEventListener('click',()=>autonomosCommand('/api/admin/autonomos/cycle','Running cycle…'));
 el('#autonomos-reset-claims')?.addEventListener('click',()=>autonomosCommand('/api/admin/autonomos/reset-claim-history','Resetting claim history…'));
 el('#autonomos-refresh-wallet')?.addEventListener('click',()=>autonomosCommand('/api/admin/autonomos/treasury/refresh','Checking wallet…'));
+el('#autonomos-t2000-connect')?.addEventListener('click',async()=>{
+  const button=el('#autonomos-t2000-connect'),status=el('#autonomos-t2000-status');
+  if(button)button.disabled=true;if(status)status.textContent='Opening t2000 Passport Connect…';
+  try{const result=await api('/api/admin/autonomos/t2000/connect',{method:'POST',body:'{}'});if(!result.authorizationUrl)throw new Error('t2000 authorization URL was not returned.');location.assign(result.authorizationUrl)}
+  catch(err){if(status)status.textContent=err.message;if(button)button.disabled=false}
+});
+el('#autonomos-t2000-disconnect')?.addEventListener('click',async()=>{
+  if(!confirm('Disconnect t2000 from AutonomOS? Your t2000 Passport, Agent ID and published Services stay on t2000.'))return;
+  const status=el('#autonomos-t2000-status');if(status)status.textContent='Disconnecting…';
+  try{await api('/api/admin/autonomos/t2000/disconnect',{method:'POST',body:'{}'});if(status)status.textContent='Disconnected. Your t2000 seller profile was not changed.';await loadDashboard()}catch(err){if(status)status.textContent=err.message}
+});
 el('#autonomos-emergency')?.addEventListener('click',async()=>{
   if(!confirm('Emergency stop AutonomOS? This disables the runtime and all external spending permissions.'))return;
   await autonomosCommand('/api/admin/autonomos/emergency-stop','Emergency stop…');
@@ -300,6 +331,12 @@ function emptyRow(cols,text){return `<tr class="empty-row"><td colspan="${cols}"
 (async()=>{
   try{
     const session=await api('/api/admin/session'); currentUser=session.username||'admin';
-    if(session.authenticated){showDashboard();const hash=location.hash.slice(1);switchView(['leads','orders','clients','autonomos','activity','settings'].includes(hash)?hash:'overview');await loadDashboard()}else showLogin();
+    if(session.authenticated){
+      showDashboard();const hash=location.hash.slice(1);switchView(['leads','orders','clients','autonomos','activity','settings'].includes(hash)?hash:'overview');await loadDashboard();
+      const params=new URLSearchParams(location.search);const tResult=params.get('t2000');const tStatus=el('#autonomos-t2000-status');
+      if(tResult==='connected'&&tStatus)tStatus.textContent='t2000 connected. AutonomOS can now read Open Jobs and your seller delivery queue.';
+      if(tResult==='error'&&tStatus)tStatus.textContent=`t2000 connection failed: ${params.get('detail')||'unknown error'}`;
+      if(tResult)history.replaceState(null,'',`${location.pathname}${location.hash||'#autonomos'}`);
+    }else showLogin();
   }catch{showLogin()}
 })();
