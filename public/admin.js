@@ -160,12 +160,17 @@ function renderAutonomOS(){
 
   const candidacy=el('#autonomos-candidacy');
   if(candidacy){
-    const rows=a.runtime?.opportunityEconomics||[];
+    // P1 fix: this used to show the first 30 opportunities regardless of source. Since
+    // discovery runs x402-bazaar first and it alone returns ~50 signals, those 30 slots
+    // were always 100% x402-bazaar (an API-buying price feed, not a job we can earn from —
+    // it's correctly excluded from auto-claim) which buried the real Clawlancer/Dealwork/
+    // t2000 earning opportunities the owner actually needs to see the block reason for.
+    const rows=(a.runtime?.opportunityEconomics||[]).filter(x=>['clawlancer','dealwork','t2000'].includes(x.source));
     candidacy.innerHTML=rows.slice(0,30).map(x=>{
       const isCandidate=x.candidacy?.isCandidate;
       const reasons=(x.candidacy?.reasons||[]);
       return `<article class="autonomos-event"><div class="event-row"><b>${esc(x.title||x.externalId||'Untitled')}</b><span class="status ${isCandidate?'s-ready':'s-error'}">${isCandidate?'Would auto-claim':'Blocked'}</span></div><p>${esc(pretty(x.source))} · ${usd(x.budgetUsd)}${reasons.length?` · <span class="job-fail-reason">${esc(reasons.join(' · '))}</span>`:''}</p></article>`;
-    }).join('')||emptyCard('No opportunities observed yet this cycle.');
+    }).join('')||emptyCard('No Clawlancer/Dealwork/t2000 opportunities observed yet this cycle (x402-bazaar signals are hidden here — that feed is for buying APIs, not earning from jobs).');
   }
 
   const wallet=el('#autonomos-wallet');
