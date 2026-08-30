@@ -175,7 +175,7 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
       setAgentMetric('opportunity-radar',{tasks:1});
       setAgent('demand-analyst','working');state.marketSummary=summarizeOpportunities(normalized);setAgentMetric('demand-analyst',{tasks:1});
       setAgent('competition-agent','working');state.competition=competitionSnapshot(normalized);setAgentMetric('competition-agent',{tasks:1});
-      setAgent('economics-agent','working');state.opportunityEconomics=normalized.slice(0,100).map(x=>({source:x.source,externalId:x.externalId,budgetUsd:x.budgetUsd,capability:x.capability,economics:x.economics}));setAgentMetric('economics-agent',{tasks:1});
+      setAgent('economics-agent','working');state.opportunityEconomics=normalized.slice(0,100).map(x=>({source:x.source,externalId:x.externalId,title:x.title,budgetUsd:x.budgetUsd,capability:x.capability,economics:x.economics,candidacy:explainCandidacy(x)}));setAgentMetric('economics-agent',{tasks:1});
 
       setAgent('pricing-agent','working');state.offerOptimization=optimizeOffers(normalized.filter(x=>x.source==='x402-bazaar'));setAgentMetric('pricing-agent',{tasks:1});
       setAgent('offer-architect','working');setAgentMetric('offer-architect',{tasks:1}); setAgent('distribution-agent','working');state.catalogReady=true;setAgentMetric('distribution-agent',{tasks:1});
@@ -212,19 +212,29 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
     if(/not_found|not_available/.test(text))return false;
     return true; // unknown shape — default to retrying a few times rather than losing the job
   }
-  function isAutoClaimCandidate(op){
-    if(!config.autoClaimJobs)return false;
+  // P1 fix (visibility): isAutoClaimCandidate used to just return true/false, so when
+  // EVERY discovered opportunity was rejected, nobody — not the owner, not me — could
+  // tell whether it was policy (autoClaimJobs off), economics (too expensive vs payout),
+  // capability (missing tooling), or something else. Same checks, but now they explain
+  // themselves, and that explanation gets stored per-opportunity for the dashboard.
+  function explainCandidacy(op){
+    const reasons=[];
+    if(!config.autoClaimJobs)reasons.push('auto_claim_disabled_in_policy');
     const key=opportunityKey(op);
-    if(handled.has(key))return false;
+    if(handled.has(key))reasons.push('already_handled_permanently_rejected_or_delivered');
     const attempt=claimAttempts[key];
-    if(attempt&&Date.now()-Date.parse(attempt.lastAttemptAt||0)<CLAIM_RETRY_BACKOFF_MS)return false;
-    if(!['clawlancer','t2000','dealwork'].includes(op.source))return false;
-    if(config.requireEscrowForAutoClaim&&!op.escrowed)return false;
-    if(Number(op.budgetUsd||0)<Number(config.minJobPayoutUsd||0))return false;
-    if(!op.capability?.executable||!op.economics?.allowed)return false;
-    if(op.capability.estimatedModelCostUsd>Number(op.budgetUsd||0)*(Number(config.maxApiCostPercentOfPayout||25)/100))return false;
-    return ['open','active','available','posted',''].includes(String(op.status||''));
+    if(attempt&&Date.now()-Date.parse(attempt.lastAttemptAt||0)<CLAIM_RETRY_BACKOFF_MS)reasons.push('recent_claim_attempt_still_in_backoff');
+    if(!['clawlancer','t2000','dealwork'].includes(op.source))reasons.push('source_not_in_auto_claim_allowlist');
+    if(config.requireEscrowForAutoClaim&&!op.escrowed)reasons.push('not_escrowed_and_escrow_required');
+    if(Number(op.budgetUsd||0)<Number(config.minJobPayoutUsd||0))reasons.push(`budget_below_minJobPayoutUsd:${config.minJobPayoutUsd}`);
+    if(!op.capability?.executable)reasons.push(`capability_not_executable:${op.capability?.mode||'unknown'}`);
+    if(!op.economics?.allowed)reasons.push(`economics_blocked:${op.economics?.reason||'unknown'}`);
+    const apiCostCeiling=Number(op.budgetUsd||0)*(Number(config.maxApiCostPercentOfPayout||25)/100);
+    if(Number(op.capability?.estimatedModelCostUsd||0)>apiCostCeiling)reasons.push(`estimated_model_cost_${op.capability?.estimatedModelCostUsd}_exceeds_${Math.round(Number(config.maxApiCostPercentOfPayout||25))}pct_of_payout_ceiling_${apiCostCeiling.toFixed(4)}`);
+    if(!['open','active','available','posted',''].includes(String(op.status||'')))reasons.push(`status_not_open:${op.status}`);
+    return { isCandidate:reasons.length===0, reasons };
   }
+  function isAutoClaimCandidate(op){ return explainCandidacy(op).isCandidate; }
   function scoreCandidate(op){return Number(op.economics?.expectedProfitUsd||0)*Math.max(0.1,Number(op.capability?.confidence||0));}
 
   async function processMarketplaceOpportunity(op){
