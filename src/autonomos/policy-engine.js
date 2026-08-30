@@ -66,7 +66,15 @@ export function validateAction(action = {}, config = {}) {
   if (!config.enabled) return { allowed:false, reason:'runtime_stopped' };
   if (action.kind === 'spend') {
     const amount = Number(action.amountUsd || 0);
-    if (config.zeroSpendMode || !config.allowExternalSpending) return { allowed:false, reason:'external_spending_disabled' };
+    if (config.zeroSpendMode) return { allowed:false, reason:'zero_spend_mode' };
+    // P0 fix: this used to require allowExternalSpending===true for ANY spend at all,
+    // which contradicted the admin UI's own documented precedence text ("Earned-funds-only
+    // (default) caps spend to money AutonomOS has actually already earned... Unrestricted
+    // only applies once both of the above are off") — meaning earnedFundsOnly was always
+    // supposed to be usable on its own, without also flipping the scarier "unrestricted
+    // spending" toggle. That mismatch was the real reason a correctly-configured
+    // Earned-funds-only setup still couldn't spend a cent on Firecrawl/E2B.
+    if (!config.earnedFundsOnly && !config.allowExternalSpending) return { allowed:false, reason:'external_spending_disabled' };
     if (!Number.isFinite(amount) || amount <= 0) return { allowed:false, reason:'invalid_amount' };
     if (amount > Number(config.maxPaidProcurementUsd || 0)) return { allowed:false, reason:'above_spend_limit' };
   }
