@@ -12,6 +12,7 @@ import { classifyOpportunity } from '../src/autonomos/capabilities.js';
 import { normalizeOpportunity } from '../src/autonomos/job-normalizer.js';
 import { connectorStatuses } from '../src/autonomos/connectors/index.js';
 import { createX402Gateway } from '../src/autonomos/x402.js';
+import { runTool, TOOL_COST_ESTIMATES_USD } from '../src/autonomos/tools.js';
 
 const wallet = '0x1f674bf085f6fed36fa198287d51edf0fe0bb9e2';
 const checks = [];
@@ -157,6 +158,41 @@ await ok('runtime boots without any paid API or private key', async () => {
   } finally {
     fs.rmSync(root, { recursive:true, force:true });
   }
+});
+
+await ok('P0: earned-funds spend still requires allowExternalSpending, not just budget headroom', () => {
+  // Regression test for the exact gap the ChatGPT audit flagged: zeroSpendMode:false plus
+  // available earned budget used to be enough to approve spend even with
+  // allowExternalSpending left false (the default). It must not be anymore.
+  const cfg = normalizeConfig({ enabled:true, zeroSpendMode:false, earnedFundsOnly:true, allowExternalSpending:false, availableSpendUsd:100 });
+  const spendy = evaluateOpportunity({ expectedRevenueUsd:10, successProbability:1, apiCostUsd:0.02 }, { ...cfg, availableSpendUsd:100 });
+  assert.equal(spendy.allowed, false);
+  assert.equal(spendy.reason, 'blocked_by_external_spending_disabled');
+  const cfgAllowed = normalizeConfig({ enabled:true, zeroSpendMode:false, earnedFundsOnly:true, allowExternalSpending:true, availableSpendUsd:100 });
+  const nowAllowed = evaluateOpportunity({ expectedRevenueUsd:10, successProbability:1, apiCostUsd:0.02 }, { ...cfgAllowed, availableSpendUsd:100 });
+  assert.equal(nowAllowed.allowed, true);
+});
+
+await ok('P0: runTool refuses to spend when policy disallows it, without calling the API', async () => {
+  const cfg = normalizeConfig({ enabled:true, zeroSpendMode:true });
+  const result = await runTool('web_search', { query:'test' }, { FIRECRAWL_API_KEY:'unused_should_never_be_used' }, { config:cfg, validateAction });
+  assert.equal(result.ok, false);
+  assert.ok(String(result.error).startsWith('spend_not_authorized'));
+  assert.ok(TOOL_COST_ESTIMATES_USD.web_search > 0);
+});
+
+await ok('P1: capability engine refuses dev-workstation jobs it cannot actually do', () => {
+  const op = normalizeOpportunity('clawlancer', { id:'y', title:'Fix a bug and open a PR', description:'Clone the GitHub repo, fix the failing test, and open a pull request', category:'coding', priceUsd:5 }, { escrowed:true });
+  const cap = classifyOpportunity(op, { llmEnabled:true });
+  assert.equal(cap.executable, false);
+  assert.equal(cap.mode, 'unsupported_missing_tooling');
+});
+
+await ok('Firecrawl and E2B are visible connector/tool health entries', () => {
+  const statuses = connectorStatuses({}, { enabled:false, configured:false, mode:'disabled' }, {});
+  assert.ok(statuses.some(x=>x.id==='firecrawl'));
+  assert.ok(statuses.some(x=>x.id==='e2b'));
+  assert.equal(statuses.find(x=>x.id==='firecrawl').status, 'needs_credentials');
 });
 
 console.log(`AutonomOS audit PASS: ${checks.length}/${checks.length} checks`);
