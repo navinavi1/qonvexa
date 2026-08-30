@@ -160,17 +160,25 @@ await ok('runtime boots without any paid API or private key', async () => {
   }
 });
 
-await ok('P0: earned-funds spend still requires allowExternalSpending, not just budget headroom', () => {
-  // Regression test for the exact gap the ChatGPT audit flagged: zeroSpendMode:false plus
-  // available earned budget used to be enough to approve spend even with
-  // allowExternalSpending left false (the default). It must not be anymore.
-  const cfg = normalizeConfig({ enabled:true, zeroSpendMode:false, earnedFundsOnly:true, allowExternalSpending:false, availableSpendUsd:100 });
-  const spendy = evaluateOpportunity({ expectedRevenueUsd:10, successProbability:1, apiCostUsd:0.02 }, { ...cfg, availableSpendUsd:100 });
-  assert.equal(spendy.allowed, false);
-  assert.equal(spendy.reason, 'blocked_by_external_spending_disabled');
-  const cfgAllowed = normalizeConfig({ enabled:true, zeroSpendMode:false, earnedFundsOnly:true, allowExternalSpending:true, availableSpendUsd:100 });
-  const nowAllowed = evaluateOpportunity({ expectedRevenueUsd:10, successProbability:1, apiCostUsd:0.02 }, { ...cfgAllowed, availableSpendUsd:100 });
-  assert.equal(nowAllowed.allowed, true);
+await ok('Earned-funds-only alone (without allowExternalSpending) permits spend within earned budget — matches the admin UI\'s own documented precedence', () => {
+  // This replaces an earlier regression test that had it backwards: a previous fix made
+  // allowExternalSpending a blanket AND-requirement for ANY spend, which silently broke
+  // the documented, safer default path (Earned-funds-only on its own) and was the actual
+  // reason a correctly-configured deployment still couldn't spend a cent on Firecrawl/E2B.
+  const cfg = normalizeConfig({ enabled:true, zeroSpendMode:false, earnedFundsOnly:true, allowExternalSpending:false });
+  const withinBudget = evaluateOpportunity({ expectedRevenueUsd:10, successProbability:1, apiCostUsd:0.02 }, { ...cfg, availableSpendUsd:1 });
+  assert.equal(withinBudget.allowed, true);
+  const overBudget = evaluateOpportunity({ expectedRevenueUsd:10, successProbability:1, apiCostUsd:0.02 }, { ...cfg, availableSpendUsd:0 });
+  assert.equal(overBudget.allowed, false);
+  assert.equal(overBudget.reason, 'blocked_by_earned_funds_cap');
+  const bothOff = normalizeConfig({ enabled:true, zeroSpendMode:false, earnedFundsOnly:false, allowExternalSpending:false });
+  const blocked = evaluateOpportunity({ expectedRevenueUsd:10, successProbability:1, apiCostUsd:0.02 }, { ...bothOff, availableSpendUsd:100 });
+  assert.equal(blocked.allowed, false);
+  assert.equal(blocked.reason, 'blocked_by_external_spending_disabled');
+  // validateAction (the per-tool-call gate) must agree with evaluateOpportunity here —
+  // this is what job-executor.js actually calls before offering Firecrawl/E2B to the LLM.
+  const cfgWithCeiling = normalizeConfig({ enabled:true, zeroSpendMode:false, earnedFundsOnly:true, allowExternalSpending:false, maxPaidProcurementUsd:1 });
+  assert.equal(validateAction({ kind:'spend', amountUsd:0.01 }, cfgWithCeiling).allowed, true);
 });
 
 await ok('P0: runTool refuses to spend when policy disallows it, without calling the API', async () => {
