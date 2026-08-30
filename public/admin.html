@@ -114,6 +114,25 @@
           </div>
         </div>
 
+        <section class="admin-panel autonomos-panel autonomos-t2000-card">
+          <div class="admin-panel-head autonomos-t2000-head">
+            <div>
+              <small>T2000 · PASSPORT CONNECT</small>
+              <h2>Connect this AutonomOS to t2000</h2>
+              <p class="settings-note">One-time Google OAuth connects the same t2000 Passport you already use. No new Agent ID, wallet or manual API key is created.</p>
+            </div>
+            <div class="autonomos-t2000-actions">
+              <span id="autonomos-t2000-badge" class="autonomos-mini-badge t2000-offline">Not connected</span>
+              <button id="autonomos-t2000-connect" class="button" type="button">Connect t2000</button>
+              <button id="autonomos-t2000-disconnect" class="admin-secondary" type="button" hidden>Disconnect</button>
+            </div>
+          </div>
+          <div id="autonomos-t2000-details" class="autonomos-t2000-details">
+            <span>Connect to enable Open Jobs, paid Service orders, claim, work-order fetch and delivery directly from this AutonomOS screen.</span>
+          </div>
+          <p id="autonomos-t2000-status" class="admin-status" role="status"></p>
+        </section>
+
         <div class="autonomos-stat-grid">
           <article class="autonomos-stat"><small>OWNER TREASURY</small><strong id="auto-treasury">—</strong><span>USDC · Base</span></article>
           <article class="autonomos-stat"><small>24H REVENUE</small><strong id="auto-revenue24">$0.00</strong><span>real settled revenue</span></article>
