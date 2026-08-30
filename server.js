@@ -153,8 +153,12 @@ app.get('/terms.html', (_req, res) => sendHtml(res, 'terms.html'));
 app.get('/refund.html', (_req, res) => sendHtml(res, 'refund.html'));
 app.get('/success.html', (_req, res) => sendHtml(res, 'success.html'));
 
-
-
+// Public OAuth Client ID Metadata Document used by MCP authorization servers that
+// support URL-form client IDs. It contains no secret and intentionally stays public.
+app.get('/oauth/t2000-client.json', (_req, res) => {
+  res.setHeader('Cache-Control', 'public, max-age=300');
+  res.json(autonomos.t2000ClientMetadata());
+});
 
 app.use('/api/admin', (_req, res, next) => {
   res.setHeader('Cache-Control', 'no-store');
@@ -372,6 +376,41 @@ app.post('/api/admin/autonomos/reset-claim-history', requireAdmin, requireSameSi
 
 app.post('/api/admin/autonomos/treasury/refresh', requireAdmin, requireSameSiteMutation, async (_req, res) => {
   res.json(await autonomos.refreshTreasury());
+});
+
+app.post('/api/admin/autonomos/t2000/connect', requireAdmin, requireSameSiteMutation,
+  rateLimit({ windowMs: 5 * 60 * 1000, max: 10 }),
+  async (_req, res) => {
+    try {
+      res.json(await autonomos.beginT2000Connect());
+    } catch (error) {
+      res.status(Number(error?.status || 502)).json({ error:clean(error?.message || 't2000 OAuth setup failed.', 400) });
+    }
+  }
+);
+
+// OAuth redirects come from Google/t2000, so the SameSite=Strict admin cookie may not be
+// present on this cross-site callback. The callback is authenticated by a cryptographically
+// random, single-use OAuth state value stored server-side; it does not expose owner data.
+app.get('/api/admin/autonomos/t2000/callback',
+  rateLimit({ windowMs: 5 * 60 * 1000, max: 20 }),
+  async (req, res) => {
+    try {
+      await autonomos.finishT2000Connect({ code:req.query.code, state:req.query.state, iss:req.query.iss, error:req.query.error, error_description:req.query.error_description });
+      logAdminEvent('t2000_oauth_connected', {});
+      res.redirect(303, '/admin?t2000=connected#autonomos');
+    } catch (error) {
+      const detail=clean(error?.message || 't2000 OAuth callback failed.', 240);
+      logAdminEvent('t2000_oauth_failed', { error:detail });
+      res.redirect(303, `/admin?t2000=error&detail=${encodeURIComponent(detail)}#autonomos`);
+    }
+  }
+);
+
+app.post('/api/admin/autonomos/t2000/disconnect', requireAdmin, requireSameSiteMutation, (_req, res) => {
+  const result=autonomos.disconnectT2000();
+  logAdminEvent('t2000_oauth_disconnected', {});
+  res.json(result);
 });
 
 app.get('/api/admin/autonomos/product-preview/:productId', requireAdmin,
