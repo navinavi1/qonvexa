@@ -38,9 +38,27 @@ export function createX402Gateway({ ownerWallet, siteUrl, env=process.env, onSet
   };
 }
 
+// P0 fix (external audit): paymentRequirements() below does `priceUsd × 10^decimals`,
+// which is only correct for an asset that trades ~1:1 with USD. That's true for USDC/
+// USDT/PYUSD/DAI, but NOT for ETH, SOL, BTC, or even EURC (a different currency, not a
+// conversion-free peg) — configuring one of those via AUTONOMOS_X402_ACCEPTS_JSON would
+// silently charge e.g. "0.03 ETH" for a $0.03 product, ~1000x overcharging a payer. Until
+// there's a real USD→asset oracle/FX quote with slippage+expiry validation, only accept
+// assets whose symbol is a known USD-pegged stablecoin.
+const USD_PEGGED_SYMBOLS = new Set(['USDC','USDT','PYUSD','DAI','USDP','GUSD','FDUSD']);
 function parseAssets(raw){
   if(!raw)return DEFAULT_ASSETS.map(x=>({...x}));
-  try{const rows=JSON.parse(String(raw));if(!Array.isArray(rows))return DEFAULT_ASSETS.map(x=>({...x}));return rows.filter(x=>/^eip155:\d+$|^solana:/.test(String(x.network||''))&&String(x.asset||'').length>10&&Number(x.decimals)>=0&&Number(x.decimals)<=30).map(x=>({network:String(x.network),networkName:String(x.networkName||x.network),symbol:String(x.symbol||'TOKEN').toUpperCase().slice(0,16),asset:String(x.asset),decimals:Number(x.decimals),live:x.live!==false,scheme:String(x.scheme||'exact')}));}catch{return DEFAULT_ASSETS.map(x=>({...x}));}
+  try{
+    const rows=JSON.parse(String(raw));
+    if(!Array.isArray(rows))return DEFAULT_ASSETS.map(x=>({...x}));
+    const parsed=rows.filter(x=>/^eip155:\d+$|^solana:/.test(String(x.network||''))&&String(x.asset||'').length>10&&Number(x.decimals)>=0&&Number(x.decimals)<=30)
+      .map(x=>({network:String(x.network),networkName:String(x.networkName||x.network),symbol:String(x.symbol||'TOKEN').toUpperCase().slice(0,16),asset:String(x.asset),decimals:Number(x.decimals),live:x.live!==false,scheme:String(x.scheme||'exact')}));
+    const safe=parsed.filter(x=>USD_PEGGED_SYMBOLS.has(x.symbol));
+    // If every configured asset got filtered out (e.g. someone tried to add ETH/SOL/BTC
+    // only), fail back to the known-safe default rather than silently accepting nothing
+    // AND rather than silently accepting the unsafe asset.
+    return safe.length?safe:DEFAULT_ASSETS.map(x=>({...x}));
+  }catch{return DEFAULT_ASSETS.map(x=>({...x}));}
 }
 function paymentRequirements(priceUsd,payTo,meta){const atomic=BigInt(Math.max(1,Math.round(Number(priceUsd||0)*(10**meta.decimals))));return{scheme:meta.scheme||'exact',network:meta.network,amount:atomic.toString(),asset:meta.asset,payTo,maxTimeoutSeconds:60,extra:{name:meta.symbol,version:'2'}};}
 function bazaarExtension(product){const info={input:{type:'http',method:'GET',discoverable:true,queryParams:{url:'https://example.com'}},inputSchema:{type:'object',properties:{url:{type:'string',format:'uri',description:'Public http(s) website URL to analyze.'}},required:['url'],additionalProperties:false},output:{type:'json',example:{product:product.id,target:'https://example.com',generatedAt:'2026-01-01T00:00:00.000Z'}}};return{bazaar:{info,schema:{type:'object',properties:{input:{type:'object'},inputSchema:{type:'object'},output:{type:'object'}},required:['input','inputSchema','output'],additionalProperties:true}}};}
