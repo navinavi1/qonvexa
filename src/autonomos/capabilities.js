@@ -6,6 +6,14 @@ const RULES = [
   { skill:'data-transform', categories:['data'], words:['csv','json','normalize','extract','transform','parse','structured'] }
 ];
 
+// P1 fix: the Code Worker only has run_python (an isolated E2B sandbox, no persistent
+// filesystem/repo, no network-accessible git remote, no shell, no browser). A job asking
+// for repo/deploy/PR/CI work matched the 'code-analysis' skill on words like "code" or
+// "test" alone and was scored executable=true purely because an LLM was configured —
+// there was no check for whether the *specific* tooling the task needs actually exists.
+// This is a hard capability ceiling, independent of confidence score or llmEnabled.
+const REQUIRES_DEV_WORKSTATION = /\b(git\s+(clone|push|pull|checkout|commit)|pull request|\bpr\b|open (a |an )?pr\b|merge request|npm install|yarn install|pip install|docker(file)?|kubernetes|k8s|ci\/cd|github actions|ssh\b|shell access|terminal access|deploy(ment)?\b|production server|upload (an? )?artifact|browser automation|headless browser|screenshot of the (site|app|page))\b/i;
+
 export function classifyOpportunity(opportunity, { llmEnabled=false } = {}) {
   const hay = `${opportunity.category} ${opportunity.title} ${opportunity.description}`.toLowerCase();
   const safety = safetyCheck(hay);
@@ -13,13 +21,15 @@ export function classifyOpportunity(opportunity, { llmEnabled=false } = {}) {
     .sort((a,b)=>b.score-a.score)[0];
   const skill = matched?.score > 0 ? matched.rule.skill : 'unknown';
   const deterministic = canDoDeterministically(opportunity, skill);
+  const needsDevWorkstation = REQUIRES_DEV_WORKSTATION.test(hay);
   return {
     skill,
     confidence:Math.min(1, (matched?.score || 0)/5),
     safe:safety.safe,
     safetyReason:safety.reason,
-    executable:safety.safe && (deterministic || llmEnabled),
-    mode:deterministic ? 'deterministic' : llmEnabled ? 'llm' : 'unsupported_without_llm',
+    executable:safety.safe && !needsDevWorkstation && (deterministic || llmEnabled),
+    mode:needsDevWorkstation ? 'unsupported_missing_tooling' : deterministic ? 'deterministic' : llmEnabled ? 'llm' : 'unsupported_without_llm',
+    missingTooling:needsDevWorkstation,
     estimatedModelCostUsd:deterministic ? 0 : llmEnabled ? estimateLlmCost(opportunity) : 0
   };
 }
