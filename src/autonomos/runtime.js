@@ -9,7 +9,8 @@ import { MACHINE_PRODUCTS, executeProduct } from './products.js';
 import { createX402Gateway } from './x402.js';
 import {
   connectorStatuses, discoverMarketOpportunities, bootstrapMarketCredentials,
-  claimMarketplaceJob, deliverMarketplaceJob, readMarketplaceWallets, syncMarketplaceTransactions
+  claimMarketplaceJob, deliverMarketplaceJob, readMarketplaceWallets, syncMarketplaceTransactions,
+  submitDealworkBid, checkDealworkBidStatus, startDealworkContract
 } from './connectors/index.js';
 import { createLlmClient } from './llm.js';
 import { classifyOpportunity } from './capabilities.js';
@@ -49,6 +50,7 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
   // see writeInFlightJob/recoverInFlightJobs for why this exists (P1: claimed-job/restart protection).
   let inFlightJobs = store.readJson('in-flight-jobs.json', {});
   let pendingHumanClaims = store.readJson('pending-human-claims.json', []);
+  let pendingDealworkBids = store.readJson('pending-dealwork-bids.json', {});
 
   let x402Idempotency = store.readJson('x402-idempotency.json', {});
   const x402 = createX402Gateway({ ownerWallet:wallet, siteUrl, env, onSettlement:recordSettlement, idempotency:{
@@ -84,7 +86,7 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
         metrics, agents, children,
         products:currentProducts().map(product=>({ ...product, payment:x402.status() })),
         connectors:connectorStatuses(env, x402.status(), credentials).map(c=>{ const h=state.connectorHealth?.[c.id]||state.connectorHealth?.[`${c.id}-public`]||null; return h&&c.configured&&!h.ok?{...c,status:'degraded',health:h}:{...c,health:h}; }),
-        opportunities, jobs, events, missing:missingSetup(), pendingHumanClaims
+        opportunities, jobs, events, missing:missingSetup(), pendingHumanClaims, pendingDealworkBidsCount:Object.keys(pendingDealworkBids).length
       };
     },
 
@@ -159,6 +161,7 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
     setAgent('prime-governor','working'); setAgent('policy-agent','working'); setAgent('opportunity-radar','working');
     try{
       cleanupExpiredChildren();
+      await pollDealworkBids().catch(()=>{});
       const boot=await bootstrapMarketCredentials({env,credentials,ownerWallet:wallet,storeCredential:(id,value)=>{credentials={...credentials,[id]:value};store.writeSecretJson('credentials.private.json',credentials);}});
       state.bootstrapHealth=boot;
       const discovery=await discoverMarketOpportunities({env,credentials,limit:100}); state.connectorHealth=discovery.health;
@@ -237,7 +240,9 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
     // Superteam Earn has no escrow concept at all (competitive submission, judged by a
     // human sponsor) — requiring escrowed:true for it would permanently block every
     // Superteam opportunity regardless of quality, so it's exempt from this specific check.
-    if(config.requireEscrowForAutoClaim&&!op.escrowed&&op.source!=='superteam')reasons.push('not_escrowed_and_escrow_required');
+    // Dealwork bid-mode jobs are the same shape while a bid is outstanding: escrow only
+    // locks once the buyer accepts a bid, which hasn't happened yet at discovery time.
+    if(config.requireEscrowForAutoClaim&&!op.escrowed&&op.source!=='superteam'&&!(op.source==='dealwork'&&op.claimMode==='bid'))reasons.push('not_escrowed_and_escrow_required');
     if(Number(op.budgetUsd||0)<Number(config.minJobPayoutUsd||0))reasons.push(`budget_below_minJobPayoutUsd:${config.minJobPayoutUsd}`);
     if(!op.capability?.executable)reasons.push(`capability_not_executable:${op.capability?.mode||'unknown'}`);
     if(!op.economics?.allowed)reasons.push(`economics_blocked:${op.economics?.reason||'unknown'}`);
@@ -253,6 +258,32 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
     const key=opportunityKey(op);
     setAgent('job-router','working');setAgent('policy-agent','working');setAgent('economics-agent','working');
     const jobId=`ext_${Date.now().toString(36)}_${crypto.randomBytes(4).toString('hex')}`; const startedAt=new Date().toISOString();
+    // P1 fix: dealwork.ai bid-mode jobs (the higher-value tier — real published examples
+    // run $5-$80+, not the $0.01-0.03 open-mode listings) can't be claimed instantly; per
+    // their own documented flow, a bid is submitted and the buyer decides minutes to days
+    // later. Submitting the bid is NOT "claiming" the job — nothing is escrowed yet and no
+    // work should start — so this returns early here instead of falling into the same
+    // claim→execute→deliver pipeline every other opportunity uses. See pollDealworkBids()
+    // for what happens once (if) the buyer accepts.
+    if(op.source==='dealwork'&&op.claimMode==='bid'){
+      store.append('jobs.ndjson',{id:jobId,source:op.source,externalId:op.externalId,title:op.title,budgetUsd:op.budgetUsd,currency:op.currency,status:'bidding',startedAt});
+      const bid=await submitDealworkBid(op,{env,credentials});
+      if(!bid.ok){
+        handled.add(key);persistSet('handled-opportunities.json',handled);
+        store.append('jobs.ndjson',{id:jobId,source:op.source,externalId:op.externalId,status:'bid_failed',at:new Date().toISOString(),reason:bid.reason||''});
+        event('market_bid_failed',{jobId,source:op.source,externalId:op.externalId,reason:bid.reason||''});
+        return{claimed:false,delivered:false};
+      }
+      // One bid per job per agent (platform rule) — mark handled immediately so discovery
+      // never tries to bid on this same job again; the OUTCOME is tracked separately in
+      // pendingDealworkBids so a later 'accepted' status can still be acted on.
+      handled.add(key);persistSet('handled-opportunities.json',handled);
+      pendingDealworkBids[bid.bidId]={jobId,op,submittedAt:new Date().toISOString()};
+      store.writeJson('pending-dealwork-bids.json',pendingDealworkBids);
+      store.append('jobs.ndjson',{id:jobId,source:op.source,externalId:op.externalId,status:'bid_submitted',bidId:bid.bidId,at:new Date().toISOString()});
+      event('market_bid_submitted',{jobId,source:op.source,externalId:op.externalId,bidId:bid.bidId,proposedAmountUsd:op.budgetUsd});
+      return{claimed:false,delivered:false,bidSubmitted:true};
+    }
     store.append('jobs.ndjson',{id:jobId,source:op.source,externalId:op.externalId,title:op.title,budgetUsd:op.budgetUsd,currency:op.currency,status:'claiming',startedAt});event('market_job_claiming',{jobId,source:op.source,externalId:op.externalId,budgetUsd:op.budgetUsd});
     const claim=await claimMarketplaceJob(op,{env,credentials});
     if(!claim.ok){
@@ -337,6 +368,60 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
   // an already-claimed job would just fail or double-spend escrow). This is best-effort:
   // if the underlying opportunity object is missing fields the connector needs, it fails
   // like any other execution_failed job and is cleared, rather than retried forever.
+  // P1 fix: checks every outstanding dealwork.ai bid once per full cycle (bid decisions
+  // arrive over minutes-to-days per their own docs, not seconds, so this doesn't need the
+  // 15s fast-claim cadence). An 'accepted' bid already has an escrow-locked contract on
+  // dealwork's side — this starts it and hands off to the exact same execute+deliver path
+  // every other marketplace uses, by constructing the same {ok:true,jobId} shape
+  // claimMarketplaceJob would have returned, so deliverMarketplaceJob's existing dealwork
+  // branch (deliverables → SUBMIT_WORK) needs no changes at all.
+  async function pollDealworkBids(){
+    const entries=Object.entries(pendingDealworkBids);
+    for(const [bidId,record] of entries){
+      const status=await checkDealworkBidStatus(bidId,{env,credentials});
+      if(!status.ok)continue; // transient — leave it pending, try again next cycle
+      if(status.status==='pending')continue;
+      if(status.status!=='accepted'){
+        // rejected / withdrawn / expired — nothing more to do, already in `handled`.
+        delete pendingDealworkBids[bidId];store.writeJson('pending-dealwork-bids.json',pendingDealworkBids);
+        event('market_bid_resolved',{bidId,status:status.status,source:'dealwork'});
+        continue;
+      }
+      if(!status.contractId){continue;} // accepted but contract not linked yet — retry next cycle
+      const {jobId,op}=record;
+      const worker=pickExternalWorker(op.capability?.skill);setWorkerStatus(worker,'working');
+      const abortController=new AbortController();
+      activeJobs.set(jobId,{id:jobId,source:op.source,externalId:op.externalId,workerId:worker.id,cancelled:false,abortController});
+      let deliverable;
+      try{
+        const started=await startDealworkContract(status.contractId,{env,credentials});
+        if(!started.ok)throw new Error(`dealwork_start_work_failed:${started.reason||'unknown'}`);
+        store.append('jobs.ndjson',{id:jobId,source:op.source,externalId:op.externalId,status:'claimed',transactionId:status.contractId,workerId:worker.id,at:new Date().toISOString()});
+        event('market_job_claimed',{jobId,source:op.source,externalId:op.externalId,transactionId:status.contractId,recovered:false,fromBid:true});
+        deliverable=await executeExternalOpportunity(op,op.capability,{llm,siteUrl,env,config,abortSignal:abortController.signal});
+        validateExternalDeliverable(deliverable,op);
+        const syntheticClaim={ok:true,jobId:status.contractId,transactionId:status.contractId};
+        const delivery=await deliverMarketplaceJob(op,syntheticClaim,deliverable,{env,credentials,recordPendingClaim});
+        if(!delivery.ok)throw new Error(`delivery_failed:${delivery.reason||'unknown'}`);
+        store.append('jobs.ndjson',{id:jobId,source:op.source,externalId:op.externalId,status:'delivered',transactionId:delivery.transactionId||status.contractId,workerId:worker.id,deliverableHash:deliverable.hash,at:new Date().toISOString()});
+        const actualCostUsd=computeActualCostUsd(deliverable,op.capability);
+        const toolCostUsd=Number(deliverable.evidence?.toolCostUsd||0);
+        setWorkerMetric(worker,{tasks:1,cost:actualCostUsd+toolCostUsd});
+        recordCost({jobId,source:op.source,externalId:op.externalId,amountUsd:actualCostUsd,kind:'model',estimated:!deliverable.evidence?.usage});
+        if(toolCostUsd>0)recordCost({jobId,source:op.source,externalId:op.externalId,amountUsd:toolCostUsd,kind:'tool_api',estimated:true,note:'firecrawl_e2b_call_cost_estimate'});
+        event('market_job_delivered',{jobId,source:op.source,externalId:op.externalId,transactionId:delivery.transactionId||status.contractId,fromBid:true});
+      }catch(error){
+        store.append('jobs.ndjson',{id:jobId,source:op.source,externalId:op.externalId,status:'execution_failed',workerId:worker.id,error:String(error?.message||error).slice(0,300),at:new Date().toISOString()});
+        incrementWorkerError(worker);event('market_job_failed',{jobId,source:op.source,externalId:op.externalId,error:String(error?.message||error).slice(0,220),fromBid:true});
+        const incurredToolCostUsd=Number(deliverable?.evidence?.toolCostUsd||0);
+        if(incurredToolCostUsd>0)recordCost({jobId,source:op.source,externalId:op.externalId,amountUsd:incurredToolCostUsd,kind:'tool_api',estimated:true,note:'job_failed_after_tool_calls'});
+      }finally{
+        activeJobs.delete(jobId);setWorkerStatus(worker,'idle');
+        delete pendingDealworkBids[bidId];store.writeJson('pending-dealwork-bids.json',pendingDealworkBids);
+      }
+    }
+  }
+
   async function recoverInFlightJobs(){
     const pending=Object.values(inFlightJobs);
     for(const record of pending){
