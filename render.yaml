@@ -93,11 +93,7 @@ services:
       - key: CLAWLANCER_AGENT_ID
         sync: false
       - key: T2000_MCP_URL
-        sync: false
-      - key: T2000_SESSION_TOKEN
-        sync: false
-      - key: T2000_PASSPORT_ADDRESS
-        sync: false
+        value: "https://mcp.t2000.ai/mcp"
       - key: AGENTVERSE_API_KEY
         sync: false
       - key: AUTONOMOS_LLM_BASE_URL
