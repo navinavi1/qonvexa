@@ -48,6 +48,7 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
   // Jobs that survived past a successful marketplace claim but not yet past delivery —
   // see writeInFlightJob/recoverInFlightJobs for why this exists (P1: claimed-job/restart protection).
   let inFlightJobs = store.readJson('in-flight-jobs.json', {});
+  let pendingHumanClaims = store.readJson('pending-human-claims.json', []);
 
   let x402Idempotency = store.readJson('x402-idempotency.json', {});
   const x402 = createX402Gateway({ ownerWallet:wallet, siteUrl, env, onSettlement:recordSettlement, idempotency:{
@@ -83,7 +84,7 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
         metrics, agents, children,
         products:currentProducts().map(product=>({ ...product, payment:x402.status() })),
         connectors:connectorStatuses(env, x402.status(), credentials).map(c=>{ const h=state.connectorHealth?.[c.id]||state.connectorHealth?.[`${c.id}-public`]||null; return h&&c.configured&&!h.ok?{...c,status:'degraded',health:h}:{...c,health:h}; }),
-        opportunities, jobs, events, missing:missingSetup()
+        opportunities, jobs, events, missing:missingSetup(), pendingHumanClaims
       };
     },
 
@@ -232,8 +233,11 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
     if(handled.has(key))reasons.push('already_handled_permanently_rejected_or_delivered');
     const attempt=claimAttempts[key];
     if(attempt&&Date.now()-Date.parse(attempt.lastAttemptAt||0)<CLAIM_RETRY_BACKOFF_MS)reasons.push('recent_claim_attempt_still_in_backoff');
-    if(!['clawlancer','t2000','dealwork'].includes(op.source))reasons.push('source_not_in_auto_claim_allowlist');
-    if(config.requireEscrowForAutoClaim&&!op.escrowed)reasons.push('not_escrowed_and_escrow_required');
+    if(!['clawlancer','t2000','dealwork','superteam'].includes(op.source))reasons.push('source_not_in_auto_claim_allowlist');
+    // Superteam Earn has no escrow concept at all (competitive submission, judged by a
+    // human sponsor) — requiring escrowed:true for it would permanently block every
+    // Superteam opportunity regardless of quality, so it's exempt from this specific check.
+    if(config.requireEscrowForAutoClaim&&!op.escrowed&&op.source!=='superteam')reasons.push('not_escrowed_and_escrow_required');
     if(Number(op.budgetUsd||0)<Number(config.minJobPayoutUsd||0))reasons.push(`budget_below_minJobPayoutUsd:${config.minJobPayoutUsd}`);
     if(!op.capability?.executable)reasons.push(`capability_not_executable:${op.capability?.mode||'unknown'}`);
     if(!op.economics?.allowed)reasons.push(`economics_blocked:${op.economics?.reason||'unknown'}`);
@@ -286,7 +290,7 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
       const execOp=claim.workOrder?{...op,__workOrderRaw:claim.workOrder,description:`${op.description}\n\n[t2000 job_status work order]\n${typeof claim.workOrder==='string'?claim.workOrder:JSON.stringify(claim.workOrder).slice(0,4000)}`}:op;
       deliverable=await executeExternalOpportunity(execOp,op.capability,{llm,siteUrl,env,config,abortSignal:abortController.signal});
       setAgent('qa-evaluator','working'); validateExternalDeliverable(deliverable,execOp);
-      const delivery=await deliverMarketplaceJob(op,claim,deliverable,{env,credentials});
+      const delivery=await deliverMarketplaceJob(op,claim,deliverable,{env,credentials,recordPendingClaim});
       if(!delivery.ok)throw new Error(`delivery_failed:${delivery.reason||'unknown'}`);
       store.append('jobs.ndjson',{id:jobId,source:op.source,externalId:op.externalId,status:'delivered',transactionId:delivery.transactionId||claim.transactionId||'',workerId:worker.id,deliverableHash:deliverable.hash,at:new Date().toISOString()});
       const actualCostUsd=computeActualCostUsd(deliverable,op.capability);
@@ -321,6 +325,10 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
 
   function writeInFlightJob(jobId,record){inFlightJobs[jobId]=record;store.writeJson('in-flight-jobs.json',inFlightJobs);}
   function clearInFlightJob(jobId){if(!(jobId in inFlightJobs))return;delete inFlightJobs[jobId];store.writeJson('in-flight-jobs.json',inFlightJobs);}
+  // Superteam Earn (and any future non-escrow, human-claimed marketplace) can't settle
+  // automatically — a human must visit claimUrl with their own wallet. Without this list
+  // surfaced somewhere, a win is invisible and the money is functionally unclaimable.
+  function recordPendingClaim(entry){ pendingHumanClaims.unshift({...entry, id:`claim_${Date.now().toString(36)}`}); if(pendingHumanClaims.length>50)pendingHumanClaims.length=50; store.writeJson('pending-human-claims.json',pendingHumanClaims); event('pending_human_claim_created',{title:entry.title,claimUrl:entry.claimUrl}); }
 
   // Runs once at startup: any job that made it past claimMarketplaceJob (escrow already
   // locked on the marketplace) but never reached a terminal 'delivered'/'execution_failed'
@@ -342,7 +350,7 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
         const execOp=claim.workOrder?{...op,__workOrderRaw:claim.workOrder,description:`${op.description}\n\n[t2000 job_status work order]\n${typeof claim.workOrder==='string'?claim.workOrder:JSON.stringify(claim.workOrder).slice(0,4000)}`}:op;
         const deliverable=await executeExternalOpportunity(execOp,op.capability,{llm,siteUrl,env,config,abortSignal:abortController.signal});
         validateExternalDeliverable(deliverable,execOp);
-        const delivery=await deliverMarketplaceJob(op,claim,deliverable,{env,credentials});
+        const delivery=await deliverMarketplaceJob(op,claim,deliverable,{env,credentials,recordPendingClaim});
         if(!delivery.ok)throw new Error(`delivery_failed:${delivery.reason||'unknown'}`);
         store.append('jobs.ndjson',{id:jobId,source:op.source,externalId:op.externalId,status:'delivered',transactionId:delivery.transactionId||claim.transactionId||'',workerId:worker.id,deliverableHash:deliverable.hash,at:new Date().toISOString(),recovered:true});
         const actualCostUsd=computeActualCostUsd(deliverable,op.capability);
