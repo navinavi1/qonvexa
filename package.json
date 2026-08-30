@@ -15,7 +15,7 @@
     "autonomos2-flow-test": "node scripts/autonomos2-flow-test.mjs"
   },
   "dependencies": {
-    "@e2b/code-interpreter": "latest",
+    "@e2b/code-interpreter": "^1.2.0",
     "dotenv": "16.4.5",
     "express": "4.21.1",
     "helmet": "8.0.0",
