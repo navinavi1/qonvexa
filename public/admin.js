@@ -165,12 +165,18 @@ function renderAutonomOS(){
     // were always 100% x402-bazaar (an API-buying price feed, not a job we can earn from —
     // it's correctly excluded from auto-claim) which buried the real Clawlancer/Dealwork/
     // t2000 earning opportunities the owner actually needs to see the block reason for.
-    const rows=(a.runtime?.opportunityEconomics||[]).filter(x=>['clawlancer','dealwork','t2000'].includes(x.source));
+    const rows=(a.runtime?.opportunityEconomics||[]).filter(x=>['clawlancer','dealwork','t2000','superteam'].includes(x.source));
     candidacy.innerHTML=rows.slice(0,30).map(x=>{
       const isCandidate=x.candidacy?.isCandidate;
       const reasons=(x.candidacy?.reasons||[]);
       return `<article class="autonomos-event"><div class="event-row"><b>${esc(x.title||x.externalId||'Untitled')}</b><span class="status ${isCandidate?'s-ready':'s-error'}">${isCandidate?'Would auto-claim':'Blocked'}</span></div><p>${esc(pretty(x.source))} · ${usd(x.budgetUsd)}${reasons.length?` · <span class="job-fail-reason">${esc(reasons.join(' · '))}</span>`:''}</p></article>`;
-    }).join('')||emptyCard('No Clawlancer/Dealwork/t2000 opportunities observed yet this cycle (x402-bazaar signals are hidden here — that feed is for buying APIs, not earning from jobs).');
+    }).join('')||emptyCard('No Clawlancer/Dealwork/t2000/Superteam opportunities observed yet this cycle (x402-bazaar signals are hidden here — that feed is for buying APIs, not earning from jobs).');
+  }
+
+  const pendingClaims=el('#autonomos-pending-claims');
+  if(pendingClaims){
+    const claims=a.runtime?.pendingHumanClaims||[];
+    pendingClaims.innerHTML=claims.slice(0,20).map(c=>`<article class="autonomos-event"><div class="event-row"><b>${esc(c.title||c.listingId||'Superteam submission')}</b><span class="status s-ready">Needs your claim</span></div><p>Submitted ${esc(formatDate(c.submittedAt))} · <a href="${esc(c.claimUrl)}" target="_blank" rel="noopener">${esc(c.claimUrl)}</a></p></article>`).join('')||emptyCard('No Superteam submissions yet — nothing to claim.');
   }
 
   const wallet=el('#autonomos-wallet');
