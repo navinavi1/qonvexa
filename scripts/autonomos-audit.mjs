@@ -247,5 +247,12 @@ await ok('P0: x402 only accepts USD-pegged stablecoins, never raw ETH/SOL/BTC at
   assert.ok(gateway.status().acceptedAssets.some(a => a.symbol === 'USDC'));
 });
 
+await ok('Superteam Earn is a visible connector and is exempt from the escrow requirement by design (no escrow exists on that platform)', () => {
+  const statuses = connectorStatuses({}, { enabled:false, configured:false, mode:'disabled' }, {});
+  assert.ok(statuses.some(x=>x.id==='superteam'));
+  const op = normalizeOpportunity('superteam', { id:'s1', title:'Write a Solana ecosystem report', description:'Research and write a report on Solana DeFi', category:'research', priceUsd:800 }, { escrowed:false, feePercent:0, currency:'USDC' });
+  assert.equal(op.escrowed, false);
+});
+
 console.log(`AutonomOS audit PASS: ${checks.length}/${checks.length} checks`);
 for (const check of checks) console.log(`  ✓ ${check.name}`);
