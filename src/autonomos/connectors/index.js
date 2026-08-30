@@ -199,13 +199,19 @@ async function discoverDealwork(env,credentials,limit){
   const response=await fetch(`https://dealwork.ai/api/v1/jobs?per_page=${Math.min(50,limit)}&sort=newest`,{headers:{accept:'application/json','user-agent':'AutonomOS/2.0',authorization:`Bearer ${key}`},signal:AbortSignal.timeout(12000)});
   const body=await safeJson(response); if(!response.ok) return {signals:[],health:{ok:false,status:response.status,error:body?.error?.message||body?.error||''}};
   const rows=Array.isArray(body?.data)?body.data:[];
-  // Only jobMode:'open' jobs support instant claim (POST /jobs/{id}/claim) which matches our
-  // claim->execute->deliver state machine. jobMode:'bid' jobs require submitting a bid and
-  // waiting for the buyer to accept it — a different, asynchronous flow we don't implement
-  // yet, so they're filtered out here rather than claimed and failing.
+  // P1 fix: jobMode:'open' jobs support instant claim, but jobMode:'bid' jobs — per
+  // dealwork.ai's own published skill.md — are a real, documented, two-step flow (submit
+  // a bid, wait for the buyer to accept it, THEN execute) and are usually the
+  // higher-value jobs on this marketplace. They were filtered out entirely before because
+  // that async wait didn't fit the claim→execute→deliver pipeline; they're now tagged
+  // claimMode:'bid' and handled by a separate submit-then-poll path (see submitDealworkBid
+  // / pollDealworkBids in runtime.js) instead of being discarded.
   const openRows=rows.filter(row=>!row.jobMode||row.jobMode==='open');
-  const signals=openRows.map(row=>normalizeOpportunity('dealwork',{...row,budgetUsd:Number(row.fixedPrice??row.budget_max??row.budgetMax??row.budget_min??0)},{feePercent:10,currency:'USD',network:'stripe',escrowed:true,claimMode:'automatic',status:row.status||'open'}));
-  return {signals,health:{ok:true,count:signals.length,totalOpenJobs:rows.length,filteredOutBidMode:rows.length-openRows.length}};
+  const bidRows=rows.filter(row=>row.jobMode==='bid'&&row.biddingDeadline&&new Date(row.biddingDeadline).getTime()>Date.now());
+  const openSignals=openRows.map(row=>normalizeOpportunity('dealwork',{...row,budgetUsd:Number(row.fixedPrice??row.budget_max??row.budgetMax??row.budget_min??0)},{feePercent:10,currency:'USD',network:'stripe',escrowed:true,claimMode:'automatic',status:row.status||'open'}));
+  const bidSignals=bidRows.map(row=>normalizeOpportunity('dealwork',{...row,budgetUsd:Number(row.budgetMax??row.budget_max??row.budgetMin??row.budget_min??0)},{feePercent:10,currency:'USD',network:'stripe',escrowed:false,claimMode:'bid',status:row.status||'open'}));
+  const signals=[...openSignals,...bidSignals];
+  return {signals,health:{ok:true,count:signals.length,totalOpenJobs:rows.length,openMode:openSignals.length,bidMode:bidSignals.length}};
 }
 
 async function discoverClawlancer(env,credentials,limit){
@@ -386,6 +392,58 @@ async function dealworkAction(kind,opportunity,{env,credentials,claim,deliverabl
 
 function auth(key){return{accept:'application/json','user-agent':'AutonomOS/2.0',authorization:`Bearer ${key}`}}
 async function safeJson(response){try{return await response.json()}catch{return{}}}
+
+// P1 fix: submit-then-wait implementation of dealwork.ai's documented bid flow (see
+// skill.md: POST /jobs/{id}/bids -> wait for buyer -> GET /bids/mine to see acceptance ->
+// contract already exists in escrow_locked -> START_WORK -> execute -> deliver). We bid at
+// the job's own budgetMax since we have no competitive-pricing intelligence — this is a
+// deliberately simple default, not a strategy; our own profit-engine economics check
+// (already run before this is ever called, same as any other candidate) is what decides
+// whether that price is even worth bidding at.
+export async function submitDealworkBid(opportunity,{env=process.env,credentials={}}={}){
+  const key=String(env.DEALWORK_API_KEY||credentials?.dealwork?.apiKey||''); if(!key)return{ok:false,reason:'dealwork_api_key_missing'};
+  const headers={...auth(key),'content-type':'application/json'};
+  const proposedAmount=Number(opportunity.budgetUsd||0).toFixed(2);
+  const proposalText=String(`Automated proposal for "${opportunity.title}". Approach: analyze the requirements, produce the deliverable directly matching the stated acceptance criteria, and submit for review. Estimated turnaround: under 1 hour.`).slice(0,900);
+  try{
+    const response=await fetch(`https://dealwork.ai/api/v1/jobs/${encodeURIComponent(opportunity.externalId)}/bids`,{method:'POST',headers,body:JSON.stringify({proposedAmount,estimatedHours:1,proposalText}),signal:AbortSignal.timeout(15000)});
+    const body=await safeJson(response);
+    if(!response.ok)return{ok:false,reason:`http_${response.status}:${body?.error?.code||''}:${String(body?.error?.message||'').slice(0,120)}`};
+    const bidId=String(body?.data?.id||body?.id||''); if(!bidId)return{ok:false,reason:'dealwork_bid_missing_id'};
+    return{ok:true,bidId};
+  }catch(error){return{ok:false,reason:String(error?.message||error).slice(0,200)}}
+}
+
+// Polls our own outstanding bids and reports which ones the buyer has acted on. Does NOT
+// execute or deliver anything itself — runtime.js owns that, the same way it already owns
+// execution for every other marketplace, so LLM/tool-cost accounting and Emergency Stop
+// wiring stay in one place instead of being duplicated per-connector.
+export async function checkDealworkBidStatus(bidId,{env=process.env,credentials={}}={}){
+  const key=String(env.DEALWORK_API_KEY||credentials?.dealwork?.apiKey||''); if(!key)return{ok:false,reason:'dealwork_api_key_missing'};
+  try{
+    const response=await fetch(`https://dealwork.ai/api/v1/bids/mine?per_page=50`,{headers:auth(key),signal:AbortSignal.timeout(12000)});
+    const body=await safeJson(response); if(!response.ok)return{ok:false,reason:`http_${response.status}`};
+    const rows=Array.isArray(body?.data)?body.data:[];
+    const bid=rows.find(b=>String(b?.id||'')===bidId);
+    if(!bid)return{ok:true,status:'not_found'};
+    return{ok:true,status:String(bid.status||'pending'),contractId:String(bid.contractId||bid.contract?.id||'')};
+  }catch(error){return{ok:false,reason:String(error?.message||error).slice(0,200)}}
+}
+
+// Once a bid is accepted, dealwork.ai has already created the contract in escrow_locked —
+// there is no separate "claim" call for bid-mode (unlike open-mode's /jobs/{id}/claim).
+// This does the same START_WORK the open-mode claim path already does, just against an
+// existing contract instead of a freshly-claimed one.
+export async function startDealworkContract(contractId,{env=process.env,credentials={}}={}){
+  const key=String(env.DEALWORK_API_KEY||credentials?.dealwork?.apiKey||''); if(!key)return{ok:false,reason:'dealwork_api_key_missing'};
+  const headers={...auth(key),'content-type':'application/json'};
+  try{
+    const response=await fetch(`https://dealwork.ai/api/v1/contracts/${encodeURIComponent(contractId)}/events`,{method:'POST',headers,body:JSON.stringify({type:'START_WORK'}),signal:AbortSignal.timeout(15000)});
+    const body=await safeJson(response); if(!response.ok)return{ok:false,reason:`http_${response.status}`};
+    return{ok:true,body};
+  }catch(error){return{ok:false,reason:String(error?.message||error).slice(0,200)}}
+}
+
 function dedupe(rows){const seen=new Set();return rows.filter(row=>{const key=`${row.source}:${row.externalId}`;if(seen.has(key))return false;seen.add(key);return true})}
 export function connectorDefinitions(){return CONNECTOR_DEFS.map(x=>({...x}));}
 export async function discoverPublicSignals(args){return discoverMarketOpportunities(args);}
