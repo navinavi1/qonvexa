@@ -169,7 +169,9 @@
               <label class="autonomos-check"><input name="earnedFundsOnly" type="checkbox"> <span>Earned-funds-only (spend only already-earned growth+experiment budget)</span></label>
               <label class="autonomos-check"><input name="allowExternalSpending" type="checkbox"> <span>Allow unrestricted spending (ignores earned-funds cap — use with care)</span></label>
               <label>One-time seed budget, $<input name="seedSpendBudgetUsd" type="number" min="0" max="50" step="0.5"></label>
+              <label>Max $ per single paid tool call<input name="maxPaidProcurementUsd" type="number" min="0" max="100000" step="0.01"></label>
             </div>
+            <p class="settings-note"><strong>Required for Firecrawl/E2B to actually run:</strong> even with the toggles above set correctly, every paid tool call (web_search, web_scrape, run_python) is also checked against this ceiling — it defaults to $0, which silently blocks all of them regardless of the toggles. Set it above your expected per-call cost (e.g. 0.05) to actually let agents spend.</p>
             <p class="settings-note">Seed budget is the one-time head start (before any revenue) that lets Earned-funds-only mode take the first jobs at all — without it, a brand-new deployment with $0 revenue can never afford its first paid job.</p>
             <p class="settings-note">Precedence: Zero-spend wins if on. Otherwise Earned-funds-only (default) caps spend to money AutonomOS has actually already earned. Unrestricted only applies once both of the above are off.</p>
             <label class="autonomos-check"><input name="autoClaimJobs" type="checkbox"> <span>Automatically claim qualified escrow-funded jobs</span></label>
