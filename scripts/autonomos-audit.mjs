@@ -13,6 +13,7 @@ import { normalizeOpportunity } from '../src/autonomos/job-normalizer.js';
 import { connectorStatuses } from '../src/autonomos/connectors/index.js';
 import { createX402Gateway } from '../src/autonomos/x402.js';
 import { runTool, TOOL_COST_ESTIMATES_USD, githubOpenPullRequest } from '../src/autonomos/tools.js';
+import { createLlmClient } from '../src/autonomos/llm.js';
 
 const wallet = '0x1f674bf085f6fed36fa198287d51edf0fe0bb9e2';
 const checks = [];
@@ -258,6 +259,40 @@ await ok('Dealwork bid-mode jobs are discoverable with the correct shape (claimM
   assert.equal(op.claimMode, 'bid');
   assert.equal(op.escrowed, false);
   assert.equal(op.budgetUsd, 50);
+});
+
+await ok('P0: LLM client surfaces the real API error message and auto-retries the known max_tokens/reasoning-model incompatibility', async () => {
+  const originalFetch = global.fetch;
+  let callCount = 0;
+  global.fetch = async (url, opts) => {
+    callCount++;
+    const body = JSON.parse(opts.body);
+    if (callCount === 1) {
+      assert.ok('max_tokens' in body);
+      return { ok:false, status:400, json:async()=>({error:{message:"Unsupported parameter: 'max_tokens' is not supported with this model. Use 'max_completion_tokens' instead."}}), text:async()=>JSON.stringify({error:{message:"Unsupported parameter: 'max_tokens' is not supported with this model. Use 'max_completion_tokens' instead."}}) };
+    }
+    // Retry should have swapped the field, not just resent the same body.
+    assert.ok(!('max_tokens' in body));
+    assert.ok('max_completion_tokens' in body);
+    return { ok:true, status:200, json:async()=>({choices:[{message:{content:'ok'}}],usage:{}}) };
+  };
+  try {
+    const client = createLlmClient({ AUTONOMOS_LLM_BASE_URL:'https://example.test/v1', AUTONOMOS_LLM_MODEL:'gpt-5-mini' });
+    const result = await client.complete({ messages:[{role:'user',content:'hi'}], maxTokens:100 });
+    assert.equal(result.ok, true);
+    assert.equal(callCount, 2);
+  } finally { global.fetch = originalFetch; }
+});
+
+await ok('P0: a genuinely unrecoverable LLM error now reports the real message instead of a bare status code', async () => {
+  const originalFetch = global.fetch;
+  global.fetch = async () => ({ ok:false, status:400, text:async()=>JSON.stringify({error:{message:'Invalid value for parameter tools: array too long'}}) });
+  try {
+    const client = createLlmClient({ AUTONOMOS_LLM_BASE_URL:'https://example.test/v1', AUTONOMOS_LLM_MODEL:'gpt-5-mini' });
+    const result = await client.complete({ messages:[{role:'user',content:'hi'}] });
+    assert.equal(result.ok, false);
+    assert.ok(result.reason.includes('array too long'), `expected real error detail in reason, got: ${result.reason}`);
+  } finally { global.fetch = originalFetch; }
 });
 
 console.log(`AutonomOS audit PASS: ${checks.length}/${checks.length} checks`);
