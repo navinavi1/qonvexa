@@ -16,12 +16,21 @@ export function evaluateOpportunity(input = {}, config = {}) {
   const minMarginPercent = finite(config.minMarginPercent, 35);
   const zeroSpendMode = config.zeroSpendMode !== false;
   const earnedFundsOnly = config.earnedFundsOnly !== false;
+  // P0/P1 fix: allowExternalSpending was defined in policy-engine.js and enforced by
+  // validateAction() for generic 'spend' actions, but this function — the one that
+  // actually decides whether an opportunity gets taken — never looked at it. That meant
+  // as soon as zeroSpendMode was turned off, a job with real out-of-pocket cost (LLM
+  // tokens, Firecrawl, E2B) could be approved purely because it fit inside the earned-
+  // funds budget, even with allowExternalSpending left false. allowExternalSpending is
+  // now the base gate for ANY external spend; earnedFundsOnly narrows what it permits
+  // (spend only self-earned money), it no longer bypasses it.
+  const allowExternalSpending = Boolean(config.allowExternalSpending) && !zeroSpendMode;
   const availableSpendUsd = Math.max(0, finite(config.availableSpendUsd, 0));
   const hasExternalSpend = outOfPocketCost > 0.000001;
   const withinEarnedBudget = outOfPocketCost <= availableSpendUsd + 0.000001;
   const spendBlocked = zeroSpendMode
     ? hasExternalSpend
-    : (earnedFundsOnly && hasExternalSpend && !withinEarnedBudget);
+    : hasExternalSpend && (!allowExternalSpending || (earnedFundsOnly && !withinEarnedBudget));
   const allowed = expectedProfit > 0 && marginPercent >= minMarginPercent && !spendBlocked;
 
   return {
@@ -36,11 +45,13 @@ export function evaluateOpportunity(input = {}, config = {}) {
       ? 'positive_unit_economics'
       : zeroSpendMode && hasExternalSpend
         ? 'blocked_by_zero_spend_mode'
-        : earnedFundsOnly && hasExternalSpend && !withinEarnedBudget
-          ? 'blocked_by_earned_funds_cap'
-          : expectedProfit <= 0
-            ? 'non_positive_profit'
-            : 'margin_below_floor'
+        : hasExternalSpend && !allowExternalSpending
+          ? 'blocked_by_external_spending_disabled'
+          : earnedFundsOnly && hasExternalSpend && !withinEarnedBudget
+            ? 'blocked_by_earned_funds_cap'
+            : expectedProfit <= 0
+              ? 'non_positive_profit'
+              : 'margin_below_floor'
   };
 }
 
