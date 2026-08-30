@@ -2,6 +2,8 @@ import { McpHttpClient, extractMcpToolPayload } from '../mcp-client.js';
 import { normalizeOpportunity } from '../job-normalizer.js';
 import { isEvmAddress as isEvmAddressLike } from '../treasury.js';
 
+const T2000_DEFAULT_MCP_URL = 'https://mcp.t2000.ai/mcp';
+
 const CONNECTOR_DEFS = Object.freeze([
   { id:'x402-bazaar', name:'x402 / Bazaar', kind:'seller+discovery', description:'Machine-payable API discovery and seller rail.', requiredEnv:[] },
   { id:'clawlancer', name:'Clawlancer', kind:'jobs', description:'Pre-funded Base/USDC bounties: discover → claim → deliver → paid.', requiredEnv:[], optionalEnv:['CLAWLANCER_API_KEY','CLAWLANCER_AGENT_ID'] },
@@ -12,7 +14,7 @@ const CONNECTOR_DEFS = Object.freeze([
   // hold/sign for themselves here) — see claimUrl surfaced in state.pendingHumanClaims.
   { id:'superteam', name:'Superteam Earn', kind:'jobs', description:'Solana ecosystem bounties/projects, $500-$1500+ USDC/SOL. Competitive (not escrow-guaranteed); payout requires a human to claim with claimCode.', requiredEnv:[], optionalEnv:['SUPERTEAM_HUMAN_TELEGRAM'] },
   { id:'virtuals-acp', name:'Virtuals ACP', kind:'jobs+seller', description:'Agent Commerce Protocol jobs and USDC escrow.', requiredEnv:['VIRTUALS_ACP_WALLET_ID','VIRTUALS_ACP_SIGNER'], optionalEnv:['VIRTUALS_ACP_AGENT_ID'] },
-  { id:'t2000', name:'t2000', kind:'jobs+seller', description:'Sui/USDC open jobs with pre-funded escrow via Passport Connect.', requiredEnv:['T2000_MCP_URL','T2000_SESSION_TOKEN'], optionalEnv:['T2000_PASSPORT_ADDRESS'] },
+  { id:'t2000', name:'t2000', kind:'jobs+seller', description:'Sui/USDC Open Jobs + your paid Service orders via Passport Connect OAuth.', requiredEnv:[], optionalEnv:['T2000_MCP_URL'] },
   { id:'olas-mech', name:'Olas Mech Marketplace', kind:'seller+discovery', description:'Agent-to-agent paid Mech services.', requiredEnv:['OLAS_MECH_API_KEY'], optionalEnv:['OLAS_MECH_ENDPOINT'] },
   { id:'nevermined', name:'Nevermined', kind:'payments', description:'Fiat + crypto agent payment facilitator and metering.', requiredEnv:['NVM_API_KEY'], optionalEnv:['NVM_PLAN_ID'] },
   { id:'agentverse', name:'Agentverse / Fetch.ai', kind:'discovery', description:'Public agent/function discovery and ASI routing.', requiredEnv:[], optionalEnv:['AGENTVERSE_API_KEY'] },
@@ -43,6 +45,10 @@ export function connectorStatuses(env = process.env, x402Status = {}, persistedC
     if (def.id === 'superteam') {
       const hasKey=Boolean(persistedCredentials?.superteam?.apiKey);
       return { ...def, status:hasKey?'ready':'auto_bootstrap_available', configured:hasKey, missing:hasKey?[]:['agent registration will be created automatically on first cycle'] };
+    }
+    if (def.id === 't2000') {
+      const connected=Boolean(String(persistedCredentials?.t2000?.accessToken||'').trim());
+      return { ...def, status:connected?'ready':'connect_required', configured:connected, missing:connected?[]:['Connect t2000 in the AutonomOS dashboard (Google OAuth → existing Passport).'], mode:'passport_connect_oauth' };
     }
     if (def.id === 'agentverse') return { ...def, status:'discovery_ready', configured:true, missing:[] };
     const missing=def.requiredEnv.filter(key=>!String(env[key]||'').trim());
@@ -135,7 +141,7 @@ export async function discoverMarketOpportunities({ env=process.env, credentials
     ['clawlancer',()=>discoverClawlancer(env,credentials,limit)],
     ['dealwork',()=>discoverDealwork(env,credentials,limit)],
     ['agentverse',()=>discoverAgentverse(limit)],
-    ['t2000',()=>discoverT2000(env,limit)],
+    ['t2000',()=>discoverT2000(env,credentials,limit)],
     ['superteam',()=>discoverSuperteam(credentials,limit)]
   ].filter(([id])=>!want||want.has(id));
   const results=await Promise.allSettled(jobs.map(([,fn])=>fn()));
@@ -150,7 +156,7 @@ export async function discoverMarketOpportunities({ env=process.env, credentials
 export async function claimMarketplaceJob(opportunity,{env=process.env,credentials={}}={}) {
   if (opportunity.source==='clawlancer') return clawlancerAction('claim',opportunity,{env,credentials});
   if (opportunity.source==='dealwork') return dealworkAction('claim',opportunity,{env,credentials});
-  if (opportunity.source==='t2000') return t2000Action('claim',opportunity,{env});
+  if (opportunity.source==='t2000') return t2000Action('claim',opportunity,{env,credentials});
   if (opportunity.source==='superteam') return superteamAction('claim',opportunity,{credentials});
   return {ok:false,reason:'connector_claim_not_available'};
 }
@@ -158,7 +164,7 @@ export async function claimMarketplaceJob(opportunity,{env=process.env,credentia
 export async function deliverMarketplaceJob(opportunity,claim,deliverable,{env=process.env,credentials={},recordPendingClaim}={}) {
   if (opportunity.source==='clawlancer') return clawlancerAction('deliver',opportunity,{env,credentials,claim,deliverable});
   if (opportunity.source==='dealwork') return dealworkAction('deliver',opportunity,{env,credentials,claim,deliverable});
-  if (opportunity.source==='t2000') return t2000Action('deliver',opportunity,{env,claim,deliverable});
+  if (opportunity.source==='t2000') return t2000Action('deliver',opportunity,{env,credentials,claim,deliverable});
   if (opportunity.source==='superteam') return superteamAction('deliver',opportunity,{credentials,deliverable,recordPendingClaim});
   return {ok:false,reason:'connector_delivery_not_available'};
 }
@@ -175,6 +181,16 @@ export async function readMarketplaceWallets({env=process.env,credentials={}}={}
   if (dwKey) {
     try { const r=await fetch('https://dealwork.ai/api/v1/wallet/balance',{headers:auth(dwKey),signal:AbortSignal.timeout(12000)}); const body=await safeJson(r); out.dealwork={ok:r.ok,...(body?.data||body)}; }
     catch(error){ out.dealwork={ok:false,error:String(error?.message||error)}; }
+  }
+  const tToken=t2000Token(env,credentials);
+  if(tToken){
+    try{
+      const client=new McpHttpClient({url:String(env.T2000_MCP_URL||T2000_DEFAULT_MCP_URL),token:tToken,timeoutMs:18000}); await client.initialize(); const tools=await client.listTools();
+      const balanceTool=tools.find(t=>t.name==='t2000_balance'),addressTool=tools.find(t=>t.name==='t2000_address');
+      const balance=balanceTool?extractMcpToolPayload(await client.callTool(balanceTool.name,{})):null;
+      const address=addressTool?extractMcpToolPayload(await client.callTool(addressTool.name,{})):null;
+      out.t2000={ok:true,network:'Sui',address:address?.address||address?.passportAddress||address?.passport_address||address||'',balance};
+    }catch(error){out.t2000={ok:false,error:String(error?.message||error).slice(0,180)}}
   }
   return out;
 }
@@ -279,61 +295,138 @@ async function superteamAction(kind,opportunity,{credentials,deliverable,recordP
   }catch(error){return{ok:false,reason:String(error?.message||error).slice(0,200)}}
 }
 
-async function discoverT2000(env,limit){
-  const mcpUrl=String(env.T2000_MCP_URL||''); const token=String(env.T2000_SESSION_TOKEN||'');
-  if(mcpUrl&&token){
-    try{
-      const client=new McpHttpClient({url:mcpUrl,token,timeoutMs:18000}); await client.initialize(); const tools=await client.listTools();
-      const jobsTool=tools.find(t=>t.name==='t2000_job_board')||tools.find(t=>/job_board|openings|market/i.test(t.name))||tools.find(t=>t.name==='t2000_jobs')||tools.find(t=>/jobs/i.test(t.name));
-      if(!jobsTool)return{signals:[],health:{ok:false,connected:true,error:'jobs_tool_not_found',tools:tools.map(t=>t.name).slice(0,30)}};
-      let result; for(const args of [{},{role:'seller'},{role:'buyer'}]){try{result=extractMcpToolPayload(await client.callTool(jobsTool.name,args));if(result)break}catch{}}
-      const openings=findArrayByKey(result,['openings','jobs','items','results']);
-      const signals=openings.slice(0,limit).map(raw=>normalizeOpportunity('t2000',{...raw,externalId:raw.openingId||raw.opening_id||raw.jobId||raw.job_id||raw.id,url:raw.url||'https://t2000.ai/'},{feePercent:5,currency:'USDC',network:'Sui',escrowed:true,claimMode:'automatic_mcp'}));
-      return{signals,health:{ok:true,connected:true,count:signals.length,tool:jobsTool.name,tools:tools.map(t=>t.name).slice(0,30)}};
-    }catch(error){return{signals:[],health:{ok:false,connected:false,error:String(error?.message||error).slice(0,220)}}}
-  }
+async function discoverT2000(env,credentials,limit){
+  const mcpUrl=String(env.T2000_MCP_URL||T2000_DEFAULT_MCP_URL);
+  const token=t2000Token(env,credentials);
+  if(!token) return {signals:[],health:{ok:false,connected:false,claimReady:false,error:'t2000_oauth_required'}};
   try{
-    const response=await fetch('https://t2000.ai/',{headers:{accept:'text/html','user-agent':'AutonomOS/2.0'},signal:AbortSignal.timeout(12000)}); const html=await response.text();
-    if(!response.ok)return{signals:[],health:{ok:false,status:response.status,claimReady:false}};
-    const settled=[...html.matchAll(/\$([0-9]+(?:\.[0-9]+)?)\s*(?:settled|·)/gi)].slice(0,limit).map((m,i)=>normalizeOpportunity('t2000-public',{externalId:`public-${i}-${m.index}`,title:'t2000 public marketplace activity',description:'Public activity only. Add Passport Connect MCP credentials to discover and claim live openings.',budgetUsd:Number(m[1]),status:'signal',url:'https://t2000.ai/'},{feePercent:5,currency:'USDC',network:'Sui',escrowed:true,claimMode:'needs_passport_connect'}));
-    return{signals:settled,health:{ok:true,publicActivitySignals:settled.length,claimReady:false}};
-  }catch(error){return{signals:[],health:{ok:false,error:String(error?.message||error).slice(0,180),claimReady:false}}}
+    const client=new McpHttpClient({url:mcpUrl,token,timeoutMs:22000});
+    await client.initialize();
+    const tools=await client.listTools();
+    const boardTool=tools.find(t=>t.name==='t2000_job_board');
+    const inboxTool=tools.find(t=>t.name==='t2000_jobs');
+    const signals=[];
+    let openCount=0,sellerQueueCount=0;
+
+    if(boardTool){
+      let payload=null;
+      for(const args of [{limit:Math.min(limit,50)},{},{limit:Math.min(limit,50),offset:0}]){
+        try{payload=extractMcpToolPayload(await client.callTool(boardTool.name,args));if(payload)break}catch{}
+      }
+      const openings=findArrayByKey(payload,['jobs','openings','items','listings','data']);
+      const openSignals=openings.slice(0,limit).map(raw=>{
+        const batchId=String(raw.batchId||raw.batch_id||'');
+        const budgetUsd=t2000Amount(raw);
+        return normalizeOpportunity('t2000',{
+          ...raw,
+          externalId:raw.id||raw.openingId||raw.opening_id||raw.jobId||raw.job_id,
+          title:raw.title||raw.briefPreview||raw.brief_preview||raw.serviceName||'t2000 Open Job',
+          description:raw.briefPreview||raw.brief_preview||raw.brief||raw.description||raw.title||'t2000 Open Job',
+          budgetUsd,
+          status:'open',
+          claimMode:batchId?'automatic_mcp_batch':'automatic_mcp',
+          t2000BatchId:batchId,
+          url:raw.url||'https://t2000.ai/jobs'
+        },{feePercent:5,currency:'USDC',network:'Sui',escrowed:true,claimMode:batchId?'automatic_mcp_batch':'automatic_mcp'});
+      }).filter(x=>x.externalId);
+      signals.push(...openSignals); openCount=openSignals.length;
+    }
+
+    // A Service bought from our existing t2000 seller profile does NOT appear on the
+    // public Open Job board. The documented seller delivery queue is t2000_jobs with
+    // needsOnly:true + role:'seller'. These jobs are already assigned/funded, so runtime
+    // must execute them directly instead of attempting a second claim.
+    if(inboxTool){
+      let payload=null;
+      for(const args of [{needsOnly:true,role:'seller'},{role:'seller',needsOnly:true}]){
+        try{payload=extractMcpToolPayload(await client.callTool(inboxTool.name,args));if(payload)break}catch{}
+      }
+      const jobs=findArrayByKey(payload,['jobs','items','data','queue','matching']);
+      const sellerSignals=jobs.slice(0,limit).map(raw=>normalizeOpportunity('t2000',{
+        ...raw,
+        externalId:raw.jobId||raw.job_id||raw.id,
+        title:raw.title||raw.serviceName||raw.service_name||raw.listingName||raw.listing_name||'t2000 paid Service order',
+        description:raw.briefPreview||raw.brief_preview||raw.brief||raw.requirements||raw.description||'Paid t2000 Service order. Fetch the complete work order with t2000_job_status before execution.',
+        budgetUsd:t2000Amount(raw),
+        status:'available',
+        claimMode:'already_assigned',
+        t2000OriginalStatus:String(raw.status||raw.state||''),
+        url:raw.url||'https://t2000.ai/manage/jobs'
+      },{feePercent:5,currency:'USDC',network:'Sui',escrowed:true,claimMode:'already_assigned',status:'available'})).filter(x=>x.externalId);
+      signals.push(...sellerSignals); sellerQueueCount=sellerSignals.length;
+    }
+
+    return {signals,health:{ok:true,connected:true,claimReady:Boolean(boardTool),deliveryQueueReady:Boolean(inboxTool),openCount,sellerQueueCount,tools:tools.map(t=>t.name).filter(n=>n.startsWith('t2000_')).slice(0,60)}};
+  }catch(error){return{signals:[],health:{ok:false,connected:false,claimReady:false,error:String(error?.message||error).slice(0,220)}}}
 }
 
-async function t2000Action(kind,opportunity,{env,claim,deliverable}={}){
-  const mcpUrl=String(env.T2000_MCP_URL||''),token=String(env.T2000_SESSION_TOKEN||''); if(!mcpUrl||!token)return{ok:false,reason:'t2000_passport_connect_missing'};
+async function t2000Action(kind,opportunity,{env,credentials,claim,deliverable}={}){
+  const mcpUrl=String(env.T2000_MCP_URL||T2000_DEFAULT_MCP_URL);
+  const token=t2000Token(env,credentials);
+  if(!token)return{ok:false,reason:'t2000_oauth_required'};
   try{
     const client=new McpHttpClient({url:mcpUrl,token,timeoutMs:22000}); await client.initialize(); const tools=await client.listTools();
-    const ext=opportunity.externalId;
+    const ext=String(opportunity.externalId||'');
     if(kind==='claim'){
-      const claimTool=tools.find(t=>t.name==='t2000_job_claim')||tools.find(t=>/job_claim|claim/i.test(t.name));
-      if(!claimTool)return{ok:false,reason:'t2000_claim_tool_not_found',tools:tools.map(t=>t.name).slice(0,30)};
-      const claimCandidates=[{openingId:ext},{opening_id:ext},{jobId:ext},{id:ext}];
-      let last='',claimed=null;
-      for(const args of claimCandidates){try{claimed=extractMcpToolPayload(await client.callTool(claimTool.name,args));if(claimed)break}catch(error){last=String(error?.message||error)}}
-      if(!claimed)return{ok:false,reason:last.slice(0,200)||'t2000_claim_failed'};
-      const jobId=String(claimed?.jobId||claimed?.job_id||claimed?.id||ext);
-      // Mandatory per t2000 flow: job_claim only reserves the job. The full work order
-      // (requirements, deliverable format, acceptance criteria) lives in job_status and
-      // is required before execution — delivering without it risks a rejected/failed job.
-      const statusTool=tools.find(t=>t.name==='t2000_job_status')||tools.find(t=>/job_status|status/i.test(t.name));
-      let workOrder=null;
-      if(statusTool){
-        for(const args of [{jobId},{job_id:jobId},{id:jobId}]){try{workOrder=extractMcpToolPayload(await client.callTool(statusTool.name,args));if(workOrder)break}catch{}}
+      let claimed=null,claimToolName='already_assigned';
+      // Direct Service orders are already buyer-funded and assigned to this Passport.
+      // Claiming them again is incorrect; simply fetch their work order and execute.
+      if(opportunity.claimMode!=='already_assigned'){
+        const batchId=String(opportunity.raw?.t2000BatchId||opportunity.raw?.batchId||opportunity.raw?.batch_id||'');
+        const claimTool=opportunity.claimMode==='automatic_mcp_batch'
+          ? tools.find(t=>t.name==='t2000_job_batch_claim')
+          : tools.find(t=>t.name==='t2000_job_claim');
+        if(!claimTool)return{ok:false,reason:opportunity.claimMode==='automatic_mcp_batch'?'t2000_batch_claim_tool_not_found':'t2000_claim_tool_not_found',tools:tools.map(t=>t.name).slice(0,40)};
+        claimToolName=claimTool.name;
+        const claimCandidates=opportunity.claimMode==='automatic_mcp_batch'
+          ? [{batchId},{batch_id:batchId},{id:batchId}]
+          : [{openingId:ext},{id:ext},{opening_id:ext},{jobId:ext}];
+        let last='';
+        for(const args of claimCandidates){
+          if(Object.values(args).every(v=>!String(v||'')))continue;
+          try{claimed=extractMcpToolPayload(await client.callTool(claimTool.name,args));if(claimed)break}catch(error){last=String(error?.message||error)}
+        }
+        if(!claimed)return{ok:false,reason:last.slice(0,220)||'t2000_claim_failed'};
       }
-      return{ok:true,tool:claimTool.name,jobId,transactionId:String(claimed?.transactionId||claimed?.tx||''),body:claimed,workOrder:workOrder||null,workOrderMissing:!workOrder};
+      const jobId=String(claimed?.jobId||claimed?.job_id||claimed?.id||ext);
+      const statusTool=tools.find(t=>t.name==='t2000_job_status');
+      if(!statusTool)return{ok:false,reason:'t2000_job_status_tool_not_found'};
+      let jobStatus=null,lastStatus='';
+      for(const args of [{jobId},{job_id:jobId},{id:jobId}]){
+        try{jobStatus=extractMcpToolPayload(await client.callTool(statusTool.name,args));if(jobStatus)break}catch(error){lastStatus=String(error?.message||error)}
+      }
+      if(!jobStatus)return{ok:false,reason:lastStatus.slice(0,220)||'t2000_work_order_unavailable'};
+      const workOrder=jobStatus?.workOrder||jobStatus?.work_order||jobStatus;
+      return{ok:true,tool:claimToolName,jobId,transactionId:String(claimed?.transactionId||claimed?.tx||claimed?.digest||''),body:claimed||jobStatus,workOrder,workOrderMissing:!workOrder,alreadyAssigned:opportunity.claimMode==='already_assigned'};
     }
-    const deliverTool=tools.find(t=>t.name==='t2000_job_deliver')||tools.find(t=>/job_deliver|deliver|submit/i.test(t.name));
-    if(!deliverTool)return{ok:false,reason:'t2000_deliver_tool_not_found',tools:tools.map(t=>t.name).slice(0,30)};
-    const jobId=claim?.jobId||ext;
+    const deliverTool=tools.find(t=>t.name==='t2000_job_deliver');
+    if(!deliverTool)return{ok:false,reason:'t2000_deliver_tool_not_found',tools:tools.map(t=>t.name).slice(0,40)};
+    const jobId=String(claim?.jobId||ext);
+    const body=String(deliverable?.content||'');
+    const bytes=Buffer.byteLength(body,'utf8');
+    if(bytes>16*1024)return{ok:false,reason:`t2000_delivery_body_over_16kib:${bytes}`};
+    // Current t2000 docs define the delivery itself as the body string. Keep small
+    // backward-compatible fallbacks after the documented body shape in case their live
+    // tool schema names the field differently; tools/call will reject invalid shapes.
     const deliverCandidates=[
-      {jobId,deliverable:deliverable.content},
-      {job_id:jobId,content:deliverable.content},
-      {id:jobId,work:deliverable.content}
+      {jobId,body},
+      {jobId,delivery:body},
+      {jobId,deliverable:body},
+      {job_id:jobId,body}
     ];
-    let last=''; for(const args of deliverCandidates){try{const result=extractMcpToolPayload(await client.callTool(deliverTool.name,args));return{ok:true,tool:deliverTool.name,jobId:String(result?.jobId||result?.job_id||result?.id||jobId),transactionId:String(result?.transactionId||result?.tx||''),body:result}}catch(error){last=String(error?.message||error)}}
-    return{ok:false,reason:last.slice(0,200)||'t2000_deliver_failed'};
-  }catch(error){return{ok:false,reason:String(error?.message||error).slice(0,220)}}
+    let last='';
+    for(const args of deliverCandidates){
+      try{const result=extractMcpToolPayload(await client.callTool(deliverTool.name,args));return{ok:true,tool:deliverTool.name,jobId:String(result?.jobId||result?.job_id||result?.id||jobId),transactionId:String(result?.transactionId||result?.tx||result?.digest||''),body:result}}catch(error){last=String(error?.message||error)}
+    }
+    return{ok:false,reason:last.slice(0,220)||'t2000_deliver_failed'};
+  }catch(error){return{ok:false,reason:String(error?.message||error).slice(0,240)}}
+}
+
+function t2000Token(_env,credentials){return String(credentials?.t2000?.accessToken||'').trim();}
+function t2000Amount(raw={}){
+  const direct=raw.sellerPayoutUsdc??raw.seller_payout_usdc??raw.payoutUsdc??raw.payout_usdc??raw.maxUsdc??raw.max_usdc??raw.priceUsdc??raw.price_usdc??raw.amountUsdc??raw.amount_usdc??raw.budgetUsdc??raw.budget_usdc??raw.budgetUsd??raw.priceUsd??raw.amountUsd??raw.budget??raw.price;
+  const n=Number(direct||0); if(Number.isFinite(n)&&n>=0)return n;
+  return 0;
 }
 
 function findArrayByKey(value,keys,depth=0){
@@ -480,42 +573,28 @@ export async function syncMarketplaceTransactions({env=process.env,credentials={
       } else health.dealwork={ok:false,status:r.status,error:body?.error?.message||body?.error||''};
     }catch(error){health.dealwork={ok:false,error:String(error?.message||error).slice(0,180)}}
   }
-  // P1 fix: t2000 was completely absent from settlement sync — clawlancer/dealwork revenue
-  // gets picked up here, but a t2000 escrow release never did, so money paid out on t2000
-  // never appeared in ledger.ndjson/totalRevenueUsd. This discovers whatever
-  // transactions/payments tool t2000's MCP server exposes by name pattern (same approach
-  // discoverT2000/t2000Action already use for job_board/job_claim/job_status/job_deliver,
-  // since t2000 is MCP-based and doesn't publish a fixed REST schema we can hardcode
-  // against). If no matching tool exists, this degrades to a visible health flag instead
-  // of silently reporting zero t2000 revenue as if everything were fine.
-  const t2000Url=String(env.T2000_MCP_URL||''),t2000Token=String(env.T2000_SESSION_TOKEN||'');
-  if(t2000Url&&t2000Token){
+  // t2000 settlement sync uses the documented read-only seller job inbox. Never pick a
+  // tool heuristically by a word like "payment": financial connectors must only call a
+  // known read tool here. Settled seller jobs are de-duplicated by job id in runtime.
+  const t2000Url=String(env.T2000_MCP_URL||T2000_DEFAULT_MCP_URL),t2000TokenValue=t2000Token(env,credentials);
+  if(t2000TokenValue){
     try{
-      const client=new McpHttpClient({url:t2000Url,token:t2000Token,timeoutMs:18000}); await client.initialize(); const tools=await client.listTools();
-      // P0/P1 fix (external audit): matching purely on /transaction|payment|.../i risked
-      // picking a MUTATING tool (e.g. something like "initiate_payment" or
-      // "process_withdrawal") purely because its name contains "payment" — for a
-      // financial connector, calling the wrong tool automatically is a real-money risk.
-      // Now the name must ALSO look explicitly read-only (list/get/history/view/status)
-      // and must NOT contain any action verb that suggests it moves funds.
-      const READ_ONLY_HINT = /list|history|get|view|status|read|fetch/i;
-      const MUTATING_HINT = /withdraw|transfer|send\b|initiate|process|create|execute|claim|pay(?!ment|out|ments)|deposit|approve|cancel|delete/i;
-      const txTool=tools.find(t=>/transaction|payment|settlement|payout|earnings/i.test(t.name)&&READ_ONLY_HINT.test(t.name)&&!MUTATING_HINT.test(t.name));
-      if(txTool){
-        let payload; for(const args of [{},{status:'settled'},{status:'paid'}]){try{payload=extractMcpToolPayload(await client.callTool(txTool.name,args));if(payload)break}catch{}}
-        const txs=findArrayByKey(payload,['transactions','payments','settlements','payouts','items']);
-        for(const tx of txs.slice(0,100)){
-          const status=String(tx.status||tx.state||'').toLowerCase();
-          const amountUsd=Number(tx.amountUsd??tx.amount_usd??tx.amount??0);
-          rows.push({source:'t2000',externalTransactionId:String(tx.id||tx.transactionId||tx.transaction_id||''),listingId:String(tx.jobId||tx.job_id||''),status,amountUsd,currency:'USDC',network:'Sui',payoutAddress:String(tx.payoutAddress||tx.payout_address||''),raw:tx});
+      const client=new McpHttpClient({url:t2000Url,token:t2000TokenValue,timeoutMs:18000}); await client.initialize(); const tools=await client.listTools();
+      const jobsTool=tools.find(t=>t.name==='t2000_jobs');
+      if(jobsTool){
+        const payload=extractMcpToolPayload(await client.callTool(jobsTool.name,{role:'seller'}));
+        const jobs=findArrayByKey(payload,['jobs','items','data','queue','matching']);
+        let mapped=0;
+        for(const job of jobs.slice(0,150)){
+          const status=String(job.status||job.state||'').toLowerCase();
+          if(!['settled','released','completed','paid'].includes(status))continue;
+          const jobId=String(job.jobId||job.job_id||job.id||'');
+          const amountUsd=t2000Amount(job);
+          if(!jobId||amountUsd<=0)continue;
+          rows.push({source:'t2000',externalTransactionId:jobId,listingId:jobId,status,amountUsd,currency:'USDC',network:'Sui',payoutAddress:String(job.sellerAddress||job.seller_address||''),raw:job});mapped++;
         }
-        health.t2000={ok:true,connected:true,count:txs.length,tool:txTool.name};
-      } else {
-        const loosematch=tools.find(t=>/transaction|payment|settlement|payout|earnings/i.test(t.name));
-        health.t2000=loosematch
-          ? {ok:false,connected:true,error:'candidate_tool_not_confirmed_readonly_skipping_auto_call',candidate:loosematch.name,tools:tools.map(t=>t.name).slice(0,30)}
-          : {ok:false,connected:true,error:'transactions_tool_not_found',tools:tools.map(t=>t.name).slice(0,30)};
-      }
+        health.t2000={ok:true,connected:true,count:jobs.length,settledMapped:mapped,tool:jobsTool.name};
+      } else health.t2000={ok:false,connected:true,error:'t2000_jobs_tool_not_found',tools:tools.map(t=>t.name).slice(0,40)};
     }catch(error){health.t2000={ok:false,connected:false,error:String(error?.message||error).slice(0,180)}}
   }
   return {transactions:rows,health};
