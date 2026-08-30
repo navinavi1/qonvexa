@@ -92,7 +92,12 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
         'genesisObjective','minMarginPercent','reservePercent','growthPercent','experimentPercent',
         'heartbeatSeconds','fastClaimPollSeconds','maxChildren','childSpawnConcurrencyThreshold','childTtlMinutes','autoReplication',
         'maxApiCostPercentOfPayout','maxJobsPerCycle','autoClaimJobs','requireEscrowForAutoClaim','minJobPayoutUsd',
-        'zeroSpendMode','earnedFundsOnly','allowExternalSpending','seedSpendBudgetUsd'
+        // P0 fix (external audit): maxPaidProcurementUsd defaults to 0 and was NOT in this
+        // list, so even an owner who correctly set zeroSpendMode:false and
+        // allowExternalSpending:true through the admin UI still had every paid tool call
+        // (Firecrawl/E2B) denied with 'above_spend_limit' — the one field that actually
+        // raises the ceiling had no way to be changed outside hand-editing config.json.
+        'zeroSpendMode','earnedFundsOnly','allowExternalSpending','seedSpendBudgetUsd','maxPaidProcurementUsd'
       ];
       const next={...config};
       for(const key of allowed) if(Object.prototype.hasOwnProperty.call(patch,key)) next[key]=patch[key];
@@ -103,7 +108,16 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
 
     start(){config=normalizeConfig({...config,enabled:true,killSwitch:false});state.startedAt=state.startedAt||new Date().toISOString();store.writeJson('config.json',config);event('runtime_started',{});schedule();return{ok:true,status:'running'};},
     stop(){config=normalizeConfig({...config,enabled:false});store.writeJson('config.json',config);clearTimer();event('runtime_stopped',{});return{ok:true,status:'stopped'};},
-    emergencyStop(){config=normalizeConfig({...config,enabled:false,killSwitch:true,allowExternalSpending:false,zeroSpendMode:true});store.writeJson('config.json',config);clearTimer();for(const job of activeJobs.values())job.cancelled=true;event('emergency_stop',{activeJobs:activeJobs.size});return{ok:true,status:'emergency_stopped'};},
+    emergencyStop(){config=normalizeConfig({...config,enabled:false,killSwitch:true,allowExternalSpending:false,zeroSpendMode:true});store.writeJson('config.json',config);clearTimer();
+      // P0 fix (external audit): previously this only set job.cancelled=true, a flag that
+      // NOTHING actually checked mid-flight — an already-running LLM/Firecrawl/E2B/GitHub
+      // call, or a marketplace delivery POST, would run to completion and could still
+      // spend money or submit work after Emergency Stop was pressed. Each active job now
+      // carries its own AbortController (set at claim/recovery time); aborting it here
+      // actually cancels the in-flight fetch/sandbox call via the signal threaded through
+      // job-executor.js → llm.js/tools.js.
+      for(const job of activeJobs.values()){job.cancelled=true;try{job.abortController?.abort();}catch{}}
+      event('emergency_stop',{activeJobs:activeJobs.size});return{ok:true,status:'emergency_stopped'};},
     clearEmergencyStop(){config=normalizeConfig({...config,killSwitch:false,enabled:false,allowExternalSpending:false,zeroSpendMode:true});store.writeJson('config.json',config);event('emergency_stop_cleared',{});return{ok:true,status:'stopped'};},
     async runCycle(){return cycle('manual');},
 
@@ -153,7 +167,7 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
       const cycleConfig={...config,availableSpendUsd};
       const normalized=[];
       for(const opportunity of discovery.signals){
-        const cap=classifyOpportunity(opportunity,{llmEnabled:llm.enabled});
+        const cap=classifyOpportunity(opportunity,{llmEnabled:llm.enabled,hasGithubPrTool:Boolean(env.GITHUB_TOKEN)});
         const feeUsd=Number(opportunity.budgetUsd||0)*Number(opportunity.feePercent||0)/100;
         const econ=evaluateOpportunity({expectedRevenueUsd:Number(opportunity.budgetUsd||0),successProbability:cap.confidence||0.5,modelCostUsd:cap.estimatedModelCostUsd,marketplaceFeeUsd:feeUsd,computeCostUsd:0},cycleConfig);
         const row={...opportunity,capability:cap,economics:econ}; normalized.push(row); recordOpportunity(row);
@@ -232,7 +246,13 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
     handled.add(key);persistSet('handled-opportunities.json',handled);
     if(claimAttempts[key]){delete claimAttempts[key];store.writeJson('claim-attempts.json',claimAttempts);}
     setAgentMetric('job-router',{tasks:1});maybeSpawnChild(op.category||op.source);
-    const worker=pickExternalWorker(op.capability?.skill);setWorkerStatus(worker,'working');activeJobs.set(jobId,{id:jobId,source:op.source,externalId:op.externalId,workerId:worker.id,cancelled:false});
+    const worker=pickExternalWorker(op.capability?.skill);setWorkerStatus(worker,'working');
+    // P0 fix (external audit — Emergency Stop was not a real abort): give this job its own
+    // AbortController and store it alongside cancelled:true so emergencyStop() below can
+    // actually interrupt an in-flight LLM/Firecrawl/E2B/GitHub call, not just prevent
+    // starting a new one.
+    const abortController=new AbortController();
+    activeJobs.set(jobId,{id:jobId,source:op.source,externalId:op.externalId,workerId:worker.id,cancelled:false,abortController});
     store.append('jobs.ndjson',{id:jobId,source:op.source,externalId:op.externalId,status:'claimed',transactionId:claim.transactionId||'',workerId:worker.id,at:new Date().toISOString()});event('market_job_claimed',{jobId,source:op.source,externalId:op.externalId,transactionId:claim.transactionId||''});
     // P1 fix: persist everything needed to resume AFTER a successful claim. Previously,
     // a claim locked real escrow on the marketplace, but the only record that execution
@@ -242,10 +262,11 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
     // full op/claim/worker is written to disk and only cleared once delivered — see
     // recoverInFlightJobs() below, called once at startup.
     writeInFlightJob(jobId,{jobId,op,claim,workerId:worker.id,startedAt:new Date().toISOString()});
+    let deliverable; // hoisted so the catch block below can still see partial tool spend
     try{
       if(op.source==='t2000'&&claim.workOrderMissing){throw new Error('t2000_work_order_unavailable_refusing_blind_delivery');}
       const execOp=claim.workOrder?{...op,__workOrderRaw:claim.workOrder,description:`${op.description}\n\n[t2000 job_status work order]\n${typeof claim.workOrder==='string'?claim.workOrder:JSON.stringify(claim.workOrder).slice(0,4000)}`}:op;
-      const deliverable=await executeExternalOpportunity(execOp,op.capability,{llm,siteUrl,env,config});
+      deliverable=await executeExternalOpportunity(execOp,op.capability,{llm,siteUrl,env,config,abortSignal:abortController.signal});
       setAgent('qa-evaluator','working'); validateExternalDeliverable(deliverable,execOp);
       const delivery=await deliverMarketplaceJob(op,claim,deliverable,{env,credentials});
       if(!delivery.ok)throw new Error(`delivery_failed:${delivery.reason||'unknown'}`);
@@ -266,8 +287,14 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
       // The LLM call (if any) may already have been billed even though the job failed
       // afterwards (bad output, delivery rejected, etc). Record that spend so it isn't
       // silently absorbed as free — this is exactly the "Revenue $1 / Cost $0" bug.
+      // P1 fix: this previously only accounted for the estimated LLM cost — if
+      // Firecrawl/E2B calls had already succeeded before a LATER step failed (QA
+      // rejection, delivery error), that real tool spend in `deliverable.evidence`
+      // was silently dropped because `deliverable` wasn't in scope in this catch block.
       const incurredCostUsd=Number(op.capability?.estimatedModelCostUsd||0);
+      const incurredToolCostUsd=Number(deliverable?.evidence?.toolCostUsd||0);
       if(incurredCostUsd>0)recordCost({jobId,source:op.source,externalId:op.externalId,amountUsd:incurredCostUsd,kind:'model',estimated:true,note:'job_failed_after_model_call'});
+      if(incurredToolCostUsd>0)recordCost({jobId,source:op.source,externalId:op.externalId,amountUsd:incurredToolCostUsd,kind:'tool_api',estimated:true,note:'job_failed_after_tool_calls'});
       clearInFlightJob(jobId);
       return{claimed:true,delivered:false};
     }
@@ -289,12 +316,13 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
     for(const record of pending){
       const {jobId,op,claim}=record;
       const worker=agents.find(a=>a.id===record.workerId)||pickExternalWorker(op.capability?.skill);
-      setWorkerStatus(worker,'working');activeJobs.set(jobId,{id:jobId,source:op.source,externalId:op.externalId,workerId:worker.id,cancelled:false});
+      const abortController=new AbortController();
+      setWorkerStatus(worker,'working');activeJobs.set(jobId,{id:jobId,source:op.source,externalId:op.externalId,workerId:worker.id,cancelled:false,abortController});
       event('market_job_recovery_attempt',{jobId,source:op.source,externalId:op.externalId});
       try{
         if(op.source==='t2000'&&claim.workOrderMissing){throw new Error('t2000_work_order_unavailable_refusing_blind_delivery');}
         const execOp=claim.workOrder?{...op,__workOrderRaw:claim.workOrder,description:`${op.description}\n\n[t2000 job_status work order]\n${typeof claim.workOrder==='string'?claim.workOrder:JSON.stringify(claim.workOrder).slice(0,4000)}`}:op;
-        const deliverable=await executeExternalOpportunity(execOp,op.capability,{llm,siteUrl,env,config});
+        const deliverable=await executeExternalOpportunity(execOp,op.capability,{llm,siteUrl,env,config,abortSignal:abortController.signal});
         validateExternalDeliverable(deliverable,execOp);
         const delivery=await deliverMarketplaceJob(op,claim,deliverable,{env,credentials});
         if(!delivery.ok)throw new Error(`delivery_failed:${delivery.reason||'unknown'}`);
@@ -431,7 +459,7 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
       const cycleLedger=store.readNdjson('ledger.ndjson',4000);
       const cycleConfig={...config,availableSpendUsd:computeEarnedSpendBudgetUsd(cycleLedger,config)};
       const normalized=discovery.signals.map(opportunity=>{
-        const cap=classifyOpportunity(opportunity,{llmEnabled:llm.enabled});
+        const cap=classifyOpportunity(opportunity,{llmEnabled:llm.enabled,hasGithubPrTool:Boolean(env.GITHUB_TOKEN)});
         const feeUsd=Number(opportunity.budgetUsd||0)*Number(opportunity.feePercent||0)/100;
         const econ=evaluateOpportunity({expectedRevenueUsd:Number(opportunity.budgetUsd||0),successProbability:cap.confidence||0.5,modelCostUsd:cap.estimatedModelCostUsd,marketplaceFeeUsd:feeUsd,computeCostUsd:0},cycleConfig);
         const row={...opportunity,capability:cap,economics:econ}; recordOpportunity(row); return row;
