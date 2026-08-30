@@ -158,6 +158,16 @@ function renderAutonomOS(){
   const marketJobs=el('#autonomos-market-jobs');
   if(marketJobs){ marketJobs.innerHTML=(a.jobs||[]).filter(j=>j.source&&j.source!=='x402'&&j.source!=='admin_preview').slice(0,12).map(j=>`<article class="autonomos-event"><div class="event-row"><b>${esc(j.title||j.externalId||j.id)}</b><span class="status ${String(j.status||'').includes('fail')?'s-error':'s-ready'}">${esc(pretty(j.status||'unknown'))}</span></div><p>${esc(pretty(j.source))} · ${j.budgetUsd!==undefined?usd(j.budgetUsd):''} ${esc(j.currency||'')}${j.reason?` · <span class="job-fail-reason">${esc(j.reason)}</span>`:''}${j.error?` · <span class="job-fail-reason">${esc(j.error)}</span>`:''}</p></article>`).join('')||emptyCard('No marketplace jobs claimed yet. Discovery can be active while claims remain zero.'); }
 
+  const candidacy=el('#autonomos-candidacy');
+  if(candidacy){
+    const rows=a.runtime?.opportunityEconomics||[];
+    candidacy.innerHTML=rows.slice(0,30).map(x=>{
+      const isCandidate=x.candidacy?.isCandidate;
+      const reasons=(x.candidacy?.reasons||[]);
+      return `<article class="autonomos-event"><div class="event-row"><b>${esc(x.title||x.externalId||'Untitled')}</b><span class="status ${isCandidate?'s-ready':'s-error'}">${isCandidate?'Would auto-claim':'Blocked'}</span></div><p>${esc(pretty(x.source))} · ${usd(x.budgetUsd)}${reasons.length?` · <span class="job-fail-reason">${esc(reasons.join(' · '))}</span>`:''}</p></article>`;
+    }).join('')||emptyCard('No opportunities observed yet this cycle.');
+  }
+
   const wallet=el('#autonomos-wallet');
   if(wallet){ const assets=(a.treasury?.assets||[]).filter(x=>Number(x.balance||0)>0).slice(0,12).map(x=>`${x.network}: ${Number(x.balance||0).toFixed(6)} ${x.symbol}`).join(' · '); wallet.innerHTML=`<b>${esc(a.treasury?.ownerWallet||'Not configured')}</b><span>${a.treasury?.ok?`${esc(assets||'No non-zero EVM balances detected')} · checked ${esc(formatDate(a.treasury.checkedAt))}`:`Balance check: ${esc(a.treasury?.error||'not checked yet')}`}</span>`; }
   const allocations=el('#autonomos-allocations');
