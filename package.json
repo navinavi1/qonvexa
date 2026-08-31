@@ -8,22 +8,43 @@
     "dev": "node --watch server.js",
     "check": "node --check server.js && node --check public/app.js && node --check public/order.js && node --check public/admin.js && node --check public/success.js && node --check scripts/preflight.mjs && node --check scripts/purchase-audit.mjs && node --check scripts/finalization-audit.mjs",
     "smoke": "node scripts/smoke.js",
-    "verify": "npm run check && npm run autonomos-audit && npm run autonomos2-flow-test && npm run t2000-oauth-test && npm run t2000-connector-test && node scripts/preflight.mjs && node scripts/render-audit.mjs && node scripts/purchase-audit.mjs && node scripts/finalization-audit.mjs && node scripts/smoke.js",
+    "verify": "npm run check && npm run autonomos-audit && npm run autonomos2-flow-test && npm run autonomos-platform-test && npm run t2000-oauth-test && npm run t2000-connector-test && node scripts/preflight.mjs && node scripts/render-audit.mjs && node scripts/purchase-audit.mjs && node scripts/finalization-audit.mjs && node scripts/smoke.js",
     "preflight": "node scripts/preflight.mjs",
     "render-audit": "node scripts/render-audit.mjs",
     "autonomos-audit": "node scripts/autonomos-audit.mjs",
     "autonomos2-flow-test": "node scripts/autonomos2-flow-test.mjs",
     "t2000-oauth-test": "node scripts/t2000-oauth-test.mjs",
-    "t2000-connector-test": "node scripts/t2000-connector-test.mjs"
+    "t2000-connector-test": "node scripts/t2000-connector-test.mjs",
+    "autonomos-platform-test": "node scripts/autonomos-platform-test.mjs",
+    "autonomos-temporal-worker": "node scripts/autonomos-temporal-worker.mjs"
   },
   "dependencies": {
     "@e2b/code-interpreter": "^1.2.0",
     "dotenv": "16.4.5",
     "express": "4.21.1",
     "helmet": "8.0.0",
-    "stripe": "18.0.0"
+    "stripe": "18.0.0",
+    "@aws-sdk/client-s3": "3.1121.0",
+    "@browserbasehq/stagehand": "4.0.2",
+    "@langchain/core": "1.2.9",
+    "@langchain/langgraph": "1.4.13",
+    "@langchain/langgraph-checkpoint-postgres": "1.0.5",
+    "@openai/agents": "0.17.0",
+    "@opensearch-project/opensearch": "3.6.0",
+    "@temporalio/client": "1.23.0",
+    "@temporalio/worker": "1.23.0",
+    "nats": "2.29.3",
+    "pg": "8.23.0",
+    "redis": "6.2.1",
+    "zod": "^4.0.0",
+    "@temporalio/workflow": "1.23.0",
+    "@langfuse/tracing": "5.11.0",
+    "@langfuse/otel": "5.11.0",
+    "@opentelemetry/sdk-node": "0.221.0",
+    "@aws-sdk/s3-request-presigner": "3.1121.0",
+    "@aws-sdk/client-secrets-manager": "3.1121.0"
   },
   "engines": {
-    "node": ">=22.0.0 <25.0.0"
+    "node": ">=22.18.0 <25.0.0"
   }
 }
