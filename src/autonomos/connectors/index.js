@@ -17,7 +17,6 @@ const CONNECTOR_DEFS = Object.freeze([
   { id:'t2000', name:'t2000', kind:'jobs+seller', description:'Sui/USDC Open Jobs + your paid Service orders via Passport Connect OAuth.', requiredEnv:[], optionalEnv:['T2000_MCP_URL'] },
   { id:'olas-mech', name:'Olas Mech Marketplace', kind:'seller+discovery', description:'Agent-to-agent paid Mech services.', requiredEnv:['OLAS_MECH_API_KEY'], optionalEnv:['OLAS_MECH_ENDPOINT'] },
   { id:'nevermined', name:'Nevermined', kind:'payments', description:'Fiat + crypto agent payment facilitator and metering.', requiredEnv:['NVM_API_KEY'], optionalEnv:['NVM_PLAN_ID'] },
-  { id:'agentverse', name:'Agentverse / Fetch.ai', kind:'discovery', description:'Public agent/function discovery and ASI routing.', requiredEnv:[], optionalEnv:['AGENTVERSE_API_KEY'] },
   { id:'openserv', name:'OpenServ', kind:'discovery', description:'Agent/workflow ecosystem; optional authenticated connector.', requiredEnv:['OPENSERV_API_KEY'], optionalEnv:[] },
   // P1 fix: Firecrawl/E2B previously had no entry here at all, so the dashboard could show
   // a fully green AutonomOS while one or both tool keys were missing, unauthorized, or
@@ -50,7 +49,6 @@ export function connectorStatuses(env = process.env, x402Status = {}, persistedC
       const connected=Boolean(String(persistedCredentials?.t2000?.accessToken||'').trim());
       return { ...def, status:connected?'ready':'connect_required', configured:connected, missing:connected?[]:['Connect t2000 in the AutonomOS dashboard (Google OAuth → existing Passport).'], mode:'passport_connect_oauth' };
     }
-    if (def.id === 'agentverse') return { ...def, status:'discovery_ready', configured:true, missing:[] };
     const missing=def.requiredEnv.filter(key=>!String(env[key]||'').trim());
     return { ...def, status:missing.length?'needs_credentials':'ready', configured:missing.length===0, missing };
   });
@@ -140,7 +138,6 @@ export async function discoverMarketOpportunities({ env=process.env, credentials
     ['x402-bazaar',()=>discoverX402(env,limit)],
     ['clawlancer',()=>discoverClawlancer(env,credentials,limit)],
     ['dealwork',()=>discoverDealwork(env,credentials,limit)],
-    ['agentverse',()=>discoverAgentverse(limit)],
     ['t2000',()=>discoverT2000(env,credentials,limit)],
     ['superteam',()=>discoverSuperteam(credentials,limit)]
   ].filter(([id])=>!want||want.has(id));
@@ -239,20 +236,6 @@ async function discoverClawlancer(env,credentials,limit){
   return {signals:signals.slice(0,limit),health:{ok:true,count:signals.length,authenticated:Boolean(key)}};
 }
 
-async function discoverAgentverse(limit){
-  const response=await fetch('https://agentverse.ai/v1/search/functions',{method:'POST',headers:{'content-type':'application/json','accept':'application/json','user-agent':'AutonomOS/2.0'},body:JSON.stringify({limit:Math.min(limit,50),offset:0,sort:'last-modified'}),signal:AbortSignal.timeout(12000)});
-  const body=await safeJson(response); if(!response.ok)return{signals:[],health:{ok:false,status:response.status}};
-  const rows=Array.isArray(body?.functions)?body.functions:[];
-  const signals=rows.map(raw=>normalizeOpportunity('agentverse',{externalId:raw.id,title:raw.name,description:raw.description||raw.name,url:'https://agentverse.ai/marketplace',status:'discovery',priceUsd:0},{claimMode:'route/discovery',escrowed:false,currency:'UNKNOWN'}));
-  return {signals,health:{ok:true,count:signals.length,total:Number(body?.total||0)}};
-}
-
-// Superteam Earn: only listings with agentAccess = AGENT_ALLOWED or AGENT_ONLY accept
-// agent submissions — that filtering happens server-side on this endpoint per their own
-// docs, so no extra check is needed here. Field names below use the same defensive
-// multi-fallback pattern as the rest of this file (title/name, id/slug, reward/amount)
-// since Superteam's docs show request bodies but not a full listing response schema —
-// unknown/missing fields degrade to 0/empty rather than throwing, same as t2000 above.
 async function discoverSuperteam(credentials,limit){
   const key=String(credentials?.superteam?.apiKey||'');
   if(!key) return {signals:[],health:{ok:false,error:'superteam_not_registered_yet'}};
@@ -309,11 +292,22 @@ async function discoverT2000(env,credentials,limit){
     let openCount=0,sellerQueueCount=0;
 
     if(boardTool){
-      let payload=null;
-      for(const args of [{limit:Math.min(limit,50)},{},{limit:Math.min(limit,50),offset:0}]){
-        try{payload=extractMcpToolPayload(await client.callTool(boardTool.name,args));if(payload)break}catch{}
+      // Fetch more than the first MCP page when the server supports offset/page cursors.
+      // Several earlier builds always showed the same ~6 jobs because discovery stopped
+      // after one tool call. We try conservative page shapes, dedupe by id, and stop when
+      // the server repeats the same page (covers implementations that simply ignore offset).
+      const openings=[]; const rawSeen=new Set(); const pageSize=Math.min(50,Math.max(10,limit));
+      for(let page=0;page<Math.min(10,Math.ceil(limit/pageSize));page++){
+        let payload=null;
+        const offset=page*pageSize;
+        const candidates=page===0?[{limit:pageSize},{limit:pageSize,offset:0},{page:1,limit:pageSize},{}]:[{limit:pageSize,offset},{page:page+1,limit:pageSize}];
+        for(const args of candidates){try{payload=extractMcpToolPayload(await client.callTool(boardTool.name,args));if(payload)break}catch{}}
+        const batch=findArrayByKey(payload,['jobs','openings','items','listings','data']);
+        if(!batch.length)break;
+        let added=0;
+        for(const raw of batch){const id=String(raw?.id||raw?.openingId||raw?.opening_id||raw?.jobId||raw?.job_id||'');if(!id||rawSeen.has(id))continue;rawSeen.add(id);openings.push(raw);added++;if(openings.length>=limit)break;}
+        if(openings.length>=limit||added===0||batch.length<pageSize)break;
       }
-      const openings=findArrayByKey(payload,['jobs','openings','items','listings','data']);
       const openSignals=openings.slice(0,limit).map(raw=>{
         const batchId=String(raw.batchId||raw.batch_id||'');
         const budgetUsd=t2000Amount(raw);
