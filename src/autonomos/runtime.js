@@ -48,6 +48,12 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
   let claimAttempts = store.readJson('claim-attempts.json', {});
   const MAX_CLAIM_ATTEMPTS = 5;
   const CLAIM_RETRY_BACKOFF_MS = 90_000;
+  // Assigned t2000 work remains in the seller queue after a local execution failure.
+  // Retry it carefully instead of either stranding it forever (old handled-set behavior)
+  // or burning model/API spend every 15 seconds on the same bad job.
+  let executionAttempts = store.readJson('execution-attempts.json', {});
+  const MAX_EXECUTION_ATTEMPTS = 3;
+  const EXECUTION_RETRY_BACKOFF_MS = 5 * 60_000;
   // Jobs that survived past a successful marketplace claim but not yet past delivery —
   // see writeInFlightJob/recoverInFlightJobs for why this exists (P1: claimed-job/restart protection).
   let inFlightJobs = store.readJson('in-flight-jobs.json', {});
@@ -99,6 +105,7 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
         'genesisObjective','minMarginPercent','reservePercent','growthPercent','experimentPercent',
         'heartbeatSeconds','fastClaimPollSeconds','maxChildren','childSpawnConcurrencyThreshold','childTtlMinutes','autoReplication',
         'maxApiCostPercentOfPayout','maxJobsPerCycle','autoClaimJobs','requireEscrowForAutoClaim','minJobPayoutUsd',
+        't2000MinOpenJobPayoutUsd','t2000PriorityOpenJobPayoutUsd','t2000PremiumOpenJobPayoutUsd',
         // P0 fix (external audit): maxPaidProcurementUsd defaults to 0 and was NOT in this
         // list, so even an owner who correctly set zeroSpendMode:false and
         // allowExternalSpending:true through the admin UI still had every paid tool call
@@ -135,8 +142,8 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
     // touch seen-opportunities.json (pure discovery dedup, safe to keep) or any ledger/
     // treasury data — only the claim-retry bookkeeping.
     resetClaimHistory(){
-      handled.clear(); claimAttempts={};
-      persistSet('handled-opportunities.json',handled); store.writeJson('claim-attempts.json',claimAttempts);
+      handled.clear(); claimAttempts={}; executionAttempts={};
+      persistSet('handled-opportunities.json',handled); store.writeJson('claim-attempts.json',claimAttempts); store.writeJson('execution-attempts.json',executionAttempts);
       event('claim_history_reset',{});
       return {ok:true};
     },
@@ -152,6 +159,7 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
       await syncT2000Credential({required:true});
       const discovery=await discoverMarketOpportunities({env,credentials,limit:20,sources:['t2000']});
       state.connectorHealth={...(state.connectorHealth||{}),t2000:discovery.health?.t2000||{ok:false,error:'t2000_probe_failed'}};
+      updateT2000QualificationHealth(discovery.signals||[]);
       state.marketplaceWallets=await readMarketplaceWallets({env,credentials});
       state.updatedAt=new Date().toISOString();store.writeJson('state.json',state);
       event('t2000_oauth_connected',{openCount:state.connectorHealth.t2000?.openCount||0,sellerQueueCount:state.connectorHealth.t2000?.sellerQueueCount||0});
@@ -209,6 +217,7 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
         const row={...opportunity,capability:cap,economics:econ}; normalized.push(row); recordOpportunity(row);
       }
       setAgentMetric('opportunity-radar',{tasks:1});
+      updateT2000QualificationHealth(normalized);
       setAgent('demand-analyst','working');state.marketSummary=summarizeOpportunities(normalized);setAgentMetric('demand-analyst',{tasks:1});
       setAgent('competition-agent','working');state.competition=competitionSnapshot(normalized);setAgentMetric('competition-agent',{tasks:1});
       setAgent('economics-agent','working');
@@ -266,9 +275,14 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
     const paidAssignedT2000Order=op.source==='t2000'&&op.claimMode==='already_assigned';
     if(!config.autoClaimJobs)reasons.push('auto_claim_disabled_in_policy');
     const key=opportunityKey(op);
-    if(handled.has(key))reasons.push('already_handled_permanently_rejected_or_delivered');
+    if(!paidAssignedT2000Order&&handled.has(key))reasons.push('already_handled_permanently_rejected_or_delivered');
     const attempt=claimAttempts[key];
-    if(attempt&&Date.now()-Date.parse(attempt.lastAttemptAt||0)<CLAIM_RETRY_BACKOFF_MS)reasons.push('recent_claim_attempt_still_in_backoff');
+    if(!paidAssignedT2000Order&&attempt&&Date.now()-Date.parse(attempt.lastAttemptAt||0)<CLAIM_RETRY_BACKOFF_MS)reasons.push('recent_claim_attempt_still_in_backoff');
+    if(paidAssignedT2000Order){
+      const executionAttempt=executionAttempts[key];
+      if(executionAttempt&&Number(executionAttempt.count||0)>=MAX_EXECUTION_ATTEMPTS)reasons.push(`assigned_execution_retry_limit_reached:${MAX_EXECUTION_ATTEMPTS}`);
+      else if(executionAttempt&&Date.now()-Date.parse(executionAttempt.lastAttemptAt||0)<EXECUTION_RETRY_BACKOFF_MS)reasons.push('assigned_execution_retry_backoff');
+    }
     if(!['clawlancer','t2000','dealwork','superteam'].includes(op.source))reasons.push('source_not_in_auto_claim_allowlist');
     // Superteam Earn has no escrow concept at all (competitive submission, judged by a
     // human sponsor) — requiring escrowed:true for it would permanently block every
@@ -283,6 +297,11 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
     // order. Capability/safety, owner auto-work policy and execution spend controls still
     // apply, while t2000_job_status supplies the authoritative work order before execution.
     if(!paidAssignedT2000Order&&Number(op.budgetUsd||0)<Number(config.minJobPayoutUsd||0))reasons.push(`budget_below_minJobPayoutUsd:${config.minJobPayoutUsd}`);
+    // t2000 has many cent-level Open Jobs. Those are useful for testing the marketplace,
+    // but they are not the revenue target of this deployment. Keep seller-queue work that
+    // is already assigned to us flowing (we have already accepted that obligation), while
+    // refusing to claim any NEW t2000 Open Job below the dedicated floor.
+    if(op.source==='t2000'&&!paidAssignedT2000Order&&Number(op.budgetUsd||0)<Number(config.t2000MinOpenJobPayoutUsd||35))reasons.push(`t2000_open_job_below_floor:${config.t2000MinOpenJobPayoutUsd}`);
     if(!op.capability?.executable)reasons.push(`capability_not_executable:${op.capability?.mode||'unknown'}`);
     if(!paidAssignedT2000Order&&!op.economics?.allowed)reasons.push(`economics_blocked:${op.economics?.reason||'unknown'}`);
     const apiCostCeiling=Number(op.budgetUsd||0)*(Number(config.maxApiCostPercentOfPayout||25)/100);
@@ -291,7 +310,18 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
     return { isCandidate:reasons.length===0, reasons };
   }
   function isAutoClaimCandidate(op){ return explainCandidacy(op).isCandidate; }
-  function scoreCandidate(op){const paidOrder=op.source==='t2000'&&op.claimMode==='already_assigned';return (paidOrder?1_000_000:0)+Number(op.economics?.expectedProfitUsd||0)*Math.max(0.1,Number(op.capability?.confidence||0));}
+  function scoreCandidate(op){
+    const paidOrder=op.source==='t2000'&&op.claimMode==='already_assigned';
+    if(paidOrder)return 1_000_000+Number(op.economics?.expectedProfitUsd||0);
+    const budget=Number(op.budgetUsd||0);
+    let t2000TierBonus=0;
+    if(op.source==='t2000'){
+      if(budget>=Number(config.t2000PremiumOpenJobPayoutUsd||100))t2000TierBonus=100_000;
+      else if(budget>=Number(config.t2000PriorityOpenJobPayoutUsd||65))t2000TierBonus=50_000;
+      else if(budget>=Number(config.t2000MinOpenJobPayoutUsd||35))t2000TierBonus=10_000;
+    }
+    return t2000TierBonus+Number(op.economics?.expectedProfitUsd||0)*Math.max(0.1,Number(op.capability?.confidence||0));
+  }
 
   async function processMarketplaceOpportunity(op){
     const key=opportunityKey(op);
@@ -376,6 +406,7 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
       // recorded here as its own 'tool_api' cost row so Profit Engine accounting
       // (computeEarnedSpendBudgetUsd, netProfitUsd) reflects real tool spend, not just LLM tokens.
       if(toolCostUsd>0)recordCost({jobId,source:op.source,externalId:op.externalId,amountUsd:toolCostUsd,kind:'tool_api',estimated:true,note:'firecrawl_e2b_call_cost_estimate'});
+      if(executionAttempts[key]){delete executionAttempts[key];store.writeJson('execution-attempts.json',executionAttempts);}
       clearInFlightJob(jobId);
       return{claimed:true,delivered:true};
     }catch(error){
@@ -392,6 +423,11 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
       const incurredToolCostUsd=Number(deliverable?.evidence?.toolCostUsd||0);
       if(incurredCostUsd>0)recordCost({jobId,source:op.source,externalId:op.externalId,amountUsd:incurredCostUsd,kind:'model',estimated:true,note:'job_failed_after_model_call'});
       if(incurredToolCostUsd>0)recordCost({jobId,source:op.source,externalId:op.externalId,amountUsd:incurredToolCostUsd,kind:'tool_api',estimated:true,note:'job_failed_after_tool_calls'});
+      if(op.source==='t2000'&&op.claimMode==='already_assigned'){
+        const previous=executionAttempts[key]||{};
+        executionAttempts[key]={count:Number(previous.count||0)+1,lastAttemptAt:new Date().toISOString(),reason:String(error?.message||error).slice(0,220)};
+        store.writeJson('execution-attempts.json',executionAttempts);
+      }
       clearInFlightJob(jobId);
       return{claimed:true,delivered:false};
     }
@@ -607,6 +643,15 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
     credentials=next;
     return token;
   }
+  function updateT2000QualificationHealth(rows=[]){
+    const h=state.connectorHealth?.t2000;
+    if(!h)return;
+    const open=(rows||[]).filter(op=>op.source==='t2000'&&op.claimMode!=='already_assigned');
+    const min=Number(config.t2000MinOpenJobPayoutUsd||35);
+    const priority=Number(config.t2000PriorityOpenJobPayoutUsd||65);
+    const premium=Number(config.t2000PremiumOpenJobPayoutUsd||100);
+    state.connectorHealth.t2000={...h,openFloorUsd:min,eligibleOpenCount:open.filter(op=>Number(op.budgetUsd||0)>=min).length,priorityOpenCount:open.filter(op=>Number(op.budgetUsd||0)>=priority).length,premiumOpenCount:open.filter(op=>Number(op.budgetUsd||0)>=premium).length};
+  }
   async function recoverStartup(){await syncT2000Credential().catch(()=>{});await recoverInFlightJobs();}
   function schedule(){clearTimer();if(!config.enabled||config.killSwitch)return;timer=setInterval(()=>cycle('heartbeat').catch(()=>{}),config.heartbeatSeconds*1000);timer.unref?.();setTimeout(()=>cycle('startup').catch(()=>{}),1200).unref?.();if(config.autoClaimJobs){fastTimer=setInterval(()=>fastClaimCycle().catch(()=>{}),config.fastClaimPollSeconds*1000);fastTimer.unref?.();}}
   function clearTimer(){if(timer)clearInterval(timer);timer=null;if(fastTimer)clearInterval(fastTimer);fastTimer=null;}
@@ -630,6 +675,7 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
         const econ=evaluateOpportunity({expectedRevenueUsd:Number(opportunity.budgetUsd||0),successProbability:cap.confidence||0.5,modelCostUsd:cap.estimatedModelCostUsd,marketplaceFeeUsd:feeUsd,computeCostUsd:0},cycleConfig);
         const row={...opportunity,capability:cap,economics:econ}; recordOpportunity(row); return row;
       });
+      updateT2000QualificationHealth(normalized);
       const candidates=normalized.filter(isAutoClaimCandidate).sort((a,b)=>scoreCandidate(b)-scoreCandidate(a)).slice(0,config.maxJobsPerCycle);
       for(const op of candidates)await processMarketplaceOpportunity(op);
       return{ok:true,found:normalized.length,claimed:candidates.length};
