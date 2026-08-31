@@ -17,10 +17,15 @@ export const DEFAULT_AUTONOMOS_CONFIG = Object.freeze({
   childTtlMinutes: 180,
   maxPaidProcurementUsd: 0,
   maxApiCostPercentOfPayout: 25,
-  maxJobsPerCycle: 2,
+  maxJobsPerCycle: 6,
+  maxConcurrentJobs: 4,
+  platformGeneration: 3,
   autoClaimJobs: true,
   requireEscrowForAutoClaim: true,
-  minJobPayoutUsd: 0.01,
+  minJobPayoutUsd: 5,
+  clawlancerMinJobPayoutUsd: 5,
+  dealworkMinJobPayoutUsd: 10,
+  superteamMinJobPayoutUsd: 25,
   t2000MinOpenJobPayoutUsd: 35,
   t2000PriorityOpenJobPayoutUsd: 65,
   t2000PremiumOpenJobPayoutUsd: 100,
@@ -30,7 +35,10 @@ export const DEFAULT_AUTONOMOS_CONFIG = Object.freeze({
 });
 
 export function normalizeConfig(raw = {}) {
+  const legacy = !Object.prototype.hasOwnProperty.call(raw, 'platformGeneration');
   const cfg = { ...DEFAULT_AUTONOMOS_CONFIG, ...raw };
+  if (legacy && Number(raw.maxJobsPerCycle) === 2) cfg.maxJobsPerCycle = 6;
+  cfg.platformGeneration = 3;
   cfg.enabled = Boolean(cfg.enabled);
   cfg.killSwitch = Boolean(cfg.killSwitch);
   cfg.zeroSpendMode = cfg.zeroSpendMode !== false;
@@ -52,10 +60,14 @@ export function normalizeConfig(raw = {}) {
   cfg.childTtlMinutes = Math.round(clampNumber(cfg.childTtlMinutes, 5, 1440, 180));
   cfg.maxPaidProcurementUsd = clampNumber(cfg.maxPaidProcurementUsd, 0, 100000, 0);
   cfg.maxApiCostPercentOfPayout = clampNumber(cfg.maxApiCostPercentOfPayout, 0, 80, 25);
-  cfg.maxJobsPerCycle = Math.round(clampNumber(cfg.maxJobsPerCycle, 0, 20, 2));
+  cfg.maxJobsPerCycle = Math.round(clampNumber(cfg.maxJobsPerCycle, 1, 50, 6));
+  cfg.maxConcurrentJobs = Math.round(clampNumber(cfg.maxConcurrentJobs, 1, 20, 4));
   cfg.autoClaimJobs = cfg.autoClaimJobs !== false;
   cfg.requireEscrowForAutoClaim = cfg.requireEscrowForAutoClaim !== false;
-  cfg.minJobPayoutUsd = clampNumber(cfg.minJobPayoutUsd, 0, 100000, 0.01);
+  cfg.minJobPayoutUsd = clampNumber(cfg.minJobPayoutUsd, 0, 100000, 5);
+  cfg.clawlancerMinJobPayoutUsd = clampNumber(cfg.clawlancerMinJobPayoutUsd, cfg.minJobPayoutUsd, 100000, Math.max(5,cfg.minJobPayoutUsd));
+  cfg.dealworkMinJobPayoutUsd = clampNumber(cfg.dealworkMinJobPayoutUsd, cfg.minJobPayoutUsd, 100000, Math.max(10,cfg.minJobPayoutUsd));
+  cfg.superteamMinJobPayoutUsd = clampNumber(cfg.superteamMinJobPayoutUsd, cfg.minJobPayoutUsd, 100000, Math.max(25,cfg.minJobPayoutUsd));
   cfg.t2000MinOpenJobPayoutUsd = clampNumber(cfg.t2000MinOpenJobPayoutUsd, 0, 100000, 35);
   cfg.t2000PriorityOpenJobPayoutUsd = clampNumber(cfg.t2000PriorityOpenJobPayoutUsd, cfg.t2000MinOpenJobPayoutUsd, 100000, Math.max(65, cfg.t2000MinOpenJobPayoutUsd));
   cfg.t2000PremiumOpenJobPayoutUsd = clampNumber(cfg.t2000PremiumOpenJobPayoutUsd, cfg.t2000PriorityOpenJobPayoutUsd, 100000, Math.max(100, cfg.t2000PriorityOpenJobPayoutUsd));
