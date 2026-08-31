@@ -192,8 +192,12 @@
               <label>Max child agents<input name="maxChildren" type="number" min="0" max="100"></label>
               <label>Jobs per cycle<input name="maxJobsPerCycle" type="number" min="0" max="20"></label>
               <label>Minimum job payout, $<input name="minJobPayoutUsd" type="number" min="0" max="100000" step="0.01"></label>
+              <label>t2000 Open Jobs minimum, $<input name="t2000MinOpenJobPayoutUsd" type="number" min="0" max="100000" step="1"></label>
+              <label>t2000 priority tier, $<input name="t2000PriorityOpenJobPayoutUsd" type="number" min="0" max="100000" step="1"></label>
+              <label>t2000 premium tier, $<input name="t2000PremiumOpenJobPayoutUsd" type="number" min="0" max="100000" step="1"></label>
               <label>Max API/model cost, % payout<input name="maxApiCostPercentOfPayout" type="number" min="0" max="80"></label>
             </div>
+            <p class="settings-note">t2000 Open Jobs are filtered separately: default minimum $35, priority $65+, premium $100+. Already-assigned seller-queue work is not discarded after claim; AutonomOS finishes obligations it has already accepted.</p>
             <p class="settings-note">Fast claim poll only re-checks Clawlancer/t2000 open listings — it does not redo treasury/offer/competition work, so it can safely run much more often than the full heartbeat.</p>
             <div class="autonomos-form-grid">
               <label class="autonomos-check"><input name="zeroSpendMode" type="checkbox"> <span>Zero-spend mode (block ANY job with API/model cost)</span></label>
