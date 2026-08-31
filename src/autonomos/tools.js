@@ -1,7 +1,9 @@
-// Real capability tools for worker agents — actual web search/scrape (Firecrawl) and
-// actual sandboxed Python execution (E2B). Without these, the LLM worker can only
-// generate plausible-sounding text; with them it can verify facts and check that code
-// actually runs before the deliverable is submitted.
+// Real capability tools for worker agents: live web research, isolated code/shell/filesystem
+// execution, browser automation and safe GitHub PR delivery. Tool access is still bounded
+// by spend policy and per-tool hard safety rules.
+import { browserTask } from './browser-tool.js';
+import { composioExecute, composioSearch } from './composio-tool.js';
+import { ArtifactStore } from './artifact-store.js';
 
 // Conservative fixed per-call cost estimates (USD) used ONLY for pre-spend policy checks
 // and cost accounting — these are not billed amounts from Firecrawl/E2B invoices (neither
@@ -12,8 +14,24 @@
 export const TOOL_COST_ESTIMATES_USD = Object.freeze({
   web_search: Number(process.env.AUTONOMOS_FIRECRAWL_SEARCH_COST_USD || 0.01),
   web_scrape: Number(process.env.AUTONOMOS_FIRECRAWL_SCRAPE_COST_USD || 0.005),
-  run_python: Number(process.env.AUTONOMOS_E2B_SANDBOX_COST_USD || 0.02)
+  run_python: Number(process.env.AUTONOMOS_E2B_SANDBOX_COST_USD || 0.02),
+  run_shell: Number(process.env.AUTONOMOS_E2B_SHELL_COST_USD || 0.03),
+  browser_task: Number(process.env.AUTONOMOS_BROWSER_TASK_COST_USD || 0.05),
+  app_tool_search: Number(process.env.AUTONOMOS_COMPOSIO_SEARCH_COST_USD || 0.001),
+  app_action: Number(process.env.AUTONOMOS_COMPOSIO_TOOL_COST_USD || 0.01),
+  coderabbit_review: 0,
+  store_artifact: Number(process.env.AUTONOMOS_S3_PUT_COST_USD || 0.001),
+  deploy_webhook: 0,
+  open_pull_request: 0
 });
+
+export function estimateToolCostUsd(name, args = {}, env = process.env) {
+  if (name === 'coderabbit_review') {
+    const count = Math.max(1, Math.min(20, Array.isArray(args?.files) ? args.files.length : 1));
+    return roundMoney(count * Math.max(0, Number(env.AUTONOMOS_CODERABBIT_COST_PER_FILE_USD || 0.25)));
+  }
+  return Math.max(0, Number(TOOL_COST_ESTIMATES_USD[name] || 0));
+}
 
 // Best-effort mitigation for prompt injection carried in scraped/searched web content:
 // strip the most common "instructions to the AI" patterns and clearly fence the text as
@@ -113,6 +131,57 @@ export async function e2bRunPython(code, env = process.env, signal) {
   }
 }
 
+
+export async function e2bRunShell({ command, files = [], collectPaths = [] } = {}, env = process.env, signal) {
+  const key = String(env.E2B_API_KEY || '');
+  if (!key) return { ok: false, error: 'e2b_api_key_missing' };
+  const cmd = String(command || '').trim();
+  if (!cmd || cmd.length > 6000) return { ok: false, error: 'invalid_shell_command' };
+  // E2B is isolated, but this still blocks common credential exfiltration, host metadata,
+  // network scanning and destructive-root commands. Legitimate package installs/builds/tests
+  // are explicitly allowed inside the sandbox.
+  if (/\b(curl|wget)\b[^\n]*(169\.254\.169\.254|metadata\.google|localhost:3000)|\b(nmap|masscan|hydra|sqlmap)\b|\brm\s+-rf\s+\/(?:\s|$)|\b(printenv|env)\b.*(KEY|TOKEN|SECRET)/i.test(cmd)) {
+    return { ok: false, error: 'shell_command_blocked_by_policy' };
+  }
+  const inputFiles = (Array.isArray(files) ? files : []).slice(0, 30);
+  const wanted = (Array.isArray(collectPaths) ? collectPaths : []).slice(0, 20).map(cleanRelativePath).filter(Boolean);
+  let sbx;
+  try {
+    const { Sandbox } = await import('@e2b/code-interpreter');
+    sbx = await Sandbox.create({ apiKey:key, timeoutMs:60000 });
+    for (const file of inputFiles) {
+      const rel = cleanRelativePath(file?.path);
+      if (!rel) continue;
+      await sbx.files.write(`/home/user/${rel}`, String(file?.content ?? '').slice(0, 750000));
+    }
+    const runPromise = sbx.commands.run(cmd, { timeoutMs:Math.min(180000, Number(env.AUTONOMOS_E2B_COMMAND_TIMEOUT_MS || 90000)) });
+    const result = signal ? await Promise.race([runPromise, abortPromise(signal)]) : await runPromise;
+    const response = { ok:Number(result?.exitCode ?? 1) === 0, exitCode:Number(result?.exitCode ?? 1), stdout:String(result?.stdout || '').slice(0,12000), stderr:String(result?.stderr || '').slice(0,6000), artifacts:[] };
+    if (response.ok && wanted.length) {
+      const artifactStore = new ArtifactStore({ env });
+      const ready = await artifactStore.init();
+      if (!ready.ok) response.artifactError = ready.reason || 's3_not_configured';
+      else {
+        for (const rel of wanted) {
+          try {
+            const sandboxPath = `/home/user/${rel}`;
+            const data = await sbx.files.read(sandboxPath, { format:'bytes' });
+            const buffer = Buffer.isBuffer(data) ? data : Buffer.from(data);
+            const keyName = `sandbox/${Date.now()}-${Math.random().toString(36).slice(2,8)}/${rel}`;
+            const saved = await artifactStore.putBuffer(keyName, buffer, mimeFromPath(rel));
+            response.artifacts.push({ path:rel, ...saved });
+          } catch (error) {
+            response.artifacts.push({ path:rel, ok:false, reason:String(error?.message || error).slice(0,220) });
+          }
+        }
+      }
+    }
+    return response;
+  } catch (error) {
+    return { ok:false, error:signal?.aborted ? 'aborted_by_emergency_stop' : String(error?.message || error).slice(0,300) };
+  } finally { if (sbx) { try { await sbx.kill(); } catch {} } }
+}
+
 // Deliberately NOT a generic shell/git-push tool. A raw shell tool would need the LLM to
 // type a GitHub token into a command string (which then sits in toolLog/job descriptions
 // and can leak), and would let it force-push, delete branches, or touch protected
@@ -192,79 +261,121 @@ export async function githubOpenPullRequest({ repoUrl, baseBranch = 'main', newB
   }
 }
 
+
+export async function storeArtifact({ key='', content='', contentBase64='', contentType='application/octet-stream' } = {}, env = process.env) {
+  const rawKey = cleanArtifactKey(key || `agent/${Date.now()}-artifact.bin`);
+  if (!rawKey) return { ok:false, error:'invalid_artifact_key' };
+  let buffer;
+  try { buffer = contentBase64 ? Buffer.from(String(contentBase64), 'base64') : Buffer.from(String(content ?? ''), 'utf8'); }
+  catch { return { ok:false, error:'invalid_artifact_content' }; }
+  const store = new ArtifactStore({ env });
+  const saved = await store.putBuffer(rawKey, buffer, String(contentType || mimeFromPath(rawKey)));
+  return saved.ok ? saved : { ok:false, error:saved.reason || 'artifact_store_failed' };
+}
+
+export async function codeRabbitReview({ files = [], focus='bugs security correctness tests' } = {}, env = process.env, signal) {
+  const e2bKey = String(env.E2B_API_KEY || '');
+  const apiKey = String(env.CODERABBIT_API_KEY || '');
+  if (!e2bKey) return { ok:false, error:'e2b_api_key_missing' };
+  if (!apiKey) return { ok:false, error:'coderabbit_api_key_missing' };
+  const cleanFiles = (Array.isArray(files) ? files : []).slice(0,20).map(f=>({path:cleanRelativePath(f?.path),content:String(f?.content ?? '').slice(0,750000)})).filter(f=>f.path);
+  if (!cleanFiles.length) return { ok:false, error:'coderabbit_no_files' };
+  let sbx;
+  try {
+    const { Sandbox } = await import('@e2b/code-interpreter');
+    sbx = await Sandbox.create({ apiKey:e2bKey, timeoutMs:180000, envs:{ CODERABBIT_API_KEY:apiKey } });
+    await sbx.commands.run('mkdir -p /home/user/repo && cd /home/user/repo && git init -q && git config user.email autonomos@localhost && git config user.name AutonomOS && git commit --allow-empty -qm baseline', { timeoutMs:20000 });
+    for (const file of cleanFiles) await sbx.files.write(`/home/user/repo/${file.path}`, file.content);
+    const install = await sbx.commands.run('curl -fsSL https://cli.coderabbit.ai/install.sh | sh', { timeoutMs:120000 });
+    if (Number(install?.exitCode ?? 1) !== 0) return { ok:false, error:'coderabbit_install_failed', detail:String(install?.stderr || install?.stdout || '').slice(0,1200) };
+    const cmd = `cd /home/user/repo && export PATH="$HOME/.local/bin:$HOME/bin:$PATH" && (coderabbit review --agent --api-key "$CODERABBIT_API_KEY" --dir /home/user/repo || cr review --agent --api-key "$CODERABBIT_API_KEY" --dir /home/user/repo)`;
+    const runPromise = sbx.commands.run(cmd, { timeoutMs:Math.min(300000, Number(env.AUTONOMOS_CODERABBIT_TIMEOUT_MS || 240000)) });
+    const result = signal ? await Promise.race([runPromise, abortPromise(signal)]) : await runPromise;
+    const stdout = String(result?.stdout || '').slice(0,50000);
+    const findings = parseCodeRabbitFindings(stdout).slice(0,100);
+    const severe = findings.filter(x=>/critical|high|error|warning/i.test(String(x.severity || x.level || x.type || '')));
+    return { ok:Number(result?.exitCode ?? 1) === 0 || findings.length > 0, exitCode:Number(result?.exitCode ?? 1), focus:String(focus || '').slice(0,300), reviewedFiles:cleanFiles.length, findings, severeFindings:severe.slice(0,40), rawSummary:findings.length ? '' : stdout.slice(0,8000), stderr:String(result?.stderr || '').slice(0,4000) };
+  } catch (error) {
+    return { ok:false, error:signal?.aborted ? 'aborted_by_emergency_stop' : String(error?.message || error).slice(0,300) };
+  } finally { if (sbx) { try { await sbx.kill(); } catch {} } }
+}
+
+export async function deployWebhook({ ref='', reason='', metadata={} } = {}, env = process.env, signal) {
+  const url = String(env.AUTONOMOS_DEPLOY_WEBHOOK_URL || '').trim();
+  if (!/^https:\/\//i.test(url)) return { ok:false, error:'deploy_webhook_not_configured_https_only' };
+  const token = String(env.AUTONOMOS_DEPLOY_WEBHOOK_TOKEN || '');
+  try {
+    const response = await fetch(url, {
+      method:'POST',
+      headers:{ 'content-type':'application/json', ...(token ? { authorization:`Bearer ${token}` } : {}) },
+      body:JSON.stringify({ ref:String(ref || '').slice(0,300), reason:String(reason || '').slice(0,500), metadata:sanitizeMetadata(metadata) }),
+      signal:withTimeout(30000, signal)
+    });
+    const text = await response.text().catch(()=> '');
+    return response.ok ? { ok:true, status:response.status, response:text.slice(0,1200) } : { ok:false, error:`deploy_webhook_http_${response.status}`, detail:text.slice(0,1200) };
+  } catch (error) { return { ok:false, error:signal?.aborted ? 'aborted_by_emergency_stop' : String(error?.message || error).slice(0,250) }; }
+}
+
+function parseCodeRabbitFindings(stdout) {
+  const out=[];
+  for (const line of String(stdout || '').split(/\r?\n/)) {
+    const trimmed=line.trim(); if (!trimmed.startsWith('{')) continue;
+    try { const row=JSON.parse(trimmed); if (row && typeof row==='object') out.push(row); } catch {}
+  }
+  return out;
+}
+
+function cleanRelativePath(value) {
+  const rel=String(value || '').replace(/\\/g,'/').replace(/^\/+/, '');
+  if (!rel || rel.includes('..') || rel.includes('\0')) return '';
+  return rel.slice(0,500);
+}
+function cleanArtifactKey(value) { return cleanRelativePath(value).replace(/[^a-zA-Z0-9._\-/]/g,'_'); }
+function mimeFromPath(value) {
+  const ext=String(value || '').toLowerCase().split('.').pop();
+  return ({json:'application/json',csv:'text/csv',txt:'text/plain; charset=utf-8',md:'text/markdown; charset=utf-8',html:'text/html; charset=utf-8',pdf:'application/pdf',zip:'application/zip',png:'image/png',jpg:'image/jpeg',jpeg:'image/jpeg',webp:'image/webp',docx:'application/vnd.openxmlformats-officedocument.wordprocessingml.document',xlsx:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',pptx:'application/vnd.openxmlformats-officedocument.presentationml.presentation'})[ext] || 'application/octet-stream';
+}
+function sanitizeMetadata(value) {
+  if (!value || typeof value!=='object') return {};
+  const out={}; for (const [k,v] of Object.entries(value).slice(0,30)) { if (/token|secret|password|key/i.test(k)) continue; out[String(k).slice(0,80)] = typeof v==='string' ? v.slice(0,500) : v; } return out;
+}
+function abortPromise(signal) { return new Promise((_,reject)=>signal.addEventListener('abort',()=>reject(new Error('aborted_by_emergency_stop')),{once:true})); }
+function roundMoney(value) { return Math.round((Number(value || 0) + Number.EPSILON) * 1e6) / 1e6; }
+
 // Tool schemas in OpenAI-compatible function-calling format.
 export const TOOL_SCHEMAS = [
-  {
-    type: 'function',
-    function: {
-      name: 'web_search',
-      description: 'Search the live web for current, real information. Use this before writing anything that claims to be researched or fact-based.',
-      parameters: { type: 'object', properties: { query: { type: 'string', description: 'Search query' } }, required: ['query'] }
-    }
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'web_scrape',
-      description: 'Fetch the actual current content of a specific URL as markdown. Use this to read a page the task references or a page found via web_search.',
-      parameters: { type: 'object', properties: { url: { type: 'string', description: 'Full URL to fetch' } }, required: ['url'] }
-    }
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'run_python',
-      description: 'Execute Python code in a real sandbox and see its actual output/errors. Use this to verify code works before submitting it as a deliverable, or to compute an exact answer instead of guessing.',
-      parameters: { type: 'object', properties: { code: { type: 'string', description: 'Python source code to execute' } }, required: ['code'] }
-    }
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'open_pull_request',
-      description: 'Propose a code change to a real public GitHub repository by opening a Pull Request. This NEVER merges automatically — a human always reviews it first. Use this only for jobs that explicitly ask for a GitHub repo fix/change/PR. Test your code with run_python first when possible; do not open a PR with code you have not verified runs.',
-      parameters: {
-        type: 'object',
-        properties: {
-          repoUrl: { type: 'string', description: 'Full https://github.com/owner/repo URL from the task' },
-          baseBranch: { type: 'string', description: 'Branch to open the PR against, usually "main" (default) or "master"' },
-          newBranch: { type: 'string', description: 'New branch name for this change, e.g. "autonomos/fix-xyz". Never "main", "master", or "production".' },
-          commitMessage: { type: 'string', description: 'Short commit message and PR title describing the change' },
-          files: {
-            type: 'array',
-            description: 'Files to add or update, with their FULL new content (not a diff/patch)',
-            items: { type: 'object', properties: { path: { type: 'string' }, content: { type: 'string' } }, required: ['path', 'content'] }
-          }
-        },
-        required: ['repoUrl', 'newBranch', 'commitMessage', 'files']
-      }
-    }
-  }
+  {type:'function',function:{name:'web_search',description:'Search the live web for current, real information. Use before fact-based research claims.',parameters:{type:'object',properties:{query:{type:'string'}},required:['query']}}},
+  {type:'function',function:{name:'web_scrape',description:'Read the current content of a specific URL as untrusted data.',parameters:{type:'object',properties:{url:{type:'string'}},required:['url']}}},
+  {type:'function',function:{name:'run_python',description:'Execute Python in an isolated E2B sandbox and return actual output/errors.',parameters:{type:'object',properties:{code:{type:'string'}},required:['code']}}},
+  {type:'function',function:{name:'run_shell',description:'Run bounded shell commands inside isolated E2B for package installs, tests, builds and file generation. collectPaths uploads generated files to durable S3 storage.',parameters:{type:'object',properties:{command:{type:'string'},files:{type:'array',items:{type:'object',properties:{path:{type:'string'},content:{type:'string'}},required:['path','content']}},collectPaths:{type:'array',items:{type:'string'},description:'Relative generated file paths to persist after the command'}},required:['command']}}},
+  {type:'function',function:{name:'browser_task',description:'Operate a cloud browser for legitimate interactive web tasks. Never bypass CAPTCHA, 2FA, access controls, or site rules.',parameters:{type:'object',properties:{url:{type:'string'},instruction:{type:'string'}},required:['url','instruction']}}},
+  {type:'function',function:{name:'app_tool_search',description:'Search Composio for a real connected-app capability before calling app_action. Use this instead of guessing tool slugs.',parameters:{type:'object',properties:{query:{type:'string'},toolkit:{type:'string'},limit:{type:'number'}},required:['query']}}},
+  {type:'function',function:{name:'app_action',description:'Execute an authenticated non-financial, non-destructive action in a connected app through Composio. Search first when the exact slug is unknown.',parameters:{type:'object',properties:{toolSlug:{type:'string'},arguments:{type:'object',additionalProperties:true},connectedAccountId:{type:'string'},userId:{type:'string'}},required:['toolSlug','arguments']}}},
+  {type:'function',function:{name:'store_artifact',description:'Persist a generated deliverable/file in S3-compatible storage and return a stable or signed URL.',parameters:{type:'object',properties:{key:{type:'string'},content:{type:'string'},contentBase64:{type:'string'},contentType:{type:'string'}},required:['key']}}},
+  {type:'function',function:{name:'coderabbit_review',description:'Run an independent CodeRabbit review on code files after tests. Use as a second QA gate for high-value coding work when configured.',parameters:{type:'object',properties:{files:{type:'array',items:{type:'object',properties:{path:{type:'string'},content:{type:'string'}},required:['path','content']}},focus:{type:'string'}},required:['files']}}},
+  {type:'function',function:{name:'deploy_webhook',description:'Trigger the single owner-configured HTTPS deployment webhook. The destination is fixed in server configuration and cannot be chosen by the agent.',parameters:{type:'object',properties:{ref:{type:'string'},reason:{type:'string'},metadata:{type:'object',additionalProperties:true}},required:['ref','reason']}}},
+  {type:'function',function:{name:'open_pull_request',description:'Propose verified code changes to a public GitHub repo via a fork and Pull Request. Never merges automatically.',parameters:{type:'object',properties:{repoUrl:{type:'string'},baseBranch:{type:'string'},newBranch:{type:'string'},commitMessage:{type:'string'},files:{type:'array',items:{type:'object',properties:{path:{type:'string'},content:{type:'string'}},required:['path','content']}}},required:['repoUrl','newBranch','commitMessage','files']}}}
 ];
 
-// P0/P1 fix: every Firecrawl/E2B call is real external spend, but nothing previously
-// checked that against the owner's spend policy (zeroSpendMode / allowExternalSpending /
-// earned-funds budget) before making the network call — job-executor only gated tool
-// *availability* on whether an API key existed, not on whether spending was authorized.
-// runTool now takes the live policy config and validateAction, and refuses to spend money
-// (i.e. never calls the real API) when policy says no — the caller still gets a normal
-// {ok:false,...} tool result so the LLM can adapt, it just never reaches Firecrawl/E2B.
 export async function runTool(name, args, env = process.env, { config = null, validateAction = null, signal = null } = {}) {
-  if (signal?.aborted) return { ok: false, error: 'aborted_by_emergency_stop', costUsd: 0 };
-  const costUsd = TOOL_COST_ESTIMATES_USD[name] || 0;
+  if (signal?.aborted) return { ok:false, error:'aborted_by_emergency_stop', costUsd:0 };
+  const costUsd = estimateToolCostUsd(name, args, env);
   if (config && validateAction && costUsd > 0) {
-    const policy = validateAction({ kind: 'spend', amountUsd: costUsd }, config);
-    if (!policy.allowed) return { ok: false, error: `spend_not_authorized:${policy.reason}`, costUsd: 0 };
+    const policy = validateAction({ kind:'spend', amountUsd:costUsd }, config);
+    if (!policy.allowed) return { ok:false, error:`spend_not_authorized:${policy.reason}`, costUsd:0 };
   }
   let result;
   if (name === 'web_search') result = await firecrawlSearch(args?.query, env, signal);
   else if (name === 'web_scrape') result = await firecrawlScrape(args?.url, env, signal);
   else if (name === 'run_python') result = await e2bRunPython(args?.code, env, signal);
+  else if (name === 'run_shell') result = await e2bRunShell(args, env, signal);
+  else if (name === 'browser_task') result = await browserTask(args, env, signal);
+  else if (name === 'app_tool_search') result = await composioSearch(args, env, signal);
+  else if (name === 'app_action') result = await composioExecute(args, env, signal);
+  else if (name === 'store_artifact') result = await storeArtifact(args, env);
+  else if (name === 'coderabbit_review') result = await codeRabbitReview(args, env, signal);
+  else if (name === 'deploy_webhook') result = await deployWebhook(args, env, signal);
   else if (name === 'open_pull_request') result = await githubOpenPullRequest(args, env, signal);
-  else return { ok: false, error: `unknown_tool:${name}` };
-  // Cost is incurred once the call is actually made, regardless of whether the call
-  // itself succeeded (Firecrawl/E2B bill for the attempt, not just successful results) —
-  // this is what feeds computeActualCostUsd/recordCost in runtime.js so tool spend stops
-  // being invisible to the Profit Engine's accounting.
+  else return { ok:false, error:`unknown_tool:${name}` };
   return { ...result, costUsd };
 }
