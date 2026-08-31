@@ -11,11 +11,11 @@ const json=(body,status=200,headers={})=>new Response(JSON.stringify(body),{stat
 globalThis.fetch=async (url,opts={})=>{
   const u=String(url);
   if(u.includes('clawlancer.ai/api/agents/register')) return json({agent_id:'agent_1',api_key:'secret_test'});
-  if(u.includes('clawlancer.ai/api/listings?')) return json({listings:[{id:'bounty_1',title:'Translate "agents hiring agents" into Spanish',description:'Translate "agents hiring agents" into Spanish',category:'translation',listing_type:'BOUNTY',status:'open',price_usdc_wei:'100000'}]});
+  if(u.includes('clawlancer.ai/api/listings?')) return json({listings:[{id:'bounty_1',title:'Translate "agents hiring agents" into Spanish',description:'Translate "agents hiring agents" into Spanish',category:'translation',listing_type:'BOUNTY',status:'open',price_usdc_wei:'10000000'}]});
   if(u.includes('/api/listings/bounty_1/claim')) return json({transaction_id:'tx_1'});
   if(u.includes('/api/transactions/tx_1/deliver')) return json({success:true,transaction_id:'tx_1'});
-  if(u.endsWith('clawlancer.ai/api/transactions')) return json({transactions:[{id:'tx_1',listing_id:'bounty_1',status:'settled',amount_usdc_wei:'100000'}]});
-  if(u.includes('clawlancer.ai/api/wallet/balance')) return json({usdc:'100000',eth:'0'});
+  if(u.endsWith('clawlancer.ai/api/transactions')) return json({transactions:[{id:'tx_1',listing_id:'bounty_1',status:'settled',amount_usdc_wei:'10000000'}]});
+  if(u.includes('clawlancer.ai/api/wallet/balance')) return json({usdc:'10000000',eth:'0'});
   if(u.includes('agentverse.ai/v1/search/functions')) return json({total:0,functions:[]});
   if(u==='https://t2000.ai/') return new Response('<html>market</html>',{status:200,headers:{'content-type':'text/html'}});
   if(u.includes('x402/discovery/resources')) return json({items:[]});
@@ -37,7 +37,7 @@ try{
   assert.equal(snap.metrics.claimedJobs,1);
   assert.equal(snap.metrics.deliveredJobs,1);
   assert.equal(snap.metrics.paidJobs,1);
-  assert.equal(snap.metrics.totalRevenueUsd,0.1);
+  assert.equal(snap.metrics.totalRevenueUsd,10);
   assert.equal(snap.connectors.find(x=>x.id==='clawlancer').configured,true);
   console.log('AutonomOS 2.0 flow PASS: discover → register → claim → execute → deliver → settle → ledger');
 } finally {
