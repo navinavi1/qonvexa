@@ -17,7 +17,7 @@ services:
       sizeGB: 1
     envVars:
       - key: NODE_VERSION
-        value: ">=22.0.0 <25.0.0"
+        value: ">=22.18.0 <25.0.0"
       - key: LAUNCH_MODE
         value: live
       - key: STORAGE_DIR
@@ -94,8 +94,6 @@ services:
         sync: false
       - key: T2000_MCP_URL
         value: "https://mcp.t2000.ai/mcp"
-      - key: AGENTVERSE_API_KEY
-        sync: false
       - key: AUTONOMOS_LLM_BASE_URL
         sync: false
       - key: AUTONOMOS_LLM_API_KEY
@@ -112,3 +110,67 @@ services:
         sync: false
       - key: NVM_PLAN_ID
         sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: REDIS_URL
+        sync: false
+      - key: NATS_URL
+        sync: false
+      - key: TEMPORAL_ADDRESS
+        sync: false
+      - key: TEMPORAL_NAMESPACE
+        value: default
+      - key: TEMPORAL_TASK_QUEUE
+        value: autonomos-paid-jobs
+      - key: AUTONOMOS_TEMPORAL_WORKER_TOKEN
+        sync: false
+      - key: LITELLM_BASE_URL
+        sync: false
+      - key: LITELLM_API_KEY
+        sync: false
+      - key: BROWSERBASE_API_KEY
+        sync: false
+      - key: COMPOSIO_API_KEY
+        sync: false
+      - key: BROWSERBASE_PROJECT_ID
+        sync: false
+      - key: S3_ENDPOINT
+        sync: false
+      - key: S3_REGION
+        value: auto
+      - key: S3_PUBLIC_BASE_URL
+        sync: false
+      - key: S3_BUCKET
+        sync: false
+      - key: S3_ACCESS_KEY_ID
+        sync: false
+      - key: S3_SECRET_ACCESS_KEY
+        sync: false
+      - key: LANGFUSE_PUBLIC_KEY
+        sync: false
+      - key: LANGFUSE_SECRET_KEY
+        sync: false
+      - key: OPENSEARCH_URL
+        sync: false
+      - key: OPENSEARCH_USERNAME
+        sync: false
+      - key: OPENSEARCH_PASSWORD
+        sync: false
+      - key: CODERABBIT_API_KEY
+        sync: false
+      - key: AUTH0_DOMAIN
+        sync: false
+      - key: AUTH0_AUDIENCE
+        sync: false
+      - key: AUTONOMOS_AWS_SECRET_ID
+        sync: false
+      - key: AUTONOMOS_SECRETS_REQUIRED
+        value: "false"
+      - key: AWS_REGION
+        sync: false
+      - key: AUTONOMOS_VERIFIED_PAYOUT_INTERMEDIARIES_JSON
+        value: "[]"
+      - key: AUTONOMOS_PAYOUT_NETWORKS_JSON
+        value: '["base"]'
+      - key: AUTONOMOS_PAYOUT_CRYPTO_JSON
+        value: '["USDC","USDT"]'
