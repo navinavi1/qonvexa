@@ -169,7 +169,7 @@ function renderAutonomOS(){
     const address=typeof w.address==='string'?w.address:(w.address?.address||'');
     const bal=w.balance||{};const usdc=Number(bal.usdc??bal.spendableUsdc??bal.spendable_usdc??bal.balance??0);
     tDetails.innerHTML=t.connected
-      ? `<span><b>Passport:</b> ${esc(address||'connected')}</span><span><b>USDC:</b> ${Number.isFinite(usdc)?usdc.toFixed(2):'—'}</span><span><b>Open jobs:</b> ${Number(h.openCount||0)}</span><span><b>Seller queue:</b> ${Number(h.sellerQueueCount||0)}</span>${t.expiresAt?`<span><b>Session:</b> reconnect by ${esc(formatDate(t.expiresAt))}</span>`:''}`
+      ? `<span><b>Passport:</b> ${esc(address||'connected')}</span><span><b>USDC:</b> ${Number.isFinite(usdc)?usdc.toFixed(2):'—'}</span><span><b>Open jobs:</b> ${Number(h.openCount||0)}</span><span><b>Eligible ≥ $${Number(h.openFloorUsd??a.config?.t2000MinOpenJobPayoutUsd??35).toFixed(0)}:</b> ${Number(h.eligibleOpenCount||0)}</span><span><b>Priority ≥ $${Number(a.config?.t2000PriorityOpenJobPayoutUsd??65).toFixed(0)}:</b> ${Number(h.priorityOpenCount||0)}</span><span><b>Premium ≥ $${Number(a.config?.t2000PremiumOpenJobPayoutUsd??100).toFixed(0)}:</b> ${Number(h.premiumOpenCount||0)}</span><span><b>Seller queue:</b> ${Number(h.sellerQueueCount||0)}</span>${t.expiresAt?`<span><b>Session:</b> reconnect by ${esc(formatDate(t.expiresAt))}</span>`:''}`
       : `<span>Click Connect t2000 → approve Google OAuth → return here automatically. AutonomOS will use that Passport for Open Jobs and your paid Service orders.</span>${t.lastError?`<span class="job-fail-reason">${esc(t.lastError)}</span>`:''}`;
   }
 
@@ -265,7 +265,7 @@ el('#autonomos-config-form')?.addEventListener('submit',async e=>{
   e.preventDefault();const f=e.currentTarget;const status=el('#autonomos-config-status');status.textContent='Saving…';
   const raw=Object.fromEntries(new FormData(f).entries());
   const payload={...raw,autoReplication:f.elements.autoReplication.checked,autoClaimJobs:f.elements.autoClaimJobs.checked,requireEscrowForAutoClaim:f.elements.requireEscrowForAutoClaim.checked,zeroSpendMode:f.elements.zeroSpendMode.checked,earnedFundsOnly:f.elements.earnedFundsOnly.checked,allowExternalSpending:f.elements.allowExternalSpending.checked};
-  for(const key of ['heartbeatSeconds','fastClaimPollSeconds','minMarginPercent','reservePercent','growthPercent','experimentPercent','maxChildren','maxJobsPerCycle','minJobPayoutUsd','maxApiCostPercentOfPayout','seedSpendBudgetUsd','maxPaidProcurementUsd'])payload[key]=Number(payload[key]);
+  for(const key of ['heartbeatSeconds','fastClaimPollSeconds','minMarginPercent','reservePercent','growthPercent','experimentPercent','maxChildren','maxJobsPerCycle','minJobPayoutUsd','t2000MinOpenJobPayoutUsd','t2000PriorityOpenJobPayoutUsd','t2000PremiumOpenJobPayoutUsd','maxApiCostPercentOfPayout','seedSpendBudgetUsd','maxPaidProcurementUsd'])payload[key]=Number(payload[key]);
   try{await api('/api/admin/autonomos/config',{method:'PATCH',body:JSON.stringify(payload)});status.textContent='Saved.';await loadDashboard()}catch(err){status.textContent=err.message}
 });
 
