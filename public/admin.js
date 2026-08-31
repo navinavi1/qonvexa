@@ -157,6 +157,7 @@ function renderAutonomOS(){
   const tBadge=el('#autonomos-t2000-badge');
   const tConnect=el('#autonomos-t2000-connect');
   const tDisconnect=el('#autonomos-t2000-disconnect');
+  const tRefresh=el('#autonomos-t2000-refresh');
   const tDetails=el('#autonomos-t2000-details');
   if(tBadge){
     tBadge.textContent=t.connected?'Connected':t.lastError?'Reconnect required':'Not connected';
@@ -164,6 +165,7 @@ function renderAutonomOS(){
   }
   if(tConnect)tConnect.hidden=Boolean(t.connected);
   if(tDisconnect)tDisconnect.hidden=!t.connected;
+  if(tRefresh)tRefresh.hidden=!t.connected;
   if(tDetails){
     const h=t.health||{};const w=t.wallet||{};
     const address=typeof w.address==='string'?w.address:(w.address?.address||'');
@@ -216,6 +218,9 @@ function renderAutonomOS(){
   const products=el('#autonomos-products');
   if(products) products.innerHTML=(a.products||[]).map(product=>`<article class="autonomos-product"><div class="autonomos-product-head"><b>${esc(product.name)}</b><span class="autonomos-price">$${Number(product.priceUsd||0).toFixed(3)}</span></div><p>${esc(product.description)}</p><p class="autonomos-code">${esc(product.path)}</p><p>Payment: <span class="connector-${esc(product.payment?.configured?'ready':'needs_configuration')}">${esc(pretty(product.payment?.mode||'disabled'))}</span></p></article>`).join('')||emptyCard('No machine products.');
 
+  const infrastructure=el('#autonomos-infrastructure');
+  if(infrastructure) infrastructure.innerHTML=(a.infrastructure||[]).map(c=>`<article class="autonomos-connector"><div class="autonomos-connector-head"><b>${esc(c.name)}</b><span class="connector-${esc(c.configured?'ready':'needs_configuration')}">${c.configured?'Ready':'Needs setup'}</span></div>${c.missing?.length?`<p>Needs: <span class="autonomos-code">${esc(c.missing.join(', '))}</span></p>`:'<p>Configured for runtime use.</p>'}</article>`).join('')||emptyCard('Infrastructure status unavailable.');
+
   const connectors=el('#autonomos-connectors');
   if(connectors) connectors.innerHTML=(a.connectors||[]).map(c=>`<article class="autonomos-connector"><div class="autonomos-connector-head"><b>${esc(c.name)}</b><span class="connector-${esc(c.status)}">${esc(pretty(c.status))}</span></div><p>${esc(c.description)}</p>${c.missing?.length?`<p>Needs: <span class="autonomos-code">${esc(c.missing.join(', '))}</span></p>`:''}</article>`).join('')||emptyCard('No connectors.');
 
@@ -247,6 +252,10 @@ el('#autonomos-t2000-connect')?.addEventListener('click',async()=>{
   try{const result=await api('/api/admin/autonomos/t2000/connect',{method:'POST',body:'{}'});if(!result.authorizationUrl)throw new Error('t2000 authorization URL was not returned.');location.assign(result.authorizationUrl)}
   catch(err){if(status)status.textContent=err.message;if(button)button.disabled=false}
 });
+el('#autonomos-t2000-refresh')?.addEventListener('click',async()=>{
+  const status=el('#autonomos-t2000-status');if(status)status.textContent='Refreshing live t2000 jobs…';
+  try{const result=await api('/api/admin/autonomos/t2000/refresh',{method:'POST',body:'{}'});if(status)status.textContent=`Refresh complete: ${Number(result.found||0)} jobs/signals fetched.`;await loadDashboard()}catch(err){if(status)status.textContent=err.message}
+});
 el('#autonomos-t2000-disconnect')?.addEventListener('click',async()=>{
   if(!confirm('Disconnect t2000 from AutonomOS? Your t2000 Passport, Agent ID and published Services stay on t2000.'))return;
   const status=el('#autonomos-t2000-status');if(status)status.textContent='Disconnecting…';
@@ -265,7 +274,7 @@ el('#autonomos-config-form')?.addEventListener('submit',async e=>{
   e.preventDefault();const f=e.currentTarget;const status=el('#autonomos-config-status');status.textContent='Saving…';
   const raw=Object.fromEntries(new FormData(f).entries());
   const payload={...raw,autoReplication:f.elements.autoReplication.checked,autoClaimJobs:f.elements.autoClaimJobs.checked,requireEscrowForAutoClaim:f.elements.requireEscrowForAutoClaim.checked,zeroSpendMode:f.elements.zeroSpendMode.checked,earnedFundsOnly:f.elements.earnedFundsOnly.checked,allowExternalSpending:f.elements.allowExternalSpending.checked};
-  for(const key of ['heartbeatSeconds','fastClaimPollSeconds','minMarginPercent','reservePercent','growthPercent','experimentPercent','maxChildren','maxJobsPerCycle','minJobPayoutUsd','t2000MinOpenJobPayoutUsd','t2000PriorityOpenJobPayoutUsd','t2000PremiumOpenJobPayoutUsd','maxApiCostPercentOfPayout','seedSpendBudgetUsd','maxPaidProcurementUsd'])payload[key]=Number(payload[key]);
+  for(const key of ['heartbeatSeconds','fastClaimPollSeconds','minMarginPercent','reservePercent','growthPercent','experimentPercent','maxChildren','maxJobsPerCycle','minJobPayoutUsd','clawlancerMinJobPayoutUsd','dealworkMinJobPayoutUsd','superteamMinJobPayoutUsd','t2000MinOpenJobPayoutUsd','t2000PriorityOpenJobPayoutUsd','t2000PremiumOpenJobPayoutUsd','maxApiCostPercentOfPayout','seedSpendBudgetUsd','maxPaidProcurementUsd'])payload[key]=Number(payload[key]);
   try{await api('/api/admin/autonomos/config',{method:'PATCH',body:JSON.stringify(payload)});status.textContent='Saved.';await loadDashboard()}catch(err){status.textContent=err.message}
 });
 
