@@ -51,7 +51,7 @@ export async function executeExternalOpportunity(opportunity, capability, { llm,
     // round, not just once at the start, so a stop pressed mid-job halts it between
     // rounds instead of running the whole tool loop to completion regardless.
     if (abortSignal?.aborted) throw new Error('job_cancelled_by_emergency_stop');
-    const result = await llm.complete({ messages, tools: round < MAX_TOOL_ROUNDS ? availableTools : undefined, maxTokens:1200, temperature:0.15, signal:abortSignal });
+    const result = await llm.complete({ messages, tools: round < MAX_TOOL_ROUNDS ? availableTools : undefined, maxTokens:1200, signal:abortSignal });
     if (!result.ok) throw new Error(result.reason || 'llm_execution_failed');
     if (result.usage) { usage.prompt_tokens += Number(result.usage.prompt_tokens||0); usage.completion_tokens += Number(result.usage.completion_tokens||0); }
     if (result.toolCalls?.length) {
