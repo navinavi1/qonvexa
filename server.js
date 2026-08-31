@@ -7,6 +7,10 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { createAutonomOS } from './src/autonomos/runtime.js';
+import { verifyAuth0Bearer } from './src/autonomos/auth0.js';
+import { hydrateExternalSecrets } from './src/autonomos/secret-provider.js';
+
+await hydrateExternalSecrets(process.env,{logger:console});
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -140,6 +144,17 @@ app.use(helmet({
 }));
 app.use(express.json({ limit: '50kb' }));
 app.use(express.urlencoded({ extended: false, limit: '50kb' }));
+
+app.post('/api/internal/autonomos/temporal/execute', async (req,res)=>{
+  res.setHeader('Cache-Control','no-store');
+  const expected=String(process.env.AUTONOMOS_TEMPORAL_WORKER_TOKEN||'');
+  const supplied=String(req.get('authorization')||'').replace(/^Bearer\s+/i,'');
+  if(!expected||!supplied||expected.length!==supplied.length||!crypto.timingSafeEqual(Buffer.from(expected),Buffer.from(supplied))){
+    return res.status(401).json({ok:false,error:'unauthorized_temporal_worker'});
+  }
+  try{return res.json(await autonomos.processTemporalOpportunity(req.body?.opportunity));}
+  catch(error){return res.status(500).json({ok:false,error:clean(error?.message||error,300)});}
+});
 
 // Dynamic HTML routes allow production metadata/legal values to come from environment config.
 for (const route of ['/', '/index.html']) {
@@ -404,6 +419,14 @@ app.get('/api/admin/autonomos/t2000/callback',
       logAdminEvent('t2000_oauth_failed', { error:detail });
       res.redirect(303, `/admin?t2000=error&detail=${encodeURIComponent(detail)}#autonomos`);
     }
+  }
+);
+
+app.post('/api/admin/autonomos/t2000/refresh', requireAdmin, requireSameSiteMutation,
+  rateLimit({ windowMs: 60 * 1000, max: 12 }),
+  async (_req, res) => {
+    try { res.json(await autonomos.refreshT2000Jobs()); }
+    catch (error) { res.status(Number(error?.status || 502)).json({ error:clean(error?.message || 't2000 refresh failed.', 300) }); }
   }
 );
 
@@ -1042,8 +1065,10 @@ function getAdminSession(req) {
 }
 
 function requireAdmin(req, res, next) {
-  if (!getAdminSession(req)) return res.status(401).json({ error: 'Unauthorized' });
-  next();
+  if (getAdminSession(req)) return next();
+  const bearer=String(req.get('authorization')||'').match(/^Bearer\s+(.+)$/i)?.[1]||'';
+  if(!bearer||!process.env.AUTH0_DOMAIN||!process.env.AUTH0_AUDIENCE)return res.status(401).json({ error: 'Unauthorized' });
+  verifyAuth0Bearer(bearer,process.env).then(result=>{if(!result.ok)return res.status(401).json({error:'Unauthorized'});req.auth0=result;next();}).catch(()=>res.status(401).json({error:'Unauthorized'}));
 }
 
 function safeCredentialEqual(a, b) {
