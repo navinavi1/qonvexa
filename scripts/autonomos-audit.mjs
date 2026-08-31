@@ -126,10 +126,10 @@ await ok('multi-chain EVM treasury defaults include Base, Arbitrum and Polygon',
   assert.ok(chains.some(x=>x.chainId===137));
 });
 
-await ok('Clawlancer and Agentverse are real connector states, not always-ready placeholders', () => {
+await ok('earning connector list excludes zero-payout discovery-only Agentverse noise', () => {
   const statuses = connectorStatuses({}, { enabled:false, configured:false, mode:'disabled' }, {});
   assert.equal(statuses.find(x=>x.id==='clawlancer').status, 'auto_bootstrap_available');
-  assert.equal(statuses.find(x=>x.id==='agentverse').status, 'discovery_ready');
+  assert.equal(statuses.some(x=>x.id==='agentverse'), false);
   assert.equal(statuses.find(x=>x.id==='virtuals-acp').status, 'needs_credentials');
 });
 
