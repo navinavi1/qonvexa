@@ -21,6 +21,9 @@ export const DEFAULT_AUTONOMOS_CONFIG = Object.freeze({
   autoClaimJobs: true,
   requireEscrowForAutoClaim: true,
   minJobPayoutUsd: 0.01,
+  t2000MinOpenJobPayoutUsd: 35,
+  t2000PriorityOpenJobPayoutUsd: 65,
+  t2000PremiumOpenJobPayoutUsd: 100,
   autoReplication: true,
   treasuryAsset: 'USDC',
   updatedAt: ''
@@ -53,6 +56,9 @@ export function normalizeConfig(raw = {}) {
   cfg.autoClaimJobs = cfg.autoClaimJobs !== false;
   cfg.requireEscrowForAutoClaim = cfg.requireEscrowForAutoClaim !== false;
   cfg.minJobPayoutUsd = clampNumber(cfg.minJobPayoutUsd, 0, 100000, 0.01);
+  cfg.t2000MinOpenJobPayoutUsd = clampNumber(cfg.t2000MinOpenJobPayoutUsd, 0, 100000, 35);
+  cfg.t2000PriorityOpenJobPayoutUsd = clampNumber(cfg.t2000PriorityOpenJobPayoutUsd, cfg.t2000MinOpenJobPayoutUsd, 100000, Math.max(65, cfg.t2000MinOpenJobPayoutUsd));
+  cfg.t2000PremiumOpenJobPayoutUsd = clampNumber(cfg.t2000PremiumOpenJobPayoutUsd, cfg.t2000PriorityOpenJobPayoutUsd, 100000, Math.max(100, cfg.t2000PriorityOpenJobPayoutUsd));
   cfg.autoReplication = cfg.autoReplication !== false;
   cfg.genesisObjective = String(cfg.genesisObjective || DEFAULT_AUTONOMOS_CONFIG.genesisObjective).trim().slice(0, 1000);
   cfg.treasuryAsset = ['USDC','USDT','ETH','BTC','SOL'].includes(String(cfg.treasuryAsset).toUpperCase())
