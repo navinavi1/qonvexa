@@ -19,12 +19,13 @@ export const DEFAULT_AUTONOMOS_CONFIG = Object.freeze({
   maxApiCostPercentOfPayout: 25,
   maxJobsPerCycle: 6,
   maxConcurrentJobs: 4,
-  platformGeneration: 3,
+  platformGeneration: 4,
   autoClaimJobs: true,
   requireEscrowForAutoClaim: true,
-  minJobPayoutUsd: 5,
-  clawlancerMinJobPayoutUsd: 5,
-  dealworkMinJobPayoutUsd: 10,
+  rejectDemoAndTestJobs: true,
+  minJobPayoutUsd: 25,
+  clawlancerMinJobPayoutUsd: 25,
+  dealworkMinJobPayoutUsd: 25,
   superteamMinJobPayoutUsd: 25,
   t2000MinOpenJobPayoutUsd: 35,
   t2000PriorityOpenJobPayoutUsd: 65,
@@ -36,9 +37,16 @@ export const DEFAULT_AUTONOMOS_CONFIG = Object.freeze({
 
 export function normalizeConfig(raw = {}) {
   const legacy = !Object.prototype.hasOwnProperty.call(raw, 'platformGeneration');
+  const previousGeneration = Number(raw.platformGeneration || (legacy ? 0 : 3));
   const cfg = { ...DEFAULT_AUTONOMOS_CONFIG, ...raw };
   if (legacy && Number(raw.maxJobsPerCycle) === 2) cfg.maxJobsPerCycle = 6;
-  cfg.platformGeneration = 3;
+  // Generation 4 raises the legacy penny-job defaults while preserving any owner-customized floors.
+  if (previousGeneration < 4) {
+    if (raw.minJobPayoutUsd === undefined || Number(raw.minJobPayoutUsd) === 5) cfg.minJobPayoutUsd = 25;
+    if (raw.clawlancerMinJobPayoutUsd === undefined || Number(raw.clawlancerMinJobPayoutUsd) === 5) cfg.clawlancerMinJobPayoutUsd = 25;
+    if (raw.dealworkMinJobPayoutUsd === undefined || Number(raw.dealworkMinJobPayoutUsd) === 10) cfg.dealworkMinJobPayoutUsd = 25;
+  }
+  cfg.platformGeneration = 4;
   cfg.enabled = Boolean(cfg.enabled);
   cfg.killSwitch = Boolean(cfg.killSwitch);
   cfg.zeroSpendMode = cfg.zeroSpendMode !== false;
@@ -63,10 +71,11 @@ export function normalizeConfig(raw = {}) {
   cfg.maxJobsPerCycle = Math.round(clampNumber(cfg.maxJobsPerCycle, 1, 50, 6));
   cfg.maxConcurrentJobs = Math.round(clampNumber(cfg.maxConcurrentJobs, 1, 20, 4));
   cfg.autoClaimJobs = cfg.autoClaimJobs !== false;
+  cfg.rejectDemoAndTestJobs = cfg.rejectDemoAndTestJobs !== false;
   cfg.requireEscrowForAutoClaim = cfg.requireEscrowForAutoClaim !== false;
-  cfg.minJobPayoutUsd = clampNumber(cfg.minJobPayoutUsd, 0, 100000, 5);
-  cfg.clawlancerMinJobPayoutUsd = clampNumber(cfg.clawlancerMinJobPayoutUsd, cfg.minJobPayoutUsd, 100000, Math.max(5,cfg.minJobPayoutUsd));
-  cfg.dealworkMinJobPayoutUsd = clampNumber(cfg.dealworkMinJobPayoutUsd, cfg.minJobPayoutUsd, 100000, Math.max(10,cfg.minJobPayoutUsd));
+  cfg.minJobPayoutUsd = clampNumber(cfg.minJobPayoutUsd, 0, 100000, 25);
+  cfg.clawlancerMinJobPayoutUsd = clampNumber(cfg.clawlancerMinJobPayoutUsd, cfg.minJobPayoutUsd, 100000, Math.max(25,cfg.minJobPayoutUsd));
+  cfg.dealworkMinJobPayoutUsd = clampNumber(cfg.dealworkMinJobPayoutUsd, cfg.minJobPayoutUsd, 100000, Math.max(25,cfg.minJobPayoutUsd));
   cfg.superteamMinJobPayoutUsd = clampNumber(cfg.superteamMinJobPayoutUsd, cfg.minJobPayoutUsd, 100000, Math.max(25,cfg.minJobPayoutUsd));
   cfg.t2000MinOpenJobPayoutUsd = clampNumber(cfg.t2000MinOpenJobPayoutUsd, 0, 100000, 35);
   cfg.t2000PriorityOpenJobPayoutUsd = clampNumber(cfg.t2000PriorityOpenJobPayoutUsd, cfg.t2000MinOpenJobPayoutUsd, 100000, Math.max(65, cfg.t2000MinOpenJobPayoutUsd));
@@ -100,6 +109,20 @@ export function validateAction(action = {}, config = {}) {
     return { allowed:false, reason:'secret_access_forbidden' };
   }
   return { allowed:true, reason:'policy_pass' };
+}
+
+
+export function isDemoOrTestOpportunity(op = {}) {
+  const raw = op?.raw && typeof op.raw === 'object' ? op.raw : {};
+  if ([raw.is_demo, raw.isDemo, raw.demo, raw.is_test, raw.isTest, raw.sandbox].some(v => v === true || String(v).toLowerCase() === 'true')) return true;
+  const envMarker = String(op?.environment || op?.env || op?.networkType || op?.mode || raw.environment || raw.env || raw.network_type || raw.mode || '').toLowerCase();
+  if (['demo','test','testing','sandbox','testnet','devnet'].includes(envMarker)) return true;
+  const status = String(op?.status || raw.status || '').toLowerCase();
+  if (['demo','test','testing','sandbox','sample'].includes(status)) return true;
+  const tags = [...(Array.isArray(op?.tags) ? op.tags : []), ...(Array.isArray(raw.tags) ? raw.tags : [])].map(v=>String(v).toLowerCase().trim());
+  if (tags.some(v=>['demo','test-job','test_listing','test-listing','sandbox','sample','example','testnet','devnet'].includes(v))) return true;
+  const title = String(op?.title || raw.title || '').trim();
+  return /^(?:\[(?:demo|test|sample|sandbox)\]|(?:demo|sample|sandbox)\s+(?:job|task|listing)\b|test\s+(?:job|listing)\b)/i.test(title);
 }
 
 function clampNumber(value, min, max, fallback) {
