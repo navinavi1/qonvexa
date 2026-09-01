@@ -152,7 +152,27 @@ app.post('/api/internal/autonomos/temporal/execute', async (req,res)=>{
   if(!expected||!supplied||expected.length!==supplied.length||!crypto.timingSafeEqual(Buffer.from(expected),Buffer.from(supplied))){
     return res.status(401).json({ok:false,error:'unauthorized_temporal_worker'});
   }
-  try{return res.json(await autonomos.processTemporalOpportunity(req.body?.opportunity));}
+  try{return res.json(await autonomos.processDurableOpportunity(req.body?.opportunity));}
+  catch(error){return res.status(500).json({ok:false,error:clean(error?.message||error,300)});}
+});
+
+function stableJsonForSignature(value){
+  if(Array.isArray(value))return `[${value.map(stableJsonForSignature).join(',')}]`;
+  if(value&&typeof value==='object')return `{${Object.keys(value).sort().map(k=>`${JSON.stringify(k)}:${stableJsonForSignature(value[k])}`).join(',')}}`;
+  return JSON.stringify(value);
+}
+
+app.post('/api/internal/autonomos/trigger/execute', async (req,res)=>{
+  res.setHeader('Cache-Control','no-store');
+  const secret=String(process.env.TRIGGER_SECRET_KEY||'');
+  const issuedAt=Number(req.body?.issuedAt||0);
+  const supplied=String(req.body?.signature||'');
+  const age=Date.now()-issuedAt;
+  const expected=secret&&issuedAt?crypto.createHmac('sha256',secret).update(`${issuedAt}.${stableJsonForSignature(req.body?.opportunity)}`).digest('hex'):'';
+  const validTime=Number.isFinite(age)&&age>=-60_000&&age<=15*60_000;
+  const validSig=Boolean(expected&&supplied&&expected.length===supplied.length&&crypto.timingSafeEqual(Buffer.from(expected),Buffer.from(supplied)));
+  if(!validTime||!validSig)return res.status(401).json({ok:false,error:'unauthorized_trigger_callback'});
+  try{return res.json(await autonomos.processDurableOpportunity(req.body?.opportunity));}
   catch(error){return res.status(500).json({ok:false,error:clean(error?.message||error,300)});}
 });
 
