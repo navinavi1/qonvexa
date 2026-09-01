@@ -3,7 +3,7 @@ services:
     name: qonvexa
     runtime: node
     plan: starter
-    region: virginia
+    region: oregon
     buildCommand: npm install --omit=dev && npm run verify
     startCommand: npm start
     healthCheckPath: /health
@@ -17,7 +17,7 @@ services:
       sizeGB: 1
     envVars:
       - key: NODE_VERSION
-        value: ">=22.0.0 <25.0.0"
+        value: ">=22.18.0 <25.0.0"
       - key: LAUNCH_MODE
         value: live
       - key: STORAGE_DIR
@@ -35,9 +35,9 @@ services:
       - key: SITE_URL
         value: https://qonvexa.co
       - key: LEGAL_BUSINESS_NAME
-        value: "ФОП Гончаров Іван Михайлович"
+        sync: false
       - key: LEGAL_ADDRESS
-        value: "30200, Україна, Хмельницька обл., Білогірський р-н, смт Білогір'я, вул. Цегельна, 6А"
+        sync: false
       - key: LEGAL_JURISDICTION
         value: Ukraine
       - key: DELIVERY_TIMEFRAME
@@ -45,17 +45,17 @@ services:
       - key: REFUND_POLICY_TEXT
         value: "If we have not started preparing your personalized audit, you may request a full refund within 24 hours of payment by contacting us. Once delivery has started, refunds are considered case by case."
       - key: BANK_BENEFICIARY
-        value: "FOP HONCHAROV IVAN MYKHAILOVYCH"
+        sync: false
       - key: BANK_NAME
-        value: "AT KB PrivatBank"
+        sync: false
       - key: BANK_IBAN
-        value: "UA893052990000026007046254269"
+        sync: false
       - key: BANK_SWIFT
-        value: PBANUA2X
+        sync: false
       - key: BANK_CURRENCY
-        value: USD
+        sync: false
       - key: BANK_PAYMENT_NOTE
-        value: "Use your QONVEXA order reference in the payment memo. For international wire via correspondent bank: JPMorgan Chase (SWIFT CHASUS33, acc 001-1-000080) or Citibank NA (SWIFT CITIUS33, acc 36445343) or BNY Mellon (SWIFT IRVTUS3N, acc 890-0085-754)."
+        sync: false
       - key: ADMIN_USERNAME
         value: owner
       - key: ADMIN_PASSWORD
@@ -64,3 +64,121 @@ services:
         generateValue: true
       - key: IP_HASH_SALT
         generateValue: true
+      - key: AUTONOMOS_OWNER_WALLET
+        value: "0x1f674bf085f6fed36fa198287d51edf0fe0bb9e2"
+      - key: AUTONOMOS_ENABLED
+        value: "true"
+      - key: AUTONOMOS_BASE_RPC_URL
+        value: "https://mainnet.base.org"
+      - key: AUTONOMOS_BAZAAR_URL
+        value: "https://api.cdp.coinbase.com/platform/v2/x402/discovery/resources?limit=50"
+      - key: AUTONOMOS_X402_ENABLED
+        value: "true"
+      - key: AUTONOMOS_X402_NETWORK
+        value: "eip155:8453"
+      - key: AUTONOMOS_X402_FACILITATOR_URL
+        value: "https://facilitator.xpay.sh"
+      - key: AUTONOMOS_X402_FACILITATOR_HEADERS_JSON
+        sync: false
+      - key: AUTONOMOS_X402_ACCEPTS_JSON
+        sync: false
+      - key: AUTONOMOS_ARBITRUM_RPC_URL
+        sync: false
+      - key: AUTONOMOS_POLYGON_RPC_URL
+        sync: false
+      - key: AUTONOMOS_EVM_CHAINS_JSON
+        sync: false
+      - key: CLAWLANCER_API_KEY
+        sync: false
+      - key: CLAWLANCER_AGENT_ID
+        sync: false
+      - key: T2000_MCP_URL
+        value: "https://mcp.t2000.ai/mcp"
+      - key: AUTONOMOS_LLM_BASE_URL
+        sync: false
+      - key: AUTONOMOS_LLM_API_KEY
+        sync: false
+      - key: AUTONOMOS_LLM_MODEL
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: FIRECRAWL_API_KEY
+        sync: false
+      - key: E2B_API_KEY
+        sync: false
+      - key: GITHUB_TOKEN
+        sync: false
+      - key: AUTONOMOS_GITHUB_EXPECTED_LOGIN
+        value: navinavi1
+      - key: TRIGGER_SECRET_KEY
+        sync: false
+      - key: AUTONOMOS_TRIGGER_TASK_ID
+        value: autonomos-paid-job
+      - key: TAVILY_API_KEY
+        sync: false
+      - key: VIRTUALS_ACP_WALLET_ID
+        sync: false
+      - key: VIRTUALS_ACP_SIGNER
+        sync: false
+      - key: VIRTUALS_ACP_AGENT_ID
+        sync: false
+      - key: NVM_API_KEY
+        sync: false
+      - key: NVM_PLAN_ID
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: REDIS_URL
+        sync: false
+      - key: LITELLM_BASE_URL
+        sync: false
+      - key: LITELLM_API_KEY
+        sync: false
+      - key: BROWSERBASE_API_KEY
+        sync: false
+      - key: COMPOSIO_API_KEY
+        sync: false
+      - key: BROWSERBASE_PROJECT_ID
+        sync: false
+      - key: S3_ENDPOINT
+        sync: false
+      - key: S3_REGION
+        value: auto
+      - key: S3_PUBLIC_BASE_URL
+        sync: false
+      - key: S3_BUCKET
+        sync: false
+      - key: S3_ACCESS_KEY_ID
+        sync: false
+      - key: S3_SECRET_ACCESS_KEY
+        sync: false
+      - key: LANGFUSE_PUBLIC_KEY
+        sync: false
+      - key: LANGFUSE_SECRET_KEY
+        sync: false
+      - key: LANGFUSE_BASE_URL
+        value: https://cloud.langfuse.com
+      - key: OPENSEARCH_URL
+        sync: false
+      - key: OPENSEARCH_USERNAME
+        sync: false
+      - key: OPENSEARCH_PASSWORD
+        sync: false
+      - key: CODERABBIT_API_KEY
+        sync: false
+      - key: AUTH0_DOMAIN
+        sync: false
+      - key: AUTH0_AUDIENCE
+        sync: false
+      - key: AUTONOMOS_AWS_SECRET_ID
+        sync: false
+      - key: AUTONOMOS_SECRETS_REQUIRED
+        value: "false"
+      - key: AWS_REGION
+        sync: false
+      - key: AUTONOMOS_VERIFIED_PAYOUT_INTERMEDIARIES_JSON
+        value: "[]"
+      - key: AUTONOMOS_PAYOUT_NETWORKS_JSON
+        value: '["base"]'
+      - key: AUTONOMOS_PAYOUT_CRYPTO_JSON
+        value: '["USDC","USDT"]'
