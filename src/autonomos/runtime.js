@@ -2,7 +2,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { CORE_AGENTS, buildAgentState } from './agents.js';
 import { AutonomOSStore } from './store.js';
-import { normalizeConfig, DEFAULT_AUTONOMOS_CONFIG, validateAction } from './policy-engine.js';
+import { normalizeConfig, DEFAULT_AUTONOMOS_CONFIG, validateAction, isDemoOrTestOpportunity } from './policy-engine.js';
 import { evaluateOpportunity, allocateRevenue, computeEarnedSpendBudgetUsd } from './profit-engine.js';
 import { readTreasuryBalances, isEvmAddress } from './treasury.js';
 import { MACHINE_PRODUCTS, executeProduct } from './products.js';
@@ -27,6 +27,7 @@ import { emitOperationalLog } from './observability.js';
 import { AutonomOSCache } from './cache.js';
 import { ArtifactStore } from './artifact-store.js';
 import { dispatchPaidOpportunity, temporalEnabled } from './temporal-client.js';
+import { dispatchTriggerPaidOpportunity, triggerEnabled } from './trigger-client.js';
 import { estimateOutcomeProbability } from './outcome-model.js';
 import { ledgerEntry } from './financial-ledger.js';
 
@@ -92,10 +93,15 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
     get config(){ return config; },
     get ownerWallet(){ return wallet; },
 
-    async processTemporalOpportunity(opportunity){
+    async processDurableOpportunity(opportunity){
       if(!opportunity||typeof opportunity!=='object')return{ok:false,reason:'invalid_opportunity'};
       const result=await processMarketplaceOpportunity(opportunity);
       return{ok:true,...result};
+    },
+
+    // Backward-compatible alias for the deferred Temporal worker.
+    async processTemporalOpportunity(opportunity){
+      return this.processDurableOpportunity(opportunity);
     },
 
     async snapshot() {
@@ -129,7 +135,7 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
       const allowed = [
         'genesisObjective','minMarginPercent','reservePercent','growthPercent','experimentPercent',
         'heartbeatSeconds','fastClaimPollSeconds','maxChildren','childSpawnConcurrencyThreshold','childTtlMinutes','autoReplication',
-        'maxApiCostPercentOfPayout','maxJobsPerCycle','maxConcurrentJobs','autoClaimJobs','requireEscrowForAutoClaim','minJobPayoutUsd',
+        'maxApiCostPercentOfPayout','maxJobsPerCycle','maxConcurrentJobs','autoClaimJobs','requireEscrowForAutoClaim','rejectDemoAndTestJobs','minJobPayoutUsd',
         'clawlancerMinJobPayoutUsd','dealworkMinJobPayoutUsd','superteamMinJobPayoutUsd','t2000MinOpenJobPayoutUsd','t2000PriorityOpenJobPayoutUsd','t2000PremiumOpenJobPayoutUsd',
         // P0 fix (external audit): maxPaidProcurementUsd defaults to 0 and was NOT in this
         // list, so even an owner who correctly set zeroSpendMode:false and
@@ -277,14 +283,18 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
       const candidates=normalized.filter(isAutoClaimCandidate).sort((a,b)=>scoreCandidate(b)-scoreCandidate(a)).slice(0,config.maxJobsPerCycle);
       reconcileElasticWorkers(candidates);
       const processed=await mapLimit(candidates,Number(config.maxConcurrentJobs||4),async opportunity=>{
-        if(temporalEnabled(env)){
+        if(triggerEnabled(env)){
+          const dispatched=await dispatchTriggerPaidOpportunity(opportunity,env);
+          if(dispatched.ok){event('trigger_job_dispatched',{source:opportunity.source,externalId:opportunity.externalId,runId:dispatched.runId||''});return{claimed:false,delivered:false,durable:true,provider:'trigger'};}
+          event('trigger_dispatch_fallback',{source:opportunity.source,externalId:opportunity.externalId,reason:dispatched.reason||''});
+        }else if(temporalEnabled(env)){
           const dispatched=await dispatchPaidOpportunity(opportunity,env);
-          if(dispatched.ok){event('temporal_job_dispatched',{source:opportunity.source,externalId:opportunity.externalId,workflowId:dispatched.workflowId,duplicate:Boolean(dispatched.duplicate)});return{claimed:false,delivered:false,temporal:true};}
+          if(dispatched.ok){event('temporal_job_dispatched',{source:opportunity.source,externalId:opportunity.externalId,workflowId:dispatched.workflowId,duplicate:Boolean(dispatched.duplicate)});return{claimed:false,delivered:false,durable:true,provider:'temporal'};}
           event('temporal_dispatch_fallback',{source:opportunity.source,externalId:opportunity.externalId,reason:dispatched.reason||''});
         }
         return processMarketplaceOpportunity(opportunity);
       });
-      const claimed=processed.filter(x=>x?.claimed).length,delivered=processed.filter(x=>x?.delivered).length,temporalDispatched=processed.filter(x=>x?.temporal).length;
+      const claimed=processed.filter(x=>x?.claimed).length,delivered=processed.filter(x=>x?.delivered).length,triggerDispatched=processed.filter(x=>x?.provider==='trigger').length,temporalDispatched=processed.filter(x=>x?.provider==='temporal').length,durableDispatched=triggerDispatched+temporalDispatched;
 
       await syncSettlements();
       if(!state.treasury?.checkedAt||Date.now()-Date.parse(state.treasury.checkedAt||0)>10*60_000){
@@ -292,9 +302,9 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
       }
       setAgent('evolution-agent','working');state.lastEvolution=boundedEvolution(normalized);setAgentMetric('evolution-agent',{tasks:1});
       state.cycles=Number(state.cycles||0)+1;state.lastCycleAt=new Date().toISOString();state.lastCycleMs=Date.now()-started;state.updatedAt=new Date().toISOString();state.lastCycleId=cycleId;state.lastCycleTrigger=trigger;
-      state.lastCycleSummary={opportunities:normalized.length,candidates:candidates.length,claimed,delivered,temporalDispatched,concurrency:Number(config.maxConcurrentJobs||4),elasticChildren:children.filter(c=>c.status==='alive').length};store.writeJson('state.json',state);
-      event('cycle_completed',{cycleId,trigger,ms:state.lastCycleMs,opportunities:normalized.length,candidates:candidates.length,claimed,delivered,temporalDispatched});
-      return{ok:true,cycleId,ms:state.lastCycleMs,opportunities:normalized.length,candidates:candidates.length,claimed,delivered,temporalDispatched};
+      state.lastCycleSummary={opportunities:normalized.length,candidates:candidates.length,claimed,delivered,durableDispatched,triggerDispatched,temporalDispatched,concurrency:Number(config.maxConcurrentJobs||4),elasticChildren:children.filter(c=>c.status==='alive').length};store.writeJson('state.json',state);
+      event('cycle_completed',{cycleId,trigger,ms:state.lastCycleMs,opportunities:normalized.length,candidates:candidates.length,claimed,delivered,durableDispatched,triggerDispatched,temporalDispatched});
+      return{ok:true,cycleId,ms:state.lastCycleMs,opportunities:normalized.length,candidates:candidates.length,claimed,delivered,durableDispatched,triggerDispatched,temporalDispatched};
     }catch(error){state.lastError=String(error?.message||error).slice(0,400);state.updatedAt=new Date().toISOString();store.writeJson('state.json',state);incrementAgentError('prime-governor');event('cycle_failed',{cycleId,trigger,error:state.lastError});logger.error?.('AutonomOS cycle failed:',error);return{ok:false,cycleId,error:state.lastError};}
     finally{cycleRunning=false;for(const agent of agents)if(agent.status==='working')agent.status='idle';persistAgents();}
   }
@@ -331,6 +341,7 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
       else if(executionAttempt&&Date.now()-Date.parse(executionAttempt.lastAttemptAt||0)<EXECUTION_RETRY_BACKOFF_MS)reasons.push('assigned_execution_retry_backoff');
     }
     if(!['clawlancer','t2000','dealwork','superteam'].includes(op.source))reasons.push('source_not_in_auto_claim_allowlist');
+    if(!paidAssignedT2000Order&&config.rejectDemoAndTestJobs&&isDemoOrTestOpportunity(op))reasons.push('demo_or_test_opportunity');
     // Superteam Earn has no escrow concept at all (competitive submission, judged by a
     // human sponsor) — requiring escrowed:true for it would permanently block every
     // Superteam opportunity regardless of quality, so it's exempt from this specific check.
@@ -348,7 +359,7 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
     // but they are not the revenue target of this deployment. Keep seller-queue work that
     // is already assigned to us flowing (we have already accepted that obligation), while
     // refusing to claim any NEW t2000 Open Job below the dedicated floor.
-    const marketFloors={clawlancer:Number(config.clawlancerMinJobPayoutUsd||5),dealwork:Number(config.dealworkMinJobPayoutUsd||10),superteam:Number(config.superteamMinJobPayoutUsd||25)};
+    const marketFloors={clawlancer:Number(config.clawlancerMinJobPayoutUsd||25),dealwork:Number(config.dealworkMinJobPayoutUsd||25),superteam:Number(config.superteamMinJobPayoutUsd||25)};
     if(!paidAssignedT2000Order&&marketFloors[op.source]!==undefined&&Number(op.budgetUsd||0)<marketFloors[op.source])reasons.push(`${op.source}_job_below_floor:${marketFloors[op.source]}`);
     if(op.source==='t2000'&&!paidAssignedT2000Order&&Number(op.budgetUsd||0)<Number(config.t2000MinOpenJobPayoutUsd||35))reasons.push(`t2000_open_job_below_floor:${config.t2000MinOpenJobPayoutUsd}`);
     if(!op.capability?.executable)reasons.push(`capability_not_executable:${op.capability?.mode||'unknown'}`);
@@ -754,8 +765,8 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
       });
       updateT2000QualificationHealth(normalized);
       const candidates=normalized.filter(isAutoClaimCandidate).sort((a,b)=>scoreCandidate(b)-scoreCandidate(a)).slice(0,config.maxJobsPerCycle);reconcileElasticWorkers(candidates);
-      const rows=await mapLimit(candidates,Number(config.maxConcurrentJobs||4),async op=>{if(temporalEnabled(env)){const dispatched=await dispatchPaidOpportunity(op,env);if(dispatched.ok){event('temporal_job_dispatched',{source:op.source,externalId:op.externalId,workflowId:dispatched.workflowId,duplicate:Boolean(dispatched.duplicate),fastLane:true});return{temporal:true};}event('temporal_dispatch_fallback',{source:op.source,externalId:op.externalId,reason:dispatched.reason||'',fastLane:true});}return processMarketplaceOpportunity(op);});
-      return{ok:true,found:normalized.length,processed:rows.filter(x=>!x?.temporal).length,temporalDispatched:rows.filter(x=>x?.temporal).length};
+      const rows=await mapLimit(candidates,Number(config.maxConcurrentJobs||4),async op=>{if(triggerEnabled(env)){const dispatched=await dispatchTriggerPaidOpportunity(op,env);if(dispatched.ok){event('trigger_job_dispatched',{source:op.source,externalId:op.externalId,runId:dispatched.runId||'',fastLane:true});return{durable:true,provider:'trigger'};}event('trigger_dispatch_fallback',{source:op.source,externalId:op.externalId,reason:dispatched.reason||'',fastLane:true});}else if(temporalEnabled(env)){const dispatched=await dispatchPaidOpportunity(op,env);if(dispatched.ok){event('temporal_job_dispatched',{source:op.source,externalId:op.externalId,workflowId:dispatched.workflowId,duplicate:Boolean(dispatched.duplicate),fastLane:true});return{durable:true,provider:'temporal'};}event('temporal_dispatch_fallback',{source:op.source,externalId:op.externalId,reason:dispatched.reason||'',fastLane:true});}return processMarketplaceOpportunity(op);});
+      return{ok:true,found:normalized.length,processed:rows.filter(x=>!x?.durable).length,durableDispatched:rows.filter(x=>x?.durable).length,triggerDispatched:rows.filter(x=>x?.provider==='trigger').length,temporalDispatched:rows.filter(x=>x?.provider==='temporal').length};
     }catch(error){return{ok:false,reason:String(error?.message||error).slice(0,200)};}
     finally{fastCycleRunning=false;}
   }
