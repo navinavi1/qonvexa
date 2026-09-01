@@ -4,6 +4,7 @@
 import { browserTask } from './browser-tool.js';
 import { composioExecute, composioSearch } from './composio-tool.js';
 import { ArtifactStore } from './artifact-store.js';
+import { tavilySearch } from './tavily-tool.js';
 
 // Conservative fixed per-call cost estimates (USD) used ONLY for pre-spend policy checks
 // and cost accounting — these are not billed amounts from Firecrawl/E2B invoices (neither
@@ -12,7 +13,7 @@ import { ArtifactStore } from './artifact-store.js';
 // profit-engine.js actually see a non-zero number for tool usage instead of treating every
 // Firecrawl/E2B call as free. Override via env if real invoiced rates are known.
 export const TOOL_COST_ESTIMATES_USD = Object.freeze({
-  web_search: Number(process.env.AUTONOMOS_FIRECRAWL_SEARCH_COST_USD || 0.01),
+  web_search: Number(process.env.AUTONOMOS_WEB_SEARCH_COST_USD || process.env.AUTONOMOS_TAVILY_SEARCH_COST_USD || process.env.AUTONOMOS_FIRECRAWL_SEARCH_COST_USD || 0.01),
   web_scrape: Number(process.env.AUTONOMOS_FIRECRAWL_SCRAPE_COST_USD || 0.005),
   run_python: Number(process.env.AUTONOMOS_E2B_SANDBOX_COST_USD || 0.02),
   run_shell: Number(process.env.AUTONOMOS_E2B_SHELL_COST_USD || 0.03),
@@ -209,6 +210,15 @@ export async function githubOpenPullRequest({ repoUrl, baseBranch = 'main', newB
   const headers = { authorization: `Bearer ${token}`, accept: 'application/vnd.github+json', 'content-type': 'application/json', 'user-agent': 'AutonomOS/2.0' };
   const upstreamApi = `https://api.github.com/repos/${upstreamOwner}/${repo}`;
   try {
+    const expectedLogin = String(env.AUTONOMOS_GITHUB_EXPECTED_LOGIN || '').trim();
+    if (expectedLogin) {
+      const whoResp = await fetch('https://api.github.com/user', { headers, signal:withTimeout(12000, signal) });
+      const who = await whoResp.json().catch(()=>({}));
+      if (!whoResp.ok) return { ok:false, error:`github_identity_check_http_${whoResp.status}` };
+      if (String(who?.login || '').toLowerCase() !== expectedLogin.toLowerCase()) {
+        return { ok:false, error:`github_identity_mismatch:expected_${expectedLogin}_got_${String(who?.login || 'unknown')}` };
+      }
+    }
     if (signal?.aborted) return { ok: false, error: 'aborted_by_emergency_stop' };
     // P0 fix (found while verifying against real GitHub docs before the owner spent time
     // setting up a token): the bot account almost never has write access to a bounty's
@@ -365,7 +375,13 @@ export async function runTool(name, args, env = process.env, { config = null, va
     if (!policy.allowed) return { ok:false, error:`spend_not_authorized:${policy.reason}`, costUsd:0 };
   }
   let result;
-  if (name === 'web_search') result = await firecrawlSearch(args?.query, env, signal);
+  if (name === 'web_search') {
+    result = env.TAVILY_API_KEY ? await tavilySearch(args?.query, env, signal) : await firecrawlSearch(args?.query, env, signal);
+    if (!result?.ok && env.FIRECRAWL_API_KEY && env.TAVILY_API_KEY) {
+      const fallback = await firecrawlSearch(args?.query, env, signal);
+      if (fallback?.ok) result = { ...fallback, provider:'firecrawl_fallback', tavilyError:result?.error || '' };
+    }
+  }
   else if (name === 'web_scrape') result = await firecrawlScrape(args?.url, env, signal);
   else if (name === 'run_python') result = await e2bRunPython(args?.code, env, signal);
   else if (name === 'run_shell') result = await e2bRunShell(args, env, signal);
