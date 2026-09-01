@@ -201,7 +201,7 @@
               <label>t2000 premium tier, $<input name="t2000PremiumOpenJobPayoutUsd" type="number" min="0" max="100000" step="1"></label>
               <label>Max API/model cost, % payout<input name="maxApiCostPercentOfPayout" type="number" min="0" max="80"></label>
             </div>
-            <p class="settings-note">Cent-level/starter jobs are rejected by default: global floor $5, Clawlancer $5, Dealwork $10, Superteam $25. t2000 Open Jobs are filtered separately: default minimum $35, priority $65+, premium $100+. Already-assigned seller-queue work is not discarded after claim; AutonomOS finishes obligations it has already accepted.</p>
+            <p class="settings-note">Low-value jobs are rejected by default: global floor $25, Clawlancer $25, Dealwork $25, Superteam $25. t2000 Open Jobs are filtered separately: default minimum $35, priority $65+, premium $100+. Demo/test/sandbox opportunities are also rejected before auto-claim unless you explicitly disable that protection. Already-assigned seller-queue work is not discarded after claim; AutonomOS finishes obligations it has already accepted.</p>
             <p class="settings-note">Fast claim poll only re-checks Clawlancer/t2000 open listings — it does not redo treasury/offer/competition work, so it can safely run much more often than the full heartbeat.</p>
             <div class="autonomos-form-grid">
               <label class="autonomos-check"><input name="zeroSpendMode" type="checkbox"> <span>Zero-spend mode (block ANY job with API/model cost)</span></label>
@@ -215,6 +215,7 @@
             <p class="settings-note">Precedence: Zero-spend wins if on. Otherwise Earned-funds-only (default) caps spend to money AutonomOS has actually already earned. Unrestricted only applies once both of the above are off.</p>
             <label class="autonomos-check"><input name="autoClaimJobs" type="checkbox"> <span>Automatically claim qualified escrow-funded jobs</span></label>
             <label class="autonomos-check"><input name="requireEscrowForAutoClaim" type="checkbox"> <span>Require escrow/pre-funded status for automatic claims</span></label>
+            <label class="autonomos-check"><input name="rejectDemoAndTestJobs" type="checkbox"> <span>Reject demo/test/sandbox jobs before automatic claim</span></label>
             <label class="autonomos-check"><input name="autoReplication" type="checkbox"> <span>Allow bounded automatic child-agent replication</span></label>
             <button class="button" type="submit">Save AutonomOS policy</button>
             <p id="autonomos-config-status" class="admin-status" role="status"></p>
