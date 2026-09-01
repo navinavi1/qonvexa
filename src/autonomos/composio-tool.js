@@ -19,11 +19,16 @@ export async function composioExecute({toolSlug,arguments:args={},connectedAccou
   if(!key)return{ok:false,error:'composio_api_key_missing'};
   const slug=String(toolSlug||'').trim().toUpperCase();
   if(!/^[A-Z0-9_]{3,160}$/.test(slug))return{ok:false,error:'invalid_composio_tool_slug'};
-  const toolkit=detectToolkit(slug,env);
-  if(!isAllowed(slug,toolkit,env))return{ok:false,error:'composio_tool_blocked_by_financial_destructive_or_allowlist_policy'};
-  const accountMap=parseJson(env.AUTONOMOS_COMPOSIO_ACCOUNTS_JSON,{});
-  const account=String(connectedAccountId||accountMap[toolkit]||accountMap[toolkit.toLowerCase()]||'');
+  const inferredToolkit=detectToolkit(slug,env);
+  if(!isAllowed(slug,inferredToolkit,env))return{ok:false,error:'composio_tool_blocked_by_financial_destructive_or_allowlist_policy'};
   try{
+    // Do not guess the toolkit from the tool slug when Composio can tell us exactly.
+    // This matters for multi-part toolkit slugs such as NETLIFY_MCP.
+    const toolkit=(await resolveToolToolkit(slug,key,signal))||inferredToolkit;
+    if(!isAllowed(slug,toolkit,env))return{ok:false,error:'composio_tool_blocked_by_financial_destructive_or_allowlist_policy'};
+    const accountMap=parseJson(env.AUTONOMOS_COMPOSIO_ACCOUNTS_JSON,{});
+    let account=String(connectedAccountId||accountMap[toolkit]||accountMap[toolkit.toLowerCase()]||'');
+    if(!account&&toolkit)account=await resolveConnectedAccountId(toolkit,key,signal);
     const response=await fetch(`https://backend.composio.dev/api/v3.1/tools/execute/${encodeURIComponent(slug)}`,{
       method:'POST',headers:{'content-type':'application/json','x-api-key':key},
       body:JSON.stringify({arguments:args||{},version:'latest',...(account?{connected_account_id:account}:{}),...(userId?{user_id:String(userId)}:{})}),
@@ -53,3 +58,29 @@ function detectToolkit(slug,env){
 function csv(v){return String(v||'').split(',').map(x=>x.trim().toUpperCase()).filter(Boolean)}
 function parseJson(value,fallback){try{return JSON.parse(String(value||''))}catch{return fallback}}
 function withTimeout(ms,signal){return signal?AbortSignal.any([AbortSignal.timeout(ms),signal]):AbortSignal.timeout(ms)}
+
+
+async function resolveToolToolkit(toolSlug,key,signal){
+  try{
+    const response=await fetch(`https://backend.composio.dev/api/v3.1/tools/${encodeURIComponent(toolSlug)}?toolkit_versions=latest`,{headers:{'x-api-key':key,accept:'application/json'},signal:withTimeout(12000,signal)});
+    if(!response.ok)return'';
+    const body=await response.json().catch(()=>({}));
+    return String(body?.toolkit?.slug||'').trim().toUpperCase();
+  }catch{return''}
+}
+
+
+async function resolveConnectedAccountId(toolkit,key,signal){
+  const qs=new URLSearchParams();
+  qs.append('toolkit_slugs',String(toolkit).toLowerCase());
+  qs.append('statuses','ACTIVE');
+  qs.set('limit','10');
+  const response=await fetch(`https://backend.composio.dev/api/v3.1/connected_accounts?${qs}`,{headers:{'x-api-key':key,accept:'application/json'},signal:withTimeout(15000,signal)});
+  if(!response.ok)return'';
+  const body=await response.json().catch(()=>({}));
+  const active=(Array.isArray(body?.items)?body.items:[]).filter(row=>String(row?.status||'').toUpperCase()==='ACTIVE'&&!row?.is_disabled);
+  if(active.length===1)return String(active[0]?.id||'');
+  // When multiple accounts are connected, force explicit owner mapping instead of
+  // silently picking a potentially wrong Gmail/GitHub/Slack identity.
+  return'';
+}
