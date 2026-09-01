@@ -3,7 +3,7 @@ services:
     name: qonvexa
     runtime: node
     plan: starter
-    region: virginia
+    region: oregon
     buildCommand: npm install --omit=dev && npm run verify
     startCommand: npm start
     healthCheckPath: /health
@@ -35,9 +35,9 @@ services:
       - key: SITE_URL
         value: https://qonvexa.co
       - key: LEGAL_BUSINESS_NAME
-        value: "ФОП Гончаров Іван Михайлович"
+        sync: false
       - key: LEGAL_ADDRESS
-        value: "30200, Україна, Хмельницька обл., Білогірський р-н, смт Білогір'я, вул. Цегельна, 6А"
+        sync: false
       - key: LEGAL_JURISDICTION
         value: Ukraine
       - key: DELIVERY_TIMEFRAME
@@ -45,17 +45,17 @@ services:
       - key: REFUND_POLICY_TEXT
         value: "If we have not started preparing your personalized audit, you may request a full refund within 24 hours of payment by contacting us. Once delivery has started, refunds are considered case by case."
       - key: BANK_BENEFICIARY
-        value: "FOP HONCHAROV IVAN MYKHAILOVYCH"
+        sync: false
       - key: BANK_NAME
-        value: "AT KB PrivatBank"
+        sync: false
       - key: BANK_IBAN
-        value: "UA893052990000026007046254269"
+        sync: false
       - key: BANK_SWIFT
-        value: PBANUA2X
+        sync: false
       - key: BANK_CURRENCY
-        value: USD
+        sync: false
       - key: BANK_PAYMENT_NOTE
-        value: "Use your QONVEXA order reference in the payment memo. For international wire via correspondent bank: JPMorgan Chase (SWIFT CHASUS33, acc 001-1-000080) or Citibank NA (SWIFT CITIUS33, acc 36445343) or BNY Mellon (SWIFT IRVTUS3N, acc 890-0085-754)."
+        sync: false
       - key: ADMIN_USERNAME
         value: owner
       - key: ADMIN_PASSWORD
@@ -100,6 +100,22 @@ services:
         sync: false
       - key: AUTONOMOS_LLM_MODEL
         sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: FIRECRAWL_API_KEY
+        sync: false
+      - key: E2B_API_KEY
+        sync: false
+      - key: GITHUB_TOKEN
+        sync: false
+      - key: AUTONOMOS_GITHUB_EXPECTED_LOGIN
+        value: navinavi1
+      - key: TRIGGER_SECRET_KEY
+        sync: false
+      - key: AUTONOMOS_TRIGGER_TASK_ID
+        value: autonomos-paid-job
+      - key: TAVILY_API_KEY
+        sync: false
       - key: VIRTUALS_ACP_WALLET_ID
         sync: false
       - key: VIRTUALS_ACP_SIGNER
@@ -113,16 +129,6 @@ services:
       - key: DATABASE_URL
         sync: false
       - key: REDIS_URL
-        sync: false
-      - key: NATS_URL
-        sync: false
-      - key: TEMPORAL_ADDRESS
-        sync: false
-      - key: TEMPORAL_NAMESPACE
-        value: default
-      - key: TEMPORAL_TASK_QUEUE
-        value: autonomos-paid-jobs
-      - key: AUTONOMOS_TEMPORAL_WORKER_TOKEN
         sync: false
       - key: LITELLM_BASE_URL
         sync: false
@@ -150,6 +156,8 @@ services:
         sync: false
       - key: LANGFUSE_SECRET_KEY
         sync: false
+      - key: LANGFUSE_BASE_URL
+        value: https://cloud.langfuse.com
       - key: OPENSEARCH_URL
         sync: false
       - key: OPENSEARCH_USERNAME
