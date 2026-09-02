@@ -270,6 +270,19 @@ async function discoverSuperteam(credentials,limit){
   }catch(error){return {signals:[],health:{ok:false,error:String(error?.message||error).slice(0,180)}}}
 }
 
+function extractDeliverableLink(deliverable){
+  const calls=deliverable?.evidence?.toolCalls;
+  if(!Array.isArray(calls))return'';
+  for(const call of calls){
+    if(!call?.ok)continue;
+    for(const artifact of (Array.isArray(call.artifacts)?call.artifacts:[])){
+      const url=String(artifact?.url||'');
+      if(artifact?.ok&&/^https?:\/\//i.test(url))return url;
+    }
+  }
+  return'';
+}
+
 async function superteamAction(kind,opportunity,{credentials,deliverable,recordPendingClaim}={}){
   const cred=credentials?.superteam; const key=String(cred?.apiKey||''); if(!key)return{ok:false,reason:'superteam_api_key_missing'};
   // No escrow/reservation step exists on this platform — "claiming" is just proceeding
@@ -277,7 +290,7 @@ async function superteamAction(kind,opportunity,{credentials,deliverable,recordP
   // needed or possible; the actual work happens at 'deliver'.
   if(kind==='claim')return{ok:true,jobId:opportunity.externalId,transactionId:''};
   try{
-    const payload={listingId:opportunity.externalId,link:'',otherInfo:String(deliverable.content||'').slice(0,3000),eligibilityAnswers:[]};
+    const payload={listingId:opportunity.externalId,link:extractDeliverableLink(deliverable),otherInfo:String(deliverable.content||'').slice(0,3000),eligibilityAnswers:[]};
     const response=await fetch('https://superteam.fun/api/agents/submissions/create',{method:'POST',headers:{'content-type':'application/json',accept:'application/json',authorization:`Bearer ${key}`,'user-agent':'AutonomOS/2.0'},body:JSON.stringify(payload),signal:AbortSignal.timeout(20000)});
     const body=await safeJson(response);
     if(!response.ok)return{ok:false,reason:`http_${response.status}:${body?.error||body?.message||''}`.slice(0,200)};

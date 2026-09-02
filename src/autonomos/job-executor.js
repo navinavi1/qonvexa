@@ -108,7 +108,7 @@ function summarizeToolArgs(name,args){
   if(name==='app_action')return{toolSlug:String(args.toolSlug||'').slice(0,180),argumentKeys:Object.keys(args.arguments||{}).slice(0,30)};
   const out={};for(const [k,v] of Object.entries(args).slice(0,20)){if(/token|secret|password|key|contentBase64/i.test(k))continue;out[k]=typeof v==='string'?v.slice(0,400):v;}return out;
 }
-function summarizeArtifacts(result){return Array.isArray(result?.artifacts)?result.artifacts.slice(0,20).map(a=>({path:a.path||'',ok:Boolean(a.ok),url:a.url||'',key:a.key||'',bytes:a.bytes||0})):result?.url?[{ok:true,url:result.url,key:result.key||'',bytes:result.bytes||0}]:[];}
+function summarizeArtifacts(result){return Array.isArray(result?.artifacts)?result.artifacts.slice(0,20).map(a=>({path:a.path||'',ok:Boolean(a.ok),url:a.url||'',key:a.key||'',bytes:a.bytes||0})):result?.url?[{ok:true,url:result.url,key:result.key||'',bytes:result.bytes||0}]:result?.prUrl?[{ok:true,url:result.prUrl,key:'',bytes:0}]:[];}
 function stripToolSecrets(value){if(!value||typeof value!=='object')return value;const copy=structuredClone(value);for(const key of Object.keys(copy)){if(/token|secret|password|api.?key/i.test(key))copy[key]='[redacted]';}return copy;}
 function round6(value){return Math.round((Number(value||0)+Number.EPSILON)*1e6)/1e6;}
 
