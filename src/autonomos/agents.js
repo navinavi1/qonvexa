@@ -3,7 +3,6 @@ export const CORE_AGENTS = Object.freeze([
   { id:'policy-agent', name:'Policy Agent', swarm:'governance', purpose:'Checks policies, permissions, marketplace rules and safety constraints.', kpi:'policy_violations' },
   { id:'treasury-cfo', name:'Treasury CFO', swarm:'finance', purpose:'Tracks balances, revenue, costs, reserves and reinvestment budgets.', kpi:'treasury_growth' },
   { id:'security-sentinel', name:'Security Sentinel', swarm:'governance', purpose:'Blocks SSRF, unsafe network actions, secret exposure and suspicious inputs.', kpi:'security_incidents' },
-  { id:'internal-auditor', name:'Internal Auditor', swarm:'governance', purpose:'Maintains an immutable operational audit trail and checks economic claims.', kpi:'audit_accuracy' },
   { id:'opportunity-radar', name:'Opportunity Radar', swarm:'market', purpose:'Scans configured machine marketplaces and public discovery feeds.', kpi:'opportunities_per_cycle' },
   { id:'demand-analyst', name:'Demand Analyst', swarm:'market', purpose:'Scores observed demand and identifies repeatable machine-service niches.', kpi:'qualified_demand_rate' },
   { id:'competition-agent', name:'Competition Agent', swarm:'market', purpose:'Compares competing services, price bands and discoverability.', kpi:'competitive_win_rate' },
