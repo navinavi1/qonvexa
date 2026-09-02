@@ -143,8 +143,8 @@ function renderAutonomOS(){
   setText('#auto-revenue24',usd(a.metrics?.revenue24hUsd));
   setText('#auto-cost24',usd(a.metrics?.cost24hUsd));
   setText('#auto-net',usd(a.metrics?.netProfitUsd));
-  setText('#auto-agents',String(a.metrics?.activeAgents??20));
-  setText('#auto-children',String(a.metrics?.activeChildren??0));
+  setText('#auto-agents',String(a.runtime?.taskAgents?.active??0));
+  setText('#auto-children',String(a.runtime?.queueDepth??0));
   setText('#auto-opportunities',String(a.metrics?.opportunitiesFound??0));
   setText('#auto-claimed',String(a.metrics?.claimedJobs??0));
   setText('#auto-delivered',String(a.metrics?.deliveredJobs??0));
@@ -152,6 +152,17 @@ function renderAutonomOS(){
   setText('#auto-jobs',String(a.metrics?.completedJobs??0));
   setText('#auto-cycles',String(a.runtime?.cycles??0));
   setText('#autonomos-llm',a.runtime?.llm?.enabled?`LLM · ${a.runtime.llm.model}`:'Deterministic · no paid LLM');
+
+  const activeJobs=el('#autonomos-active-jobs');
+  if(activeJobs){
+    const rows=a.runtime?.activeJobs||[];
+    activeJobs.innerHTML=rows.map(j=>`<article class="autonomos-event"><div class="event-row"><b>${esc(j.externalId||j.productId||j.id)}</b><span class="status s-in_progress">Executing</span></div><p>${esc(pretty(j.source||'internal'))} · worker ${esc(j.workerId||'dynamic')} · ${j.startedAt?`started ${esc(formatDate(j.startedAt))}`:'in progress'}</p></article>`).join('')||emptyCard('No task is executing right now.');
+  }
+  const taskAgents=el('#autonomos-task-agents');
+  if(taskAgents){
+    const rows=(a.taskAgents||[]).filter(x=>x.status==='active').slice(0,24);
+    taskAgents.innerHTML=rows.map(x=>`<article class="autonomos-event"><div class="event-row"><b>${esc(pretty(x.role))}</b><span class="status s-in_progress">${esc(pretty(x.phase||'active'))}</span></div><p>${esc(x.jobId)} · ${esc(x.specialization||'task execution')} · expires ${esc(formatDate(x.expiresAt))}</p></article>`).join('')||emptyCard('No task agents are alive. They are created from each accepted job plan and retired when the job closes.');
+  }
 
   const t=a.t2000||{};
   const tBadge=el('#autonomos-t2000-badge');
