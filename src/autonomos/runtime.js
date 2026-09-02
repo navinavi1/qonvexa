@@ -30,6 +30,7 @@ import { dispatchPaidOpportunity, temporalEnabled } from './temporal-client.js';
 import { dispatchTriggerPaidOpportunity, triggerEnabled } from './trigger-client.js';
 import { estimateOutcomeProbability } from './outcome-model.js';
 import { ledgerEntry } from './financial-ledger.js';
+import { TaskAgentRuntime } from './task-agent-runtime.js';
 
 export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = process.env, logger = console } = {}) {
   if (!storageDir) throw new Error('AutonomOS requires storageDir');
@@ -42,6 +43,7 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
   const eventBus = new EventBus({env,logger});
   const cache = new AutonomOSCache({env,logger});
   const artifactStore = new ArtifactStore({env});
+  const taskAgents = new TaskAgentRuntime({env,onEvent:(type,detail)=>event(type,detail)});
   Promise.allSettled([memory.init(),eventBus.init(),cache.init(),artifactStore.init()]);
   let credentials = store.readJson('credentials.private.json', {});
   let config = normalizeConfig(store.readJson('config.json', {
@@ -117,11 +119,14 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
           ...state,
           status:config.killSwitch ? 'emergency_stopped' : config.enabled ? (cycleRunning ? 'working' : 'running') : 'stopped',
           cycleRunning, activeJobCount:activeJobs.size,
+          queueDepth:Number(state.lastCycleSummary?.candidates||0),
+          taskAgents:taskAgents.summary(),
+          activeJobs:[...activeJobs.values()].map(job=>({id:job.id,source:job.source||'',externalId:job.externalId||'',productId:job.productId||'',workerId:job.workerId||'',startedAt:job.startedAt||''})),
           llm:{ enabled:llm.enabled, provider:llm.provider, model:llm.model }
         },
         config:safeConfig(config),
         treasury:{ ownerWallet:wallet, ...(state.treasury || {}), marketplaceWallets:state.marketplaceWallets||{}, allocations:metrics.allocations },
-        metrics, agents, children,
+        metrics, agents, children, taskAgents:taskAgents.snapshot(),
         products:currentProducts().map(product=>({ ...product, payment:x402.status() })),
         connectors:connectorStatuses(env, x402.status(), credentials).map(c=>{ const h=state.connectorHealth?.[c.id]||state.connectorHealth?.[`${c.id}-public`]||null; return h&&c.configured&&!h.ok?{...c,status:'degraded',health:h}:{...c,health:h}; }),
         t2000:{...t2000OAuth.status(),health:state.connectorHealth?.t2000||null,wallet:state.marketplaceWallets?.t2000||null},
@@ -453,7 +458,7 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
     try{
       if(op.source==='t2000'&&claim.workOrderMissing){throw new Error('t2000_work_order_unavailable_refusing_blind_delivery');}
       const execOp=claim.workOrder?{...op,__workOrderRaw:claim.workOrder,description:`${op.description}\n\n[t2000 job_status work order]\n${typeof claim.workOrder==='string'?claim.workOrder:JSON.stringify(claim.workOrder).slice(0,4000)}${op.source==='t2000'?'\n\n[t2000 delivery constraint] Final delivery body must be at most 16 KiB UTF-8. If the result is larger, summarize it and include stable links/hashes where the work order permits.':''}`}:op;
-      deliverable=await orchestrateJob(execOp,{llm,memory,env,abortSignal:abortController.signal,onEvent:(type,detail)=>event(type,{jobId,source:op.source,...detail}),execute:(plannedOp)=>executeExternalOpportunity(plannedOp,op.capability,{llm,siteUrl,env,config,abortSignal:abortController.signal,memoryContext:plannedOp.__memoryContext||''})});
+      deliverable=await orchestrateJob(execOp,{llm,memory,taskAgents,jobId,env,abortSignal:abortController.signal,onEvent:(type,detail)=>event(type,{jobId,source:op.source,...detail}),execute:(plannedOp)=>executeExternalOpportunity(plannedOp,op.capability,{llm,siteUrl,env,config,abortSignal:abortController.signal,memoryContext:plannedOp.__memoryContext||''})});
       setAgent('qa-evaluator','working'); validateExternalDeliverable(deliverable,execOp);
       if(op.source==='t2000')await syncT2000Credential({required:true});
       const delivery=await deliverMarketplaceJob(op,claim,deliverable,{env,credentials,recordPendingClaim});
@@ -543,7 +548,7 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
         event('market_job_claimed',{jobId,source:op.source,externalId:op.externalId,transactionId:status.contractId,recovered:false,fromBid:true});
         const syntheticClaim={ok:true,jobId:status.contractId,transactionId:status.contractId};
         writeInFlightJob(jobId,{jobId,op,claim:syntheticClaim,workerId:worker.id,startedAt:new Date().toISOString(),fromBid:true});
-        deliverable=await orchestrateJob(op,{llm,memory,env,abortSignal:abortController.signal,onEvent:(type,detail)=>event(type,{jobId,source:op.source,...detail}),execute:(plannedOp)=>executeExternalOpportunity(plannedOp,op.capability,{llm,siteUrl,env,config,abortSignal:abortController.signal,memoryContext:plannedOp.__memoryContext||''})});
+        deliverable=await orchestrateJob(op,{llm,memory,taskAgents,jobId,env,abortSignal:abortController.signal,onEvent:(type,detail)=>event(type,{jobId,source:op.source,...detail}),execute:(plannedOp)=>executeExternalOpportunity(plannedOp,op.capability,{llm,siteUrl,env,config,abortSignal:abortController.signal,memoryContext:plannedOp.__memoryContext||''})});
         validateExternalDeliverable(deliverable,op);
         const delivery=await deliverMarketplaceJob(op,syntheticClaim,deliverable,{env,credentials,recordPendingClaim});
         if(!delivery.ok)throw new Error(`delivery_failed:${delivery.reason||'unknown'}`);
@@ -587,7 +592,7 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
       try{
         if(op.source==='t2000'&&claim.workOrderMissing)throw new Error('t2000_work_order_unavailable_refusing_blind_delivery');
         const execOp=claim.workOrder?{...op,__workOrderRaw:claim.workOrder,description:`${op.description}\n\n[t2000 job_status work order]\n${typeof claim.workOrder==='string'?claim.workOrder:JSON.stringify(claim.workOrder).slice(0,4000)}${op.source==='t2000'?'\n\n[t2000 delivery constraint] Final delivery body must be at most 16 KiB UTF-8. If larger, summarize and include stable artifact links/hashes where permitted.':''}`}:op;
-        deliverable=await orchestrateJob(execOp,{llm,memory,env,abortSignal:abortController.signal,onEvent:(type,detail)=>event(type,{jobId,source:op.source,...detail}),execute:(plannedOp)=>executeExternalOpportunity(plannedOp,op.capability,{llm,siteUrl,env,config,abortSignal:abortController.signal,memoryContext:plannedOp.__memoryContext||''})});
+        deliverable=await orchestrateJob(execOp,{llm,memory,taskAgents,jobId,env,abortSignal:abortController.signal,onEvent:(type,detail)=>event(type,{jobId,source:op.source,...detail}),execute:(plannedOp)=>executeExternalOpportunity(plannedOp,op.capability,{llm,siteUrl,env,config,abortSignal:abortController.signal,memoryContext:plannedOp.__memoryContext||''})});
         validateExternalDeliverable(deliverable,execOp);if(op.source==='t2000')await syncT2000Credential({required:true});
         const delivery=await deliverMarketplaceJob(op,claim,deliverable,{env,credentials,recordPendingClaim});if(!delivery.ok)throw new Error(`delivery_failed:${delivery.reason||'unknown'}`);
         store.append('jobs.ndjson',{id:jobId,source:op.source,externalId:op.externalId,status:'delivered',transactionId:delivery.transactionId||claim.transactionId||'',workerId:worker.id,deliverableHash:deliverable.hash,at:new Date().toISOString(),recovered:true});
