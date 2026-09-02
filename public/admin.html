@@ -139,14 +139,25 @@
           <article class="autonomos-stat"><small>24H REVENUE</small><strong id="auto-revenue24">$0.00</strong><span>real settled revenue</span></article>
           <article class="autonomos-stat"><small>24H COST</small><strong id="auto-cost24">$0.00</strong><span>tracked external cost</span></article>
           <article class="autonomos-stat"><small>NET PROFIT</small><strong id="auto-net">$0.00</strong><span>lifetime</span></article>
-          <article class="autonomos-stat"><small>AGENTS</small><strong id="auto-agents">20</strong><span>core organization</span></article>
-          <article class="autonomos-stat"><small>CHILDREN</small><strong id="auto-children">0</strong><span>temporary workers</span></article>
+          <article class="autonomos-stat"><small>ACTIVE TASK AGENTS</small><strong id="auto-agents">0</strong><span>spawned only for live work</span></article>
+          <article class="autonomos-stat"><small>QUEUE</small><strong id="auto-children">0</strong><span>qualified tasks waiting</span></article>
           <article class="autonomos-stat"><small>OPPORTUNITIES</small><strong id="auto-opportunities">0</strong><span>unique discovered</span></article>
           <article class="autonomos-stat"><small>CLAIMED</small><strong id="auto-claimed">0</strong><span>market jobs</span></article>
           <article class="autonomos-stat"><small>DELIVERED</small><strong id="auto-delivered">0</strong><span>submitted work</span></article>
           <article class="autonomos-stat"><small>PAID</small><strong id="auto-paid">0</strong><span>settled payouts</span></article>
           <article class="autonomos-stat"><small>JOBS</small><strong id="auto-jobs">0</strong><span>completed/delivered</span></article>
           <article class="autonomos-stat"><small>CYCLES</small><strong id="auto-cycles">0</strong><span>heartbeat loops only</span></article>
+        </div>
+
+        <div class="autonomos-two-col autonomos-operator-row">
+          <section class="admin-panel autonomos-panel">
+            <div class="admin-panel-head"><div><small>LIVE EXECUTION</small><h2>Active tasks</h2></div></div>
+            <div id="autonomos-active-jobs" class="autonomos-event-list"></div>
+          </section>
+          <section class="admin-panel autonomos-panel">
+            <div class="admin-panel-head"><div><small>DYNAMIC WORKFORCE</small><h2>Task-scoped agents</h2></div></div>
+            <div id="autonomos-task-agents" class="autonomos-event-list"></div>
+          </section>
         </div>
 
         <div class="autonomos-two-col">
