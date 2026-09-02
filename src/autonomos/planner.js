@@ -21,7 +21,7 @@ export async function planJob(opportunity,{llm=null,env=process.env,abortSignal=
         if(Array.isArray(parsed?.steps)&&parsed.steps.length)return{...parsed,source:'openai_agents_sdk'};
       }catch{/* fall through to gateway client */}
     }
-    const result=await llm.complete({messages:[{role:'system',content:'Plan legitimate paid work. Return JSON only.'},{role:'user',content:request}],maxTokens:700,signal:abortSignal,task:'planning'});
+    const result=await llm.complete({messages:[{role:'system',content:'Plan legitimate paid work. Return JSON only.'},{role:'user',content:request}],maxTokens:Number(env.AUTONOMOS_PLANNER_MAX_TOKENS||1500),signal:abortSignal,task:'planning'});
     if(result?.ok){const parsed=parseJson(result.text);if(Array.isArray(parsed?.steps)&&parsed.steps.length)return{...parsed,source:'llm_gateway'};}
   }catch{/* fall through */}
   return fallback();
