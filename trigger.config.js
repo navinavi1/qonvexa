@@ -1,6 +1,6 @@
 import { defineConfig } from '@trigger.dev/sdk';
 
-const project = proj_kiyllajxwhqkdrvrfldr
+const project = 'proj_kiyllajxwhqkdrvrfldr'
 if (!project) throw new Error('TRIGGER_PROJECT_REF is required when deploying Trigger.dev tasks');
 
 export default defineConfig({
