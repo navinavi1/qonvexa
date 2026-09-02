@@ -15,6 +15,14 @@ const REQUIRES_DEPLOY=/\b(deploy(ment)?\b|production server|release to productio
 const REQUIRES_GITHUB_PR=/\b(git\s+(clone|push|pull|checkout|commit)|pull request|\bpr\b|open (a |an )?pr\b|merge request|github repo|fix.{0,30}(bug|issue).{0,30}repo)\b/i;
 const REQUIRES_ARTIFACT=/\b(downloadable|attach(?:ed|ment)?|deliver (?:a )?(?:file|pdf|docx|xlsx|csv|zip|pptx)|create (?:a )?(?:pdf|docx|xlsx|csv|zip|pptx)|generate (?:a )?(?:pdf|docx|xlsx|csv|zip|pptx)|spreadsheet file|presentation file)\b/i;
 const REQUIRES_APP=/\b(send (?:an )?email|create (?:a )?calendar event|update (?:the )?crm|update (?:a )?(?:google )?sheet|post to slack|create (?:a )?jira|create (?:a )?linear issue|edit (?:a )?notion|upload to (?:google )?drive|connected app)\b/i;
+// This system permanently refuses to hold private keys or sign transactions (see
+// policy-engine.js kind:'private_key_access' / 'wallet_export' and the "private-key access
+// is permanently rejected" audit check). A job that requires actually broadcasting a signed
+// on-chain transaction — deploying a smart contract to a live/test network, minting from a
+// funded wallet, etc. — is therefore structurally impossible here, not a missing integration.
+// Previously this was only discovered mid-execution when the model, unable to really deploy,
+// fabricated a deployment claim that QA then correctly rejected after a full paid round-trip.
+const REQUIRES_ONCHAIN_TX=/\b(deploy\w*\b[\s\S]{0,40}?\b(?:mainnet|testnet|sepolia|goerli|mumbai|polygon|base|arbitrum|optimism|devnet)\b|\bsign(?:ed|ing)?\s+(?:a\s+|the\s+)?transaction\b|\bbroadcast\s+(?:a\s+|the\s+)?transaction\b|\bmint\w*\b[\s\S]{0,20}?\bfunded\s+wallet\b|\bverify\w*\b[\s\S]{0,40}?\b(?:etherscan|polygonscan|solscan|basescan)\b|\bfunded\s+(?:deployer\s+)?wallet\b)/i;
 
 export function classifyOpportunity(opportunity, { llmEnabled=false, hasGithubPrTool=false, hasShellTool=false, hasBrowserTool=false, hasDeployTool=false, hasArtifactTool=false, hasAppTool=false } = {}) {
   const category=String(opportunity?.category||'').toLowerCase();
@@ -31,7 +39,8 @@ export function classifyOpportunity(opportunity, { llmEnabled=false, hasGithubPr
     browser:REQUIRES_BROWSER.test(hay)||skill==='browser-ops',
     deploy:REQUIRES_DEPLOY.test(hay),
     artifact:REQUIRES_ARTIFACT.test(hay)||skill==='document-generation',
-    app:REQUIRES_APP.test(hay)||skill==='app-automation'
+    app:REQUIRES_APP.test(hay)||skill==='app-automation',
+    onchainTx:REQUIRES_ONCHAIN_TX.test(hay)
   };
   const missing=[];
   if(needs.github&&!hasGithubPrTool)missing.push('github_pr');
@@ -40,6 +49,9 @@ export function classifyOpportunity(opportunity, { llmEnabled=false, hasGithubPr
   if(needs.deploy&&!hasDeployTool)missing.push('deploy');
   if(needs.artifact&&!hasArtifactTool)missing.push('artifact_storage');
   if(needs.app&&!hasAppTool)missing.push('connected_app_gateway');
+  // Permanently unavailable: this system never holds a private key or signs a transaction,
+  // so no env flag can ever satisfy this one. Always rejected, not just when unconfigured.
+  if(needs.onchainTx)missing.push('signed_onchain_transaction');
   const needsUnavailableTooling=missing.length>0;
   return{
     skill,
