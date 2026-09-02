@@ -21,9 +21,10 @@ function ok(name, fn) {
   return Promise.resolve().then(fn).then(() => checks.push({ name, ok:true }));
 }
 
-await ok('exactly 20 unique core agents', () => {
-  assert.equal(CORE_AGENTS.length, 20);
-  assert.equal(new Set(CORE_AGENTS.map(x => x.id)).size, 20);
+await ok('core role registry is unique and no longer coupled to an exact agent count', () => {
+  assert.ok(CORE_AGENTS.length >= 1);
+  assert.equal(new Set(CORE_AGENTS.map(x => x.id)).size, CORE_AGENTS.length);
+  assert.notEqual(CORE_AGENTS.length, 20, 'architecture must not depend on the legacy exact-20 organization');
 });
 
 await ok('machine products have unique routes and positive prices', () => {
@@ -148,7 +149,8 @@ await ok('runtime boots without any paid API or private key', async () => {
       logger:{ error(){} }
     });
     const snap = await runtime.snapshot();
-    assert.equal(snap.agents.length, 20);
+    assert.equal(snap.agents.length, CORE_AGENTS.length);
+    assert.equal(snap.runtime.taskAgents.active, 0);
     assert.ok(snap.products.length >= 6);
     assert.equal(snap.treasury.ownerWallet.toLowerCase(), wallet.toLowerCase());
     assert.equal(snap.config.zeroSpendMode, true);
