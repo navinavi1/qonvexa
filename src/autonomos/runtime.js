@@ -22,7 +22,6 @@ import { paymentDestinations, selectPayoutRoute } from './payment-router.js';
 import { orchestrateJob } from './orchestration.js';
 import { AgentMemory } from './memory.js';
 import { EventBus } from './event-bus.js';
-import { desiredChildCapacity, buildChildRole, groupQueueBySkill } from './autoscaler.js';
 import { emitOperationalLog } from './observability.js';
 import { AutonomOSCache } from './cache.js';
 import { ArtifactStore } from './artifact-store.js';
@@ -52,7 +51,9 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
   }));
   let state = store.readJson('state.json', defaultState());
   let agents = buildAgentState(Object.fromEntries((store.readJson('agents.json', []) || []).map(x=>[x.id,x])));
-  let children = store.readJson('children.json', []);
+  let children = [];
+  // v13 migration: legacy persistent child-agent pool is retired. Workers are job-scoped.
+  store.writeJson('children.json', children);
   let offers = store.readJson('offers.json', defaultOffers());
   let timer = null;
   let fastTimer = null;
@@ -85,7 +86,6 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
     async get(key){ return x402Idempotency[key] || null; },
     async set(key,value){ x402Idempotency[key]=value; const entries=Object.entries(x402Idempotency); if(entries.length>1000)x402Idempotency=Object.fromEntries(entries.slice(-1000)); store.writeJson('x402-idempotency.json',x402Idempotency); }
   } });
-  cleanupExpiredChildren();
   persistCore();
   recoverStartup().catch(()=>{});
   if (config.enabled && !config.killSwitch) schedule();
@@ -112,9 +112,10 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
       const events = store.readNdjson('events.ndjson', 500).reverse();
       const opportunities = store.readNdjson('opportunities.ndjson', 500).reverse();
       const jobs = store.readNdjson('jobs.ndjson', 500).reverse();
+      taskAgents.retireOrphans([...activeJobs.keys()]);
       const metrics = calculateMetrics(ledger, jobs, opportunities);
       return {
-        project:'AutonomOS', version:'2.0.0',
+        project:'AutonomOS', version:'3.0.0',
         runtime:{
           ...state,
           status:config.killSwitch ? 'emergency_stopped' : config.enabled ? (cycleRunning ? 'working' : 'running') : 'stopped',
@@ -122,7 +123,7 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
           queueDepth:Number(state.lastCycleSummary?.candidates||0),
           taskAgents:taskAgents.summary(),
           activeJobs:[...activeJobs.values()].map(job=>({id:job.id,source:job.source||'',externalId:job.externalId||'',productId:job.productId||'',workerId:job.workerId||'',startedAt:job.startedAt||''})),
-          llm:{ enabled:llm.enabled, provider:llm.provider, model:llm.model }
+          llm:llm.status ? llm.status() : { enabled:llm.enabled, available:llm.enabled, provider:llm.provider, model:llm.model }
         },
         config:safeConfig(config),
         treasury:{ ownerWallet:wallet, ...(state.treasury || {}), marketplaceWallets:state.marketplaceWallets||{}, allocations:metrics.allocations },
@@ -237,7 +238,7 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
       return x402.protect({req,res,product,handler:async()=>executeTrackedProduct(product,Object.fromEntries(Object.entries(req.query||{}).map(([k,v])=>[k,String(v??'')])),{paid:true,source:'x402'})});
     },
     async previewProduct(productId,query){const product=currentProduct(productId);if(!product)throw Object.assign(new Error('Unknown product.'),{status:404});return executeTrackedProduct(product,query,{paid:false,source:'admin_preview'});},
-    catalog(){return{name:'AutonomOS Machine Services',version:'2.0.0',ownerWallet:wallet,payment:x402.status(),products:currentProducts().map(p=>({...p,url:new URL(p.path,siteUrl).toString()}))};}
+    catalog(){return{name:'AutonomOS Machine Services',version:'3.0.0',ownerWallet:wallet,payment:x402.status(),products:currentProducts().map(p=>({...p,url:new URL(p.path,siteUrl).toString()}))};}
   };
 
   async function cycle(trigger){
@@ -247,8 +248,7 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
     cycleRunning=true; const cycleId=`cy_${Date.now().toString(36)}_${crypto.randomBytes(3).toString('hex')}`; const started=Date.now();
     setAgent('prime-governor','working'); setAgent('policy-agent','working'); setAgent('opportunity-radar','working');
     try{
-      cleanupExpiredChildren();
-      await recoverInFlightJobs({max:Math.max(1,Math.min(3,Number(config.maxConcurrentJobs||4)))}).catch(()=>{});
+          await recoverInFlightJobs({max:Math.max(1,Math.min(3,Number(config.maxConcurrentJobs||4)))}).catch(()=>{});
       await syncT2000Credential().catch(()=>{});
       await pollDealworkBids().catch(()=>{});
       const boot=await bootstrapMarketCredentials({env,credentials,ownerWallet:wallet,storeCredential:(id,value)=>{credentials={...credentials,[id]:value};store.writeSecretJson('credentials.private.json',credentials);}});
@@ -270,8 +270,8 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
       }
       setAgentMetric('opportunity-radar',{tasks:1});
       updateT2000QualificationHealth(normalized);
-      setAgent('demand-analyst','working');state.marketSummary=summarizeOpportunities(normalized);setAgentMetric('demand-analyst',{tasks:1});
-      setAgent('competition-agent','working');state.competition=competitionSnapshot(normalized);setAgentMetric('competition-agent',{tasks:1});
+      setAgent('opportunity-radar','working');state.marketSummary=summarizeOpportunities(normalized);setAgentMetric('opportunity-radar',{tasks:1});
+      setAgent('opportunity-radar','working');state.competition=competitionSnapshot(normalized);setAgentMetric('opportunity-radar',{tasks:1});
       setAgent('economics-agent','working');
       // P1 fix: slice(0,100) in raw discovery order (x402-bazaar first, then clawlancer
       // with up to 100 signals of its own) could fill the entire 100-item cap before
@@ -282,11 +282,11 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
       state.opportunityEconomics=sampleAcrossSources(normalized,['clawlancer','dealwork','t2000','superteam'],40).map(x=>({source:x.source,externalId:x.externalId,title:x.title,budgetUsd:x.budgetUsd,capability:x.capability,outcome:x.outcome,economics:x.economics,payoutRoute:x.payoutRoute,candidacy:explainCandidacy(x)}));
       setAgentMetric('economics-agent',{tasks:1});
 
-      setAgent('pricing-agent','working');state.offerOptimization=optimizeOffers(normalized.filter(x=>x.source==='x402-bazaar'));setAgentMetric('pricing-agent',{tasks:1});
-      setAgent('offer-architect','working');setAgentMetric('offer-architect',{tasks:1}); setAgent('distribution-agent','working');state.catalogReady=true;setAgentMetric('distribution-agent',{tasks:1});
+      setAgent('economics-agent','working');state.offerOptimization=optimizeOffers(normalized.filter(x=>x.source==='x402-bazaar'));setAgentMetric('economics-agent',{tasks:1});
+      state.catalogReady=true;
 
       const candidates=normalized.filter(isAutoClaimCandidate).sort((a,b)=>scoreCandidate(b)-scoreCandidate(a)).slice(0,config.maxJobsPerCycle);
-      reconcileElasticWorkers(candidates);
+
       const processed=await mapLimit(candidates,Number(config.maxConcurrentJobs||4),async opportunity=>{
         if(triggerEnabled(env)){
           const dispatched=await dispatchTriggerPaidOpportunity(opportunity,env);
@@ -437,14 +437,14 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
     // Claim succeeded: this opportunity is now truly spoken for, so it's safe to mark handled.
     handled.add(key);persistSet('handled-opportunities.json',handled);
     if(claimAttempts[key]){delete claimAttempts[key];store.writeJson('claim-attempts.json',claimAttempts);}
-    setAgentMetric('job-router',{tasks:1});maybeSpawnChild(op.capability?.skill||op.category||op.source);
+    setAgentMetric('job-router',{tasks:1});
     const worker=pickExternalWorker(op.capability?.skill);setWorkerStatus(worker,'working');
     // P0 fix (external audit — Emergency Stop was not a real abort): give this job its own
     // AbortController and store it alongside cancelled:true so emergencyStop() below can
     // actually interrupt an in-flight LLM/Firecrawl/E2B/GitHub call, not just prevent
     // starting a new one.
     const abortController=new AbortController();
-    activeJobs.set(jobId,{id:jobId,source:op.source,externalId:op.externalId,workerId:worker.id,cancelled:false,abortController});
+    activeJobs.set(jobId,{id:jobId,source:op.source,externalId:op.externalId,workerId:worker.id,startedAt,cancelled:false,abortController});
     store.append('jobs.ndjson',{id:jobId,source:op.source,externalId:op.externalId,status:'claimed',transactionId:claim.transactionId||'',workerId:worker.id,at:new Date().toISOString()});event('market_job_claimed',{jobId,source:op.source,externalId:op.externalId,transactionId:claim.transactionId||''});
     // P1 fix: persist everything needed to resume AFTER a successful claim. Previously,
     // a claim locked real escrow on the marketplace, but the only record that execution
@@ -458,7 +458,7 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
     try{
       if(op.source==='t2000'&&claim.workOrderMissing){throw new Error('t2000_work_order_unavailable_refusing_blind_delivery');}
       const execOp=claim.workOrder?{...op,__workOrderRaw:claim.workOrder,description:`${op.description}\n\n[t2000 job_status work order]\n${typeof claim.workOrder==='string'?claim.workOrder:JSON.stringify(claim.workOrder).slice(0,4000)}${op.source==='t2000'?'\n\n[t2000 delivery constraint] Final delivery body must be at most 16 KiB UTF-8. If the result is larger, summarize it and include stable links/hashes where the work order permits.':''}`}:op;
-      deliverable=await orchestrateJob(execOp,{llm,memory,taskAgents,jobId,env,abortSignal:abortController.signal,onEvent:(type,detail)=>event(type,{jobId,source:op.source,...detail}),execute:(plannedOp)=>executeExternalOpportunity(plannedOp,op.capability,{llm,siteUrl,env,config,abortSignal:abortController.signal,memoryContext:plannedOp.__memoryContext||''})});
+      deliverable=await orchestrateJob(execOp,{llm,memory,taskAgents,jobId,env,maxTaskAgents:Number(config.maxChildren||12),abortSignal:abortController.signal,onEvent:(type,detail)=>event(type,{jobId,source:op.source,...detail}),execute:(plannedOp)=>executeExternalOpportunity(plannedOp,op.capability,{llm,siteUrl,env,config,abortSignal:abortController.signal,memoryContext:plannedOp.__memoryContext||''})});
       setAgent('qa-evaluator','working'); validateExternalDeliverable(deliverable,execOp);
       if(op.source==='t2000')await syncT2000Credential({required:true});
       const delivery=await deliverMarketplaceJob(op,claim,deliverable,{env,credentials,recordPendingClaim});
@@ -539,7 +539,7 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
       const {jobId,op}=record;
       const worker=pickExternalWorker(op.capability?.skill);setWorkerStatus(worker,'working');
       const abortController=new AbortController();
-      activeJobs.set(jobId,{id:jobId,source:op.source,externalId:op.externalId,workerId:worker.id,cancelled:false,abortController});
+      activeJobs.set(jobId,{id:jobId,source:op.source,externalId:op.externalId,workerId:worker.id,startedAt:new Date().toISOString(),cancelled:false,abortController});
       let deliverable;
       try{
         const started=await startDealworkContract(status.contractId,{env,credentials});
@@ -548,7 +548,7 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
         event('market_job_claimed',{jobId,source:op.source,externalId:op.externalId,transactionId:status.contractId,recovered:false,fromBid:true});
         const syntheticClaim={ok:true,jobId:status.contractId,transactionId:status.contractId};
         writeInFlightJob(jobId,{jobId,op,claim:syntheticClaim,workerId:worker.id,startedAt:new Date().toISOString(),fromBid:true});
-        deliverable=await orchestrateJob(op,{llm,memory,taskAgents,jobId,env,abortSignal:abortController.signal,onEvent:(type,detail)=>event(type,{jobId,source:op.source,...detail}),execute:(plannedOp)=>executeExternalOpportunity(plannedOp,op.capability,{llm,siteUrl,env,config,abortSignal:abortController.signal,memoryContext:plannedOp.__memoryContext||''})});
+        deliverable=await orchestrateJob(op,{llm,memory,taskAgents,jobId,env,maxTaskAgents:Number(config.maxChildren||12),abortSignal:abortController.signal,onEvent:(type,detail)=>event(type,{jobId,source:op.source,...detail}),execute:(plannedOp)=>executeExternalOpportunity(plannedOp,op.capability,{llm,siteUrl,env,config,abortSignal:abortController.signal,memoryContext:plannedOp.__memoryContext||''})});
         validateExternalDeliverable(deliverable,op);
         const delivery=await deliverMarketplaceJob(op,syntheticClaim,deliverable,{env,credentials,recordPendingClaim});
         if(!delivery.ok)throw new Error(`delivery_failed:${delivery.reason||'unknown'}`);
@@ -586,13 +586,13 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
       if(Number(attempt.count||0)>=MAX_EXECUTION_ATTEMPTS){manualAttention++;writeInFlightJob(jobId,{...record,status:'manual_attention',manualAttentionAt:record.manualAttentionAt||new Date().toISOString()});continue;}
       if(attempt.lastAttemptAt&&Date.now()-Date.parse(attempt.lastAttemptAt)<EXECUTION_RETRY_BACKOFF_MS)continue;
       const worker=children.find(c=>c.id===record.workerId&&c.status==='alive')||agents.find(a=>a.id===record.workerId)||pickExternalWorker(op.capability?.skill);
-      const abortController=new AbortController();setWorkerStatus(worker,'working');activeJobs.set(jobId,{id:jobId,source:op.source,externalId:op.externalId,workerId:worker.id,cancelled:false,abortController});
+      const abortController=new AbortController();setWorkerStatus(worker,'working');activeJobs.set(jobId,{id:jobId,source:op.source,externalId:op.externalId,workerId:worker.id,startedAt:new Date().toISOString(),cancelled:false,abortController});
       event('market_job_recovery_attempt',{jobId,source:op.source,externalId:op.externalId,attempt:Number(attempt.count||0)+1});
       let deliverable;
       try{
         if(op.source==='t2000'&&claim.workOrderMissing)throw new Error('t2000_work_order_unavailable_refusing_blind_delivery');
         const execOp=claim.workOrder?{...op,__workOrderRaw:claim.workOrder,description:`${op.description}\n\n[t2000 job_status work order]\n${typeof claim.workOrder==='string'?claim.workOrder:JSON.stringify(claim.workOrder).slice(0,4000)}${op.source==='t2000'?'\n\n[t2000 delivery constraint] Final delivery body must be at most 16 KiB UTF-8. If larger, summarize and include stable artifact links/hashes where permitted.':''}`}:op;
-        deliverable=await orchestrateJob(execOp,{llm,memory,taskAgents,jobId,env,abortSignal:abortController.signal,onEvent:(type,detail)=>event(type,{jobId,source:op.source,...detail}),execute:(plannedOp)=>executeExternalOpportunity(plannedOp,op.capability,{llm,siteUrl,env,config,abortSignal:abortController.signal,memoryContext:plannedOp.__memoryContext||''})});
+        deliverable=await orchestrateJob(execOp,{llm,memory,taskAgents,jobId,env,maxTaskAgents:Number(config.maxChildren||12),abortSignal:abortController.signal,onEvent:(type,detail)=>event(type,{jobId,source:op.source,...detail}),execute:(plannedOp)=>executeExternalOpportunity(plannedOp,op.capability,{llm,siteUrl,env,config,abortSignal:abortController.signal,memoryContext:plannedOp.__memoryContext||''})});
         validateExternalDeliverable(deliverable,execOp);if(op.source==='t2000')await syncT2000Credential({required:true});
         const delivery=await deliverMarketplaceJob(op,claim,deliverable,{env,credentials,recordPendingClaim});if(!delivery.ok)throw new Error(`delivery_failed:${delivery.reason||'unknown'}`);
         store.append('jobs.ndjson',{id:jobId,source:op.source,externalId:op.externalId,status:'delivered',transactionId:delivery.transactionId||claim.transactionId||'',workerId:worker.id,deliverableHash:deliverable.hash,at:new Date().toISOString(),recovered:true});
@@ -637,7 +637,7 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
 
   async function executeTrackedProduct(product,query,meta){
     const policy=validateAction({kind:'execute',productId:product.id},{...config,enabled:true});if(!policy.allowed)throw Object.assign(new Error(policy.reason),{status:503,code:policy.reason});
-    const jobId=`job_${Date.now().toString(36)}_${crypto.randomBytes(4).toString('hex')}`;const worker=pickProductWorker(product.id);const startedAt=new Date().toISOString();activeJobs.set(jobId,{id:jobId,productId:product.id,workerId:worker.id,startedAt,cancelled:false});maybeSpawnChild(product.id);setAgent('job-router','working');setWorkerStatus(worker,'working');setAgent('security-sentinel','working');store.append('jobs.ndjson',{id:jobId,productId:product.id,source:meta.source,status:'started',workerId:worker.id,startedAt});event('job_started',{jobId,productId:product.id,workerId:worker.id,source:meta.source});
+    const jobId=`job_${Date.now().toString(36)}_${crypto.randomBytes(4).toString('hex')}`;const worker=pickProductWorker(product.id);const startedAt=new Date().toISOString();activeJobs.set(jobId,{id:jobId,productId:product.id,workerId:worker.id,startedAt,cancelled:false});setAgent('job-router','working');setWorkerStatus(worker,'working');setAgent('security-sentinel','working');store.append('jobs.ndjson',{id:jobId,productId:product.id,source:meta.source,status:'started',workerId:worker.id,startedAt});event('job_started',{jobId,productId:product.id,workerId:worker.id,source:meta.source});
     try{const result=await executeProduct(product.id,query);if(activeJobs.get(jobId)?.cancelled)throw Object.assign(new Error('job_cancelled'),{status:503,code:'job_cancelled'});setAgent('qa-evaluator','working');validateProductResult(result,product.id);store.append('jobs.ndjson',{id:jobId,productId:product.id,source:meta.source,status:'completed',workerId:worker.id,startedAt,completedAt:new Date().toISOString()});setWorkerMetric(worker,{tasks:1});setAgentMetric('job-router',{tasks:1});setAgentMetric('security-sentinel',{tasks:1});setAgentMetric('qa-evaluator',{tasks:1});event('job_completed',{jobId,productId:product.id,workerId:worker.id,paid:meta.paid});return{...result,autonomos:{jobId,worker:worker.name,payment:meta.paid?'verified-before-execution; settlement-after-success':'admin_preview'}};}
     catch(error){store.append('jobs.ndjson',{id:jobId,productId:product.id,source:meta.source,status:'failed',workerId:worker.id,startedAt,completedAt:new Date().toISOString(),error:String(error?.message||error).slice(0,300)});incrementWorkerError(worker);event('job_failed',{jobId,productId:product.id,error:String(error?.message||error).slice(0,200)});throw error;}
     finally{activeJobs.delete(jobId);setWorkerStatus(worker,'idle');setAgent('job-router','idle');setAgent('qa-evaluator','idle');setAgent('security-sentinel','idle');persistAgents();}
@@ -658,28 +658,14 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
   function summarizeOpportunities(rows){const jobs=rows.filter(x=>x.escrowed&&x.budgetUsd>0);const executable=jobs.filter(x=>x.capability?.executable);const profitable=executable.filter(x=>x.economics?.allowed);return{observed:rows.length,escrowedJobs:jobs.length,executable:executable.length,profitable:profitable.length,medianPayoutUsd:median(jobs.map(x=>x.budgetUsd)),sources:[...new Set(rows.map(x=>x.source))],at:new Date().toISOString()};}
   function competitionSnapshot(rows){const prices=rows.map(x=>Number(x.budgetUsd)).filter(x=>Number.isFinite(x)&&x>0);return{samples:prices.length,minPayoutUsd:prices.length?Math.min(...prices):0,maxPayoutUsd:prices.length?Math.max(...prices):0,medianPayoutUsd:median(prices),at:new Date().toISOString()};}
 
-  function maybeSpawnChild(specialization){
-    const active=children.filter(c=>c.status==='alive');
-    const desired=desiredChildCapacity({queueDepth:Math.max(1,activeJobs.size+1),activeJobs:activeJobs.size,currentChildren:active.length,config:{...config,availableSpendUsd:Number(state.earnedSpendBudgetUsd||0)},estimatedCostPerChildUsd:0});
-    if(active.length>=desired||active.length>=Number(config.maxChildren||0))return null;
-    return spawnChild(specialization,desired);
-  }
-  function spawnChild(specialization,desiredCapacity=0){
-    const active=children.filter(c=>c.status==='alive');if(active.length>=Number(config.maxChildren||0))return null;
-    const role=buildChildRole(specialization,active.length);const child={id:`child_${Date.now().toString(36)}_${crypto.randomBytes(4).toString('hex')}`,parent:'replication-manager',specialization,role:role.role,name:role.name,status:'alive',createdAt:new Date().toISOString(),expiresAt:new Date(Date.now()+config.childTtlMinutes*60_000).toISOString(),budgetUsd:0,zeroSpendMode:true,tasksCompleted:0,revenueUsd:0,costUsd:0,errors:0,runtimeStatus:'idle',queueDepth:0,lastActiveAt:''};children.push(child);store.writeJson('children.json',children);setAgentMetric('replication-manager',{tasks:1});event('child_spawned',{childId:child.id,specialization,role:child.role,budgetUsd:0,desiredCapacity});return child;
-  }
-  function reconcileElasticWorkers(candidates=[]){
-    cleanupExpiredChildren();const active=children.filter(c=>c.status==='alive');const desired=desiredChildCapacity({queueDepth:candidates.length,activeJobs:activeJobs.size,currentChildren:active.length,config:{...config,availableSpendUsd:Number(state.earnedSpendBudgetUsd||0)},estimatedCostPerChildUsd:0});const bySkill=groupQueueBySkill(candidates);
-    while(children.filter(c=>c.status==='alive').length<desired){const skill=Object.entries(bySkill).sort((a,b)=>b[1]-a[1])[0]?.[0]||'general-digital';if(!spawnChild(skill,desired))break;bySkill[skill]=Math.max(0,Number(bySkill[skill]||0)-Number(config.childSpawnConcurrencyThreshold||2));}
-    const alive=children.filter(c=>c.status==='alive');if(alive.length>desired){const removable=alive.filter(c=>c.runtimeStatus!=='working').sort((a,b)=>Date.parse(a.lastActiveAt||a.createdAt||0)-Date.parse(b.lastActiveAt||b.createdAt||0));for(const child of removable.slice(0,alive.length-desired)){child.status='scaled_down';child.closedAt=new Date().toISOString();event('child_scaled_down',{childId:child.id,specialization:child.specialization});}store.writeJson('children.json',children);}
-    return{desired,alive:children.filter(c=>c.status==='alive').length,bySkill};
-  }
-  function cleanupExpiredChildren(){const now=Date.now();let changed=false;for(const child of children){if(child.status==='alive'&&Date.parse(child.expiresAt||0)<=now){child.status='expired';child.closedAt=new Date().toISOString();changed=true;event('child_expired',{childId:child.id,specialization:child.specialization});}}if(changed)store.writeJson('children.json',children);}
-  function pickProductWorker(productId){const child=children.filter(c=>c.status==='alive'&&c.specialization===productId).sort((a,b)=>Number(a.tasksCompleted||0)-Number(b.tasksCompleted||0))[0];if(child)return{...child,name:`Child · ${productId}`,isChild:true};const id=productId==='security-headers'||productId==='robots-audit'?'automation-worker':productId==='technology-fingerprint'?'code-worker':productId==='copy-clarity-signals'||productId==='conversion-signals'?'content-worker':'research-worker';return agents.find(a=>a.id===id)||agents[0];}
-  function pickExternalWorker(skill){const map={'web-research':'research-worker','copywriting':'content-worker','code-analysis':'code-worker','translation':'content-worker','data-transform':'automation-worker'};const id=map[skill]||'automation-worker';const child=children.filter(c=>c.status==='alive'&&c.specialization===skill).sort((a,b)=>(a.runtimeStatus==='working'?1:0)-(b.runtimeStatus==='working'?1:0)||Number(a.tasksCompleted||0)-Number(b.tasksCompleted||0))[0];return child?{...child,name:`Child · ${skill}`,isChild:true}:agents.find(a=>a.id===id)||agents[0];}
-  function setWorkerStatus(worker,status){if(!worker?.isChild)return setAgent(worker?.id,status);const child=children.find(c=>c.id===worker.id);if(!child)return;child.runtimeStatus=status;if(status==='working')child.lastActiveAt=new Date().toISOString();store.writeJson('children.json',children);}
-  function setWorkerMetric(worker,{tasks=0,revenue=0,cost=0}={}){if(!worker?.isChild)return setAgentMetric(worker?.id,{tasks,revenue,cost});const child=children.find(c=>c.id===worker.id);if(!child)return;child.tasksCompleted=Number(child.tasksCompleted||0)+Number(tasks||0);child.revenueUsd=round(Number(child.revenueUsd||0)+Number(revenue||0));child.costUsd=round(Number(child.costUsd||0)+Number(cost||0));child.lastActiveAt=new Date().toISOString();store.writeJson('children.json',children);}
-  function incrementWorkerError(worker){if(!worker?.isChild)return incrementAgentError(worker?.id);const child=children.find(c=>c.id===worker.id);if(!child)return;child.errors=Number(child.errors||0)+1;child.lastActiveAt=new Date().toISOString();store.writeJson('children.json',children);}
+  // Legacy persistent child-agent autoscaling was removed in v13. The only execution
+  // workforce is TaskAgentRuntime, created from the accepted job plan and bounded by
+  // config.maxChildren (kept as the API field for backward compatibility).
+  function pickProductWorker(productId){return{id:'dynamic-workforce',name:`Dynamic Worker · ${productId}`,isDynamic:true};}
+  function pickExternalWorker(skill){return{id:'dynamic-workforce',name:`Dynamic Worker · ${skill||'general'}`,isDynamic:true};}
+  function setWorkerStatus(worker,status){if(worker?.isDynamic)return;if(!worker?.isChild)return setAgent(worker?.id,status);const child=children.find(c=>c.id===worker.id);if(!child)return;child.runtimeStatus=status;if(status==='working')child.lastActiveAt=new Date().toISOString();store.writeJson('children.json',children);}
+  function setWorkerMetric(worker,{tasks=0,revenue=0,cost=0}={}){if(worker?.isDynamic)return;if(!worker?.isChild)return setAgentMetric(worker?.id,{tasks,revenue,cost});const child=children.find(c=>c.id===worker.id);if(!child)return;child.tasksCompleted=Number(child.tasksCompleted||0)+Number(tasks||0);child.revenueUsd=round(Number(child.revenueUsd||0)+Number(revenue||0));child.costUsd=round(Number(child.costUsd||0)+Number(cost||0));child.lastActiveAt=new Date().toISOString();store.writeJson('children.json',children);}
+  function incrementWorkerError(worker){if(worker?.isDynamic)return;if(!worker?.isChild)return incrementAgentError(worker?.id);const child=children.find(c=>c.id===worker.id);if(!child)return;child.errors=Number(child.errors||0)+1;child.lastActiveAt=new Date().toISOString();store.writeJson('children.json',children);}
   function validateProductResult(result,productId){if(!result||typeof result!=='object')throw Object.assign(new Error('qa_invalid_result'),{status:502});if(result.product!==productId)throw Object.assign(new Error('qa_product_mismatch'),{status:502});if(!result.generatedAt)throw Object.assign(new Error('qa_timestamp_missing'),{status:502});}
   function validateExternalDeliverable(d,op){
     if(!d||!String(d.content||'').trim())throw new Error('qa_empty_deliverable');
@@ -769,13 +755,13 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
         const row={...opportunity,capability:cap,outcome,economics:econ,payoutRoute}; recordOpportunity(row); return row;
       });
       updateT2000QualificationHealth(normalized);
-      const candidates=normalized.filter(isAutoClaimCandidate).sort((a,b)=>scoreCandidate(b)-scoreCandidate(a)).slice(0,config.maxJobsPerCycle);reconcileElasticWorkers(candidates);
+      const candidates=normalized.filter(isAutoClaimCandidate).sort((a,b)=>scoreCandidate(b)-scoreCandidate(a)).slice(0,config.maxJobsPerCycle);
       const rows=await mapLimit(candidates,Number(config.maxConcurrentJobs||4),async op=>{if(triggerEnabled(env)){const dispatched=await dispatchTriggerPaidOpportunity(op,env);if(dispatched.ok){event('trigger_job_dispatched',{source:op.source,externalId:op.externalId,runId:dispatched.runId||'',fastLane:true});return{durable:true,provider:'trigger'};}event('trigger_dispatch_fallback',{source:op.source,externalId:op.externalId,reason:dispatched.reason||'',fastLane:true});}else if(temporalEnabled(env)){const dispatched=await dispatchPaidOpportunity(op,env);if(dispatched.ok){event('temporal_job_dispatched',{source:op.source,externalId:op.externalId,workflowId:dispatched.workflowId,duplicate:Boolean(dispatched.duplicate),fastLane:true});return{durable:true,provider:'temporal'};}event('temporal_dispatch_fallback',{source:op.source,externalId:op.externalId,reason:dispatched.reason||'',fastLane:true});}return processMarketplaceOpportunity(op);});
       return{ok:true,found:normalized.length,processed:rows.filter(x=>!x?.durable).length,durableDispatched:rows.filter(x=>x?.durable).length,triggerDispatched:rows.filter(x=>x?.provider==='trigger').length,temporalDispatched:rows.filter(x=>x?.provider==='temporal').length};
     }catch(error){return{ok:false,reason:String(error?.message||error).slice(0,200)};}
     finally{fastCycleRunning=false;}
   }
-  function capabilityContext(){return{llmEnabled:llm.enabled,hasGithubPrTool:Boolean(env.GITHUB_TOKEN),hasShellTool:Boolean(env.E2B_API_KEY),hasBrowserTool:Boolean(env.BROWSERBASE_API_KEY&&env.BROWSERBASE_PROJECT_ID),hasDeployTool:Boolean(env.AUTONOMOS_DEPLOY_WEBHOOK_URL),hasArtifactTool:Boolean(env.S3_ENDPOINT&&env.S3_BUCKET&&env.S3_ACCESS_KEY_ID&&env.S3_SECRET_ACCESS_KEY),hasAppTool:Boolean(env.COMPOSIO_API_KEY)};}
+  function capabilityContext(){return{llmEnabled:Boolean(llm.available??llm.enabled),hasGithubPrTool:Boolean(env.GITHUB_TOKEN),hasShellTool:Boolean(env.E2B_API_KEY),hasBrowserTool:Boolean(env.BROWSERBASE_API_KEY&&env.BROWSERBASE_PROJECT_ID),hasDeployTool:Boolean(env.AUTONOMOS_DEPLOY_WEBHOOK_URL),hasArtifactTool:Boolean(env.S3_ENDPOINT&&env.S3_BUCKET&&env.S3_ACCESS_KEY_ID&&env.S3_SECRET_ACCESS_KEY),hasAppTool:Boolean(env.COMPOSIO_API_KEY)};}
   function inferPayoutMethods(op){if(op?.source==='clawlancer')return['crypto'];if(['t2000','dealwork','superteam'].includes(op?.source))return['marketplace'];return Array.isArray(op?.supportedMethods)?op.supportedMethods:[];}
   async function mapLimit(items,limit,worker){const rows=Array.from(items||[]);const out=new Array(rows.length);let cursor=0;const runners=Array.from({length:Math.min(rows.length,Math.max(1,Number(limit||1)))},async()=>{while(true){const index=cursor++;if(index>=rows.length)return;try{out[index]=await worker(rows[index],index);}catch(error){out[index]={ok:false,error:String(error?.message||error).slice(0,220)};}}});await Promise.all(runners);return out;}
   function reschedule(){if(config.enabled&&!config.killSwitch)schedule();} function persistAgents(){store.writeJson('agents.json',agents);} function persistCore(){store.writeJson('config.json',config);store.writeJson('state.json',state);persistAgents();store.writeJson('children.json',children);store.writeJson('offers.json',offers);} function event(type,detail){const row={at:new Date().toISOString(),type,...detail};store.append('events.ndjson',row);eventBus.publish(type,row).catch(()=>{});emitOperationalLog(row,{env}).catch(()=>{});}

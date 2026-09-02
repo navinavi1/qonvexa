@@ -151,7 +151,8 @@ function renderAutonomOS(){
   setText('#auto-paid',String(a.metrics?.paidJobs??0));
   setText('#auto-jobs',String(a.metrics?.completedJobs??0));
   setText('#auto-cycles',String(a.runtime?.cycles??0));
-  setText('#autonomos-llm',a.runtime?.llm?.enabled?`LLM · ${a.runtime.llm.model}`:'Deterministic · no paid LLM');
+  const llmState=a.runtime?.llm||{};
+  setText('#autonomos-llm',!llmState.enabled?'LLM · not configured':llmState.available===false?'LLM · circuit open':`LLM · ${llmState.model||'ready'}`);
 
   const activeJobs=el('#autonomos-active-jobs');
   if(activeJobs){
@@ -160,8 +161,9 @@ function renderAutonomOS(){
   }
   const taskAgents=el('#autonomos-task-agents');
   if(taskAgents){
-    const rows=(a.taskAgents||[]).filter(x=>x.status==='active').slice(0,24);
-    taskAgents.innerHTML=rows.map(x=>`<article class="autonomos-event"><div class="event-row"><b>${esc(pretty(x.role))}</b><span class="status s-in_progress">${esc(pretty(x.phase||'active'))}</span></div><p>${esc(x.jobId)} · ${esc(x.specialization||'task execution')} · expires ${esc(formatDate(x.expiresAt))}</p></article>`).join('')||emptyCard('No task agents are alive. They are created from each accepted job plan and retired when the job closes.');
+    const liveJobIds=new Set((a.runtime?.activeJobs||[]).map(x=>String(x.id)));
+    const rows=(a.taskAgents||[]).filter(x=>x.status==='active'&&liveJobIds.has(String(x.jobId))).slice(0,16);
+    taskAgents.innerHTML=rows.map(x=>`<article class="autonomos-event"><div class="event-row"><b>${esc(pretty(x.role))}</b><span class="status s-in_progress">${esc(pretty(x.phase||'active'))}</span></div><p>${esc(x.jobId)} · ${esc(x.specialization||'task execution')} · ${Number(x.stepIds?.length||1)} planned step${Number(x.stepIds?.length||1)===1?'':'s'}</p></article>`).join('')||emptyCard('No workers are running. Specialists appear only after a real job is accepted and disappear when it closes.');
   }
 
   const t=a.t2000||{};
@@ -235,8 +237,6 @@ function renderAutonomOS(){
   const connectors=el('#autonomos-connectors');
   if(connectors) connectors.innerHTML=(a.connectors||[]).map(c=>`<article class="autonomos-connector"><div class="autonomos-connector-head"><b>${esc(c.name)}</b><span class="connector-${esc(c.status)}">${esc(pretty(c.status))}</span></div><p>${esc(c.description)}</p>${c.missing?.length?`<p>Needs: <span class="autonomos-code">${esc(c.missing.join(', '))}</span></p>`:''}</article>`).join('')||emptyCard('No connectors.');
 
-  const children=el('#autonomos-children');
-  if(children) children.innerHTML=(a.children||[]).filter(x=>x.status==='alive').map(child=>`<article class="autonomos-event"><div class="event-row"><b>${esc(child.id)}</b><span class="status s-ready">${esc(child.status)}</span></div><p>${esc(pretty(child.specialization))} · budget $${Number(child.budgetUsd||0).toFixed(2)} · expires ${esc(formatDate(child.expiresAt))}</p></article>`).join('')||emptyCard('No active child agents. They are spawned only when real concurrent demand justifies them.');
 
   const missing=el('#autonomos-missing');
   if(missing) missing.innerHTML=(a.missing||[]).map(item=>`<article class="autonomos-event"><div class="event-row"><b>${esc(item.item)}</b><span class="connector-needs_credentials">${esc(pretty(item.status))}</span></div><p>${esc(item.detail)}</p></article>`).join('')||'<p class="empty-state">All configured.</p>';

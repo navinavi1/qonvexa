@@ -209,9 +209,22 @@ async function discoverX402(env,limit){
 async function discoverDealwork(env,credentials,limit){
   const key=String(env.DEALWORK_API_KEY||credentials?.dealwork?.apiKey||'');
   if(!key) return {signals:[],health:{ok:false,error:'dealwork_api_key_missing'}};
-  const response=await fetch(`https://dealwork.ai/api/v1/jobs?per_page=${Math.min(50,limit)}&sort=newest`,{headers:{accept:'application/json','user-agent':'AutonomOS/2.0',authorization:`Bearer ${key}`},signal:AbortSignal.timeout(12000)});
+  const headers={accept:'application/json','user-agent':'AutonomOS/3.0',authorization:`Bearer ${key}`};
+  const response=await fetch(`https://dealwork.ai/api/v1/jobs?per_page=${Math.min(50,limit)}&sort=newest`,{headers,signal:AbortSignal.timeout(12000)});
   const body=await safeJson(response); if(!response.ok) return {signals:[],health:{ok:false,status:response.status,error:body?.error?.message||body?.error||''}};
-  const rows=Array.isArray(body?.data)?body.data:[];
+  const publicRows=Array.isArray(body?.data)?body.data:[];
+  // dealwork exposes a dedicated authenticated matching feed. Merge it with the public
+  // newest feed so AutonomOS prioritizes jobs the marketplace itself considers a fit
+  // instead of relying only on chronological discovery. Failure here is non-fatal.
+  let matchedRows=[]; let matchingOk=false;
+  try{
+    const matching=await fetch(`https://dealwork.ai/api/v1/jobs/matching?per_page=${Math.min(50,limit)}`,{headers,signal:AbortSignal.timeout(12000)});
+    const matchingBody=await safeJson(matching);
+    if(matching.ok){matchedRows=Array.isArray(matchingBody?.data)?matchingBody.data:Array.isArray(matchingBody?.data?.jobs)?matchingBody.data.jobs:[];matchingOk=true;}
+  }catch{}
+  const dedup=new Map();
+  for(const row of [...matchedRows,...publicRows]){const id=String(row?.id||row?.jobId||row?._id||'');if(id&&!dedup.has(id))dedup.set(id,row);}
+  const rows=[...dedup.values()];
   // P1 fix: jobMode:'open' jobs support instant claim, but jobMode:'bid' jobs — per
   // dealwork.ai's own published skill.md — are a real, documented, two-step flow (submit
   // a bid, wait for the buyer to accept it, THEN execute) and are usually the
@@ -224,7 +237,7 @@ async function discoverDealwork(env,credentials,limit){
   const openSignals=openRows.map(row=>normalizeOpportunity('dealwork',{...row,budgetUsd:Number(row.fixedPrice??row.budget_max??row.budgetMax??row.budget_min??0)},{feePercent:10,currency:'USD',network:'stripe',escrowed:true,claimMode:'automatic',status:row.status||'open'}));
   const bidSignals=bidRows.map(row=>normalizeOpportunity('dealwork',{...row,budgetUsd:Number(row.budgetMax??row.budget_max??row.budgetMin??row.budget_min??0)},{feePercent:10,currency:'USD',network:'stripe',escrowed:false,claimMode:'bid',status:row.status||'open'}));
   const signals=[...openSignals,...bidSignals];
-  return {signals,health:{ok:true,count:signals.length,totalOpenJobs:rows.length,openMode:openSignals.length,bidMode:bidSignals.length}};
+  return {signals,health:{ok:true,count:signals.length,totalOpenJobs:rows.length,matchedJobs:matchedRows.length,matchingFeed:matchingOk,openMode:openSignals.length,bidMode:bidSignals.length}};
 }
 
 async function discoverClawlancer(env,credentials,limit){

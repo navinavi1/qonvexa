@@ -157,7 +157,7 @@ Before live sales, configure the real legal values, approved live payment creden
 
 ## AutonomOS 1.0 (QONVEXA 12.0)
 
-This build embeds the private AutonomOS owner control plane at `/admin#autonomos` and a background autonomous runtime (a fixed core-role registry plus dynamically scaled, per-job task agents) under the existing QONVEXA server. It includes six x402-v2 machine products, Base/USDC receiver settlement to the configured public owner wallet, persistent market/profit/job state, bounded price optimization, child-worker replication, zero-spend policy enforcement and an emergency-stop latch.
+This build embeds the private AutonomOS owner control plane at `/admin#autonomos` and a background autonomous runtime (a fixed core-role registry plus dynamically scaled, per-job task agents) under the existing QONVEXA server. It includes six x402-v2 machine products, Base/USDC receiver settlement to the configured public owner wallet, persistent market/profit/job state, bounded price optimization, per-job specialist worker spawning, zero-spend policy enforcement and an emergency-stop latch.
 
 See `AUTONOMOS-1.0-REPORT.md` and `AUTONOMOS-DEPLOY.md` for the full architecture and activation notes. Never store a seed phrase/private key in this repository or in QONVEXA environment variables intended for the receive-only seller rail.
 
@@ -167,3 +167,9 @@ AutonomOS 2.0 adds a global marketplace job engine on top of the existing QONVEX
 
 See `AUTONOMOS-2.0-REPORT.md` and `AUTONOMOS-2.0-DEPLOY.md`.
 Trigger.dev production deployment sync.
+
+
+## AutonomOS 3.0
+AutonomOS 3.0 removes the legacy permanent-worker/child-agent organization. The runtime keeps only a small control plane (orchestration, policy, market radar, economics, routing, QA, treasury, security and learning). Research/code/content/automation workers are ephemeral leases created from an accepted job plan, grouped by specialist role, bounded by capacity, and guaranteed to retire on success or failure.
+
+The orchestration path is now plan-once → execute-once → QA → deliver. LangGraph is used when available for inspectable state/checkpointing, but an infrastructure fallback never replays a failed paid execution. The LLM client also retries the known reasoning-model empty-completion pattern with a larger completion budget and opens a short circuit breaker after repeated provider failures so bad model health cannot burn through a queue of paid jobs.

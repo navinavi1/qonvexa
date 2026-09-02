@@ -28,7 +28,7 @@
       <header class="admin-top">
         <div>
           <div class="admin-brand"><span class="brand-mark">Q</span><strong>QONVEXA</strong></div>
-          <p>Owner dashboard · QONVEXA 12.0 · AutonomOS 2.0</p>
+          <p>Owner dashboard · QONVEXA 12.0 · AutonomOS 3.0</p>
         </div>
         <div class="admin-top-actions">
           <span id="admin-user" class="admin-user"></span>
@@ -102,7 +102,7 @@
           <div>
             <small>AUTONOMOUS AI COMPANY</small>
             <h1>AutonomOS</h1>
-            <p>Discover → Evaluate → Build → Sell → Execute → Get Paid → Learn → Replicate.</p>
+            <p>Scout → qualify → claim → plan → spawn specialists → execute → QA → deliver → settle → learn.</p>
           </div>
           <div class="autonomos-controls">
             <span id="autonomos-runtime-badge" class="autonomos-badge">Loading…</span>
@@ -201,7 +201,7 @@
               <label>Reserve, %<input name="reservePercent" type="number" min="0" max="100"></label>
               <label>Growth, %<input name="growthPercent" type="number" min="0" max="100"></label>
               <label>Experiments, %<input name="experimentPercent" type="number" min="0" max="100"></label>
-              <label>Max child agents<input name="maxChildren" type="number" min="0" max="100"></label>
+              <label>Max dynamic workers<input name="maxChildren" type="number" min="1" max="32"></label>
               <label>Jobs per cycle<input name="maxJobsPerCycle" type="number" min="0" max="20"></label>
               <label>Global minimum job payout, $<input name="minJobPayoutUsd" type="number" min="0" max="100000" step="0.01"></label>
               <label>Clawlancer minimum, $<input name="clawlancerMinJobPayoutUsd" type="number" min="0" max="100000" step="1"></label>
@@ -227,14 +227,14 @@
             <label class="autonomos-check"><input name="autoClaimJobs" type="checkbox"> <span>Automatically claim qualified escrow-funded jobs</span></label>
             <label class="autonomos-check"><input name="requireEscrowForAutoClaim" type="checkbox"> <span>Require escrow/pre-funded status for automatic claims</span></label>
             <label class="autonomos-check"><input name="rejectDemoAndTestJobs" type="checkbox"> <span>Reject demo/test/sandbox jobs before automatic claim</span></label>
-            <label class="autonomos-check"><input name="autoReplication" type="checkbox"> <span>Allow bounded automatic child-agent replication</span></label>
+            <label class="autonomos-check"><input name="autoReplication" type="checkbox"> <span>Allow bounded task-scoped worker creation for accepted jobs</span></label>
             <button class="button" type="submit">Save AutonomOS policy</button>
             <p id="autonomos-config-status" class="admin-status" role="status"></p>
           </form>
         </div>
 
         <section class="admin-panel autonomos-panel">
-          <div class="admin-panel-head"><div><small>CORE ROLE REGISTRY</small><h2>Core agents</h2></div><span id="autonomos-llm" class="autonomos-mini-badge"></span></div>
+          <div class="admin-panel-head"><div><small>CONTROL PLANE</small><h2>Permanent roles</h2><p class="settings-note">Only coordination, policy, economics, QA, treasury and safety stay resident. Research/code/content/automation workers are created per accepted job and destroyed afterward.</p></div><span id="autonomos-llm" class="autonomos-mini-badge"></span></div>
           <div id="autonomos-agent-grid" class="autonomos-agent-grid"></div>
         </section>
 
@@ -253,10 +253,6 @@
           <section class="admin-panel autonomos-panel">
             <div class="admin-panel-head"><div><small>SERVICE READINESS</small><h2>Infrastructure</h2></div></div>
             <div id="autonomos-infrastructure" class="autonomos-connector-list"></div>
-          </section>
-          <section class="admin-panel autonomos-panel">
-            <div class="admin-panel-head"><div><small>REPLICATION TREE</small><h2>Child agents</h2></div></div>
-            <div id="autonomos-children" class="autonomos-event-list"></div>
           </section>
           <section class="admin-panel autonomos-panel">
             <div class="admin-panel-head"><div><small>SETUP GAPS</small><h2>What still needs external credentials</h2></div></div>
