@@ -64,7 +64,7 @@ export async function executeExternalOpportunity(opportunity, capability, { llm,
 
   for(let round=0;round<=MAX_TOOL_ROUNDS;round++){
     if(abortSignal?.aborted)throw new Error('job_cancelled_by_emergency_stop');
-    const result=await llm.complete({messages,tools:round<MAX_TOOL_ROUNDS?availableTools:undefined,maxTokens:1600,signal:abortSignal,task:'execution'});
+    const result=await llm.complete({messages,tools:round<MAX_TOOL_ROUNDS?availableTools:undefined,maxTokens:Number(env.AUTONOMOS_EXEC_MAX_TOKENS||3200),signal:abortSignal,task:'execution'});
     if(!result.ok)throw new Error(result.reason||'llm_execution_failed');
     finalModel=result.model||finalModel;
     if(result.usage){usage.prompt_tokens+=Number(result.usage.prompt_tokens||0);usage.completion_tokens+=Number(result.usage.completion_tokens||0);}
