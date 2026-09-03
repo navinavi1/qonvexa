@@ -3,6 +3,47 @@ import { planJob } from './planner.js';
 import { evaluateDeliverable } from './qa-engine.js';
 import { withAgentTrace } from './langfuse-observability.js';
 
+// Which tools each specialist role is scoped to during a real handoff. A research
+// specialist never gets run_python; a build specialist never gets web_search. This is
+// what makes it a genuine handoff rather than one call that happens to have every tool
+// available regardless of which role the plan actually named for that part of the work.
+const SPECIALIST_TOOLS = Object.freeze({
+  'research-worker': ['web_search','web_scrape','browser_task'],
+  'code-worker': ['run_python','run_shell','open_pull_request','store_artifact','coderabbit_review','deploy_webhook'],
+  'automation-worker': ['app_tool_search','app_action','browser_task','store_artifact'],
+  'content-worker': ['store_artifact']
+});
+const HANDOFF_ROLE_ORDER = Object.freeze(['research-worker','code-worker','automation-worker','content-worker']);
+
+// The roles a plan actually names, in a fixed handoff order (research before building,
+// since a build specialist benefits from research findings; the reverse rarely does).
+// 'planner'/'qa-evaluator'/'job-router' are pipeline stages, not execution specialists.
+export function distinctExecutionRoles(plan){
+  const present=new Set((plan?.steps||[]).map(s=>s?.role).filter(Boolean));
+  return HANDOFF_ROLE_ORDER.filter(role=>present.has(role));
+}
+
+// Run each specialist phase in sequence, each scoped to its own tools, each handed the
+// previous specialist's actual output as briefing. Combines every phase's tool-call
+// evidence into one deliverable so QA sees the complete real journey, not just the last
+// phase — and reports the LAST phase's written content as the final answer, since later
+// specialists are expected to build on (not just append to) earlier ones.
+export async function runHandoffChain(roles,opportunity,plan,{execute,taskAgents,jobId,onEvent}){
+  let briefing='';
+  const allToolCalls=[];
+  let last=null;
+  for(const role of roles){
+    taskAgents?.markJobPhase(jobId,`executing:${role}`);
+    onEvent('specialist_handoff',{jobId,role,briefingChars:briefing.length});
+    const toolFilter=SPECIALIST_TOOLS[role]||null;
+    const phaseResult=await execute({...opportunity,__plan:plan},{toolFilter,briefing});
+    allToolCalls.push(...(phaseResult?.evidence?.toolCalls||[]));
+    briefing=`[${role} produced]\n${String(phaseResult?.content||'').slice(0,3000)}`;
+    last=phaseResult;
+  }
+  return {...last,evidence:{...(last?.evidence||{}),toolCalls:allToolCalls,handoffRoles:roles}};
+}
+
 export async function orchestrateJob(opportunity,opts={}){
   const {env=process.env}=opts;
   return withAgentTrace('autonomos-paid-job',{source:opportunity?.source||'',externalId:opportunity?.externalId||'',title:String(opportunity?.title||'').slice(0,200)},()=>orchestrateJobCore(opportunity,opts),{env});
@@ -19,16 +60,17 @@ async function orchestrateJobCore(opportunity,{llm,execute,memory=null,taskAgent
   onEvent('job_planned',{source:plan.source,steps:plan.steps?.length||0});
   const spawned=taskAgents?.spawnForPlan({jobId,opportunity,plan,maxAgents:maxTaskAgents})||[];
   if(spawned.length)onEvent('task_team_ready',{jobId,count:spawned.length,roles:spawned.map(x=>x.role)});
+  const handoffRoles=distinctExecutionRoles(plan);
 
   let ok=false;
   try{
-    const runner=await buildGraphRunner({llm,execute,memoryPack,taskAgents,jobId,env,abortSignal,onEvent}).catch(error=>{
+    const runner=await buildGraphRunner({llm,execute,memoryPack,taskAgents,jobId,env,abortSignal,onEvent,handoffRoles}).catch(error=>{
       onEvent('langgraph_unavailable',{error:String(error?.message||error).slice(0,180)});
       return null;
     });
     const result=runner
       ? await runner(opportunity,plan)
-      : await runSequential(opportunity,plan,{llm,execute,memoryPack,taskAgents,jobId,env,abortSignal,onEvent});
+      : await runSequential(opportunity,plan,{llm,execute,memoryPack,taskAgents,jobId,env,abortSignal,onEvent,handoffRoles});
     ok=true;
     return result;
   }finally{
@@ -38,7 +80,7 @@ async function orchestrateJobCore(opportunity,{llm,execute,memory=null,taskAgent
   }
 }
 
-async function buildGraphRunner({llm,execute,memoryPack,taskAgents,jobId,env,abortSignal,onEvent}){
+async function buildGraphRunner({llm,execute,memoryPack,taskAgents,jobId,env,abortSignal,onEvent,handoffRoles}){
   const {StateGraph,Annotation,START,END}=await import('@langchain/langgraph');
   let checkpointer;
   if(env.DATABASE_URL){
@@ -52,8 +94,9 @@ async function buildGraphRunner({llm,execute,memoryPack,taskAgents,jobId,env,abo
   const graph=new StateGraph(State)
     .addNode('executor',async state=>{
       if(abortSignal?.aborted)throw new Error('job_cancelled_by_emergency_stop');
-      taskAgents?.markJobPhase(jobId,'executing');
-      const deliverable=await execute({...state.opportunity,__plan:state.plan,__memoryContext:memoryPack.context});
+      const deliverable=handoffRoles.length>=2
+        ? await runHandoffChain(handoffRoles,{...state.opportunity,__memoryContext:memoryPack.context},state.plan,{execute,taskAgents,jobId,onEvent})
+        : await execute({...state.opportunity,__plan:state.plan,__memoryContext:memoryPack.context});
       return{deliverable};
     })
     .addNode('qa',async state=>{
@@ -68,15 +111,16 @@ async function buildGraphRunner({llm,execute,memoryPack,taskAgents,jobId,env,abo
   return async(opportunity,plan)=>{
     const threadId=`autonomos-${opportunity.source||'market'}-${opportunity.externalId||crypto.randomUUID()}`;
     const result=await graph.invoke({opportunity,plan},{configurable:{thread_id:threadId}});
-    onEvent('langgraph_completed',{threadId,persistentCheckpointing:Boolean(checkpointer)});
+    onEvent('langgraph_completed',{threadId,persistentCheckpointing:Boolean(checkpointer),handoffRoles});
     return result.deliverable;
   };
 }
 
-async function runSequential(opportunity,plan,{llm,execute,memoryPack,taskAgents,jobId,env,abortSignal,onEvent}){
+async function runSequential(opportunity,plan,{llm,execute,memoryPack,taskAgents,jobId,env,abortSignal,onEvent,handoffRoles}){
   if(abortSignal?.aborted)throw new Error('job_cancelled_by_emergency_stop');
-  taskAgents?.markJobPhase(jobId,'executing');
-  const deliverable=await execute({...opportunity,__plan:plan,__memoryContext:memoryPack.context});
+  const deliverable=handoffRoles.length>=2
+    ? await runHandoffChain(handoffRoles,{...opportunity,__memoryContext:memoryPack.context},plan,{execute,taskAgents,jobId,onEvent})
+    : await execute({...opportunity,__plan:plan,__memoryContext:memoryPack.context});
   taskAgents?.markJobPhase(jobId,'qa');
   const qa=await evaluateDeliverable(opportunity,deliverable,{llm,abortSignal,env});
   onEvent('qa_evaluated',{ok:qa.ok,score:qa.score,mode:qa.mode});
