@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { TaskAgentRuntime, collapseWorkerSteps } from '../src/autonomos/task-agent-runtime.js';
-import { orchestrateJob } from '../src/autonomos/orchestration.js';
+import { orchestrateJob, distinctExecutionRoles, runHandoffChain } from '../src/autonomos/orchestration.js';
 import { createLlmClient } from '../src/autonomos/llm.js';
 import { exceedsJobSpendCeiling } from '../src/autonomos/job-executor.js';
 import { deliverMarketplaceJob } from '../src/autonomos/connectors/index.js';
@@ -153,6 +153,46 @@ await assert.rejects(()=>orchestrateJob({source:'test',externalId:'one',title:'W
 }),/simulated_execution_failure/);
 assert.equal(executeCalls,1,'failed execution must never be replayed by orchestration fallback');
 assert.equal(failingWorkforce.summary().active,0,'failed job must retire all task agents');
+
+// A plan naming only one execution role must NOT trigger a handoff — the common case
+// (most jobs need one specialist) must keep the exact original single-call behavior.
+assert.deepEqual(distinctExecutionRoles({steps:[{role:'planner'},{role:'code-worker'},{role:'qa-evaluator'}]}),['code-worker'],'a single execution role must not be treated as a handoff');
+assert.deepEqual(distinctExecutionRoles({steps:[{role:'code-worker'},{role:'research-worker'}]}),['research-worker','code-worker'],'research must always precede code in the handoff order, regardless of plan order');
+
+// The actual handoff: a real supervisor+handoff run must call execute() once per named
+// specialist, each scoped to ONLY that specialist's own tools (a research specialist
+// must never see run_python; a build specialist must never see web_search), and each
+// later specialist must receive the previous one's real output as briefing — proving
+// this is genuine work handed forward, not just two calls with everything available.
+{
+  const calls=[];
+  const mockExecute=async(op,execOpts={})=>{
+    calls.push({toolFilter:execOpts.toolFilter,briefing:execOpts.briefing});
+    if(calls.length===1)return{content:'Found that the API rate limit is 100 req/min.',evidence:{toolCalls:[{tool:'web_search',ok:true}]}};
+    return{content:'Implemented client respecting the 100 req/min limit.',evidence:{toolCalls:[{tool:'run_python',ok:true}]}};
+  };
+  const result=await runHandoffChain(['research-worker','code-worker'],{title:'test'},{steps:[]},{execute:mockExecute,taskAgents:null,jobId:'job-handoff',onEvent:()=>{}});
+  assert.equal(calls.length,2,'one execute() call per named specialist');
+  assert.deepEqual(calls[0].toolFilter,['web_search','web_scrape','browser_task'],'research specialist must be scoped to research tools only');
+  assert.deepEqual(calls[1].toolFilter,['run_python','run_shell','open_pull_request','store_artifact','coderabbit_review','deploy_webhook'],'build specialist must be scoped to build tools only, never web_search');
+  assert.equal(calls[0].briefing,'','the first specialist has no earlier teammate to build on');
+  assert.match(calls[1].briefing,/100 req\/min/,'the second specialist must receive the first specialist'+String.fromCharCode(39)+'s real output as briefing, not a generic hint');
+  assert.equal(result.content,'Implemented client respecting the 100 req/min limit.','final content is the last specialist'+String.fromCharCode(39)+'s work, built on the handoff');
+  assert.equal(result.evidence.toolCalls.length,2,'QA must see every phase'+String.fromCharCode(39)+'s tool calls combined, not just the last phase'+String.fromCharCode(39)+'s');
+}
+
+// A 3-way handoff (research + code + automation, named out of order in the plan) must
+// still resolve to the correct fixed order and chain correctly through all three.
+{
+  const roles=distinctExecutionRoles({steps:[{role:'automation-worker'},{role:'code-worker'},{role:'research-worker'}]});
+  assert.deepEqual(roles,['research-worker','code-worker','automation-worker'],'a 3-way plan must resolve to the fixed handoff order regardless of how the plan listed them');
+  const calls=[];
+  const mockExecute3=async(op,execOpts={})=>{calls.push(execOpts.toolFilter);return{content:'output '+calls.length,evidence:{toolCalls:[{tool:'x',ok:true}]}};};
+  const result3=await runHandoffChain(roles,{title:'3-way'},{steps:[]},{execute:mockExecute3,taskAgents:null,jobId:'job-3way',onEvent:()=>{}});
+  assert.equal(calls.length,3,'one call per role in a 3-way handoff');
+  assert.ok(calls[2].includes('app_tool_search')&&!calls[2].includes('web_search'),'the automation phase must not inherit the research phase'+String.fromCharCode(39)+'s tools');
+  assert.equal(result3.evidence.toolCalls.length,3,'all three phases'+String.fromCharCode(39)+' tool calls must be combined for QA');
+}
 
 // Reproduce the production symptom: an OpenAI-compatible endpoint returns HTTP 200 but
 // no visible content on the first reasoning completion. The client must retry with a
