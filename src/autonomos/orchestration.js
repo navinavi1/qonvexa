@@ -33,10 +33,11 @@ export async function runHandoffChain(roles,opportunity,plan,{execute,taskAgents
   const allToolCalls=[];
   let last=null;
   for(const role of roles){
-    taskAgents?.markJobPhase(jobId,`executing:${role}`);
+    taskAgents?.markJobPhase(jobId,'executing',{onlyRole:role});
     onEvent('specialist_handoff',{jobId,role,briefingChars:briefing.length});
     const toolFilter=SPECIALIST_TOOLS[role]||null;
     const phaseResult=await execute({...opportunity,__plan:plan},{toolFilter,briefing});
+    taskAgents?.markJobPhase(jobId,'done',{onlyRole:role});
     allToolCalls.push(...(phaseResult?.evidence?.toolCalls||[]));
     briefing=`[${role} produced]\n${String(phaseResult?.content||'').slice(0,3000)}`;
     last=phaseResult;
