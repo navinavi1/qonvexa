@@ -9,6 +9,19 @@ const VERIFY_TOOLS_BY_SKILL = Object.freeze({
   'data-transform': new Set(['run_python','run_shell'])
 });
 
+// Tools whose failures are safe to retry once, same args, no LLM round-trip. Nothing
+// external is committed by a FAILED call to any of these — a rate limit, a cold sandbox,
+// or a flaky network blip just errors out with no side effect left behind, so a same-args
+// retry can't duplicate anything. Before this, any single failed call anywhere in the job
+// permanently marked the whole deliverable qa_failed:failed_tool_call (see qa-engine.js),
+// with no second chance, even if the rest of the job was done correctly.
+// Deliberately EXCLUDED: browser_task, app_action, deploy_webhook, open_pull_request — a
+// call that reports failure on these can still have taken effect externally (a form
+// submitted, a deploy triggered, a PR opened) before erroring on our side, so an automatic
+// retry could duplicate a real-world action. Those still fail immediately, once, no retry.
+const TOOL_RETRY_SAFE = new Set(['web_search','web_scrape','run_python','run_shell','app_tool_search','store_artifact','coderabbit_review']);
+const TOOL_RETRY_DELAY_MS = 600;
+
 // A ceiling of 0/unknown means "no declared budget to derive a ceiling from" — treated as
 // no ceiling, not as "spend nothing", since a $0 budget already gets rejected upstream by
 // the economics gate before a job is ever claimed.
@@ -98,8 +111,15 @@ export async function executeExternalOpportunity(opportunity, capability, { llm,
       for(const call of result.toolCalls.slice(0,4)){
         let args={};try{args=JSON.parse(call.function?.arguments||'{}');}catch{}
         const toolName=String(call.function?.name||'');
-        const toolResult=await runTool(toolName,args,env,{config,validateAction,signal:abortSignal});
+        let toolResult=await runTool(toolName,args,env,{config,validateAction,signal:abortSignal});
         toolCostUsd+=Number(toolResult.costUsd||0);
+        if(!toolResult.ok && TOOL_RETRY_SAFE.has(toolName) && !abortSignal?.aborted){
+          await new Promise(resolve=>setTimeout(resolve,TOOL_RETRY_DELAY_MS));
+          const retryResult=await runTool(toolName,args,env,{config,validateAction,signal:abortSignal});
+          toolCostUsd+=Number(retryResult.costUsd||0);
+          if(retryResult.ok)toolResult=retryResult;
+          else toolResult={...toolResult,error:`${toolResult.error||toolResult.reason||''} (retry also failed: ${retryResult.error||retryResult.reason||''})`.trim()};
+        }
         toolLog.push({tool:toolName,args:summarizeToolArgs(toolName,args),ok:Boolean(toolResult.ok),error:toolResult.ok?'':String(toolResult.error||toolResult.reason||'').slice(0,180),artifacts:summarizeArtifacts(toolResult)});
         messages.push({role:'tool',tool_call_id:call.id,content:JSON.stringify(stripToolSecrets(toolResult)).slice(0,10000)});
         if(exceedsJobSpendCeiling(toolCostUsd,jobSpendCeilingUsd))throw new Error(`job_spend_ceiling_exceeded:${toolCostUsd.toFixed(4)}_over_${jobSpendCeilingUsd.toFixed(4)}`);
