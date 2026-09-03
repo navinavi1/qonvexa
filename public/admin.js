@@ -191,7 +191,27 @@ function renderAutonomOS(){
   const radar=el('#autonomos-market-radar');
   if(radar){ const m=a.runtime?.marketSummary||{}; const health=a.runtime?.connectorHealth||{}; radar.innerHTML=`<article class="autonomos-event"><div class="event-row"><b>Latest cycle</b><span class="status s-ready">${Number(m.observed||0)} seen</span></div><p>${Number(m.escrowedJobs||0)} escrowed · ${Number(m.executable||0)} executable · ${Number(m.profitable||0)} profitable · median ${usd(m.medianPayoutUsd||0)}</p></article>`+Object.entries(health).map(([name,h])=>`<article class="autonomos-event"><div class="event-row"><b>${esc(pretty(name))}</b><span class="connector-${h?.ok?'ready':'needs_credentials'}">${h?.ok?'Healthy':'Unavailable'}</span></div><p>${esc(h?.count!==undefined?`${h.count} signals`:h?.error||h?.status||'')}</p></article>`).join(''); }
   const marketJobs=el('#autonomos-market-jobs');
-  if(marketJobs){ marketJobs.innerHTML=(a.jobs||[]).filter(j=>j.source&&j.source!=='x402'&&j.source!=='admin_preview').slice(0,12).map(j=>`<article class="autonomos-event"><div class="event-row"><b>${esc(j.title||j.externalId||j.id)}</b><span class="status ${String(j.status||'').includes('fail')?'s-error':'s-ready'}">${esc(pretty(j.status||'unknown'))}</span></div><p>${esc(pretty(j.source))} · ${j.budgetUsd!==undefined?usd(j.budgetUsd):''} ${esc(j.currency||'')}${j.reason?` · <span class="job-fail-reason">${esc(j.reason)}</span>`:''}${j.error?` · <span class="job-fail-reason">${esc(j.error)}</span>`:''}</p></article>`).join('')||emptyCard('No marketplace jobs claimed yet. Discovery can be active while claims remain zero.'); }
+  if(marketJobs){
+    const raw=(a.jobs||[]).filter(j=>j.source&&j.source!=='x402'&&j.source!=='admin_preview');
+    // raw is newest-first. One real job can have many rows (claiming, execution_failed,
+    // retried, qa_failed...) — showing raw rows let a handful of repeatedly-retried jobs
+    // (e.g. 3 megaprojects retried every cycle) flood all 12 visible slots and crowd out
+    // every other job's price/status. Keep one row per unique job: its latest status, plus
+    // how long it's been running (first-seen -> latest/now).
+    const latestByKey=new Map(); const firstSeenByKey=new Map();
+    for(const j of raw){
+      const key=String(j.id||`${j.source}:${j.externalId}`);
+      if(!latestByKey.has(key))latestByKey.set(key,j); // newest-first -> first hit is latest
+      firstSeenByKey.set(key,j); // last hit (iterating newest->oldest) ends up oldest
+    }
+    const deduped=[...latestByKey.entries()].slice(0,12).map(([key,j])=>{
+      const startedAt=Date.parse(firstSeenByKey.get(key)?.at||firstSeenByKey.get(key)?.startedAt||j.at||j.startedAt||0);
+      const endedAt=/delivered|settled|paid|failed|rejected|expired|cancelled|manual_attention/i.test(String(j.status||''))?Date.parse(j.at||j.startedAt||0):Date.now();
+      const durationMs=startedAt&&endedAt?Math.max(0,endedAt-startedAt):0;
+      return {j,durationLabel:durationMs?formatDuration(durationMs):''};
+    });
+    marketJobs.innerHTML=deduped.map(({j,durationLabel})=>`<article class="autonomos-event"><div class="event-row"><b>${esc(j.title||j.externalId||j.id)}</b><span class="status ${String(j.status||'').includes('fail')?'s-error':'s-ready'}">${esc(pretty(j.status||'unknown'))}</span></div><p>${esc(pretty(j.source))} · ${j.budgetUsd!==undefined?usd(j.budgetUsd):''} ${esc(j.currency||'')}${durationLabel?` · <span class="job-duration">${durationLabel}</span>`:''}${j.reason?` · <span class="job-fail-reason">${esc(j.reason)}</span>`:''}${j.error?` · <span class="job-fail-reason">${esc(j.error)}</span>`:''}</p></article>`).join('')||emptyCard('No marketplace jobs claimed yet. Discovery can be active while claims remain zero.');
+  }
 
   const candidacy=el('#autonomos-candidacy');
   if(candidacy){
@@ -345,6 +365,7 @@ function pretty(v=''){return String(v).replaceAll('_',' ').replace(/\b\w/g,c=>c.
 function esc(v=''){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 function link(url=''){return /^https?:\/\//i.test(String(url))?`<a href="${esc(url)}" target="_blank" rel="noopener noreferrer">${esc(url)}</a>`:esc(url)}
 function formatDate(v){if(!v)return'';const d=new Date(v);return Number.isNaN(d.getTime())?v:d.toLocaleString()}
+function formatDuration(ms){const m=Math.floor(ms/60000);if(m<1)return'<1m';const d=Math.floor(m/1440),h=Math.floor((m%1440)/60),mm=m%60;const parts=[];if(d)parts.push(`${d}d`);if(h)parts.push(`${h}h`);if(!d&&mm)parts.push(`${mm}m`);return parts.join(' ')||'<1m'}
 function formatMoney(amount,currency='usd'){if(typeof amount!=='number')return'';try{return new Intl.NumberFormat('en-US',{style:'currency',currency:String(currency||'usd').toUpperCase()}).format(amount/100)}catch{return`${amount/100} ${currency}`}}
 function emptyRow(cols,text){return `<tr class="empty-row"><td colspan="${cols}">${esc(text)}</td></tr>`}
 
