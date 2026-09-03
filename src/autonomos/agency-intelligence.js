@@ -8,25 +8,33 @@ import crypto from 'node:crypto';
  * from outcomes, protect unit economics and explain every routing decision.
  */
 
+// This vocabulary matches the literal status strings runtime.js writes to jobs.ndjson —
+// not an idealized model. Two independent lifecycles exist: the marketplace job pipeline
+// (bidding/claiming/claimed/delivered/execution_failed/manual_attention) and the simpler
+// x402 machine-product pipeline (started/completed/failed). 'delivered' can still move to
+// 'settled' or 'failed' later because on no-escrow marketplaces (Superteam Earn) delivery
+// is a submission a human still has to judge, days later, as a separate event.
 export const JOB_STATES = Object.freeze([
-  'discovered','qualified','selected','claiming','claimed','executing','qa',
-  'delivering','delivered','settled','failed','cancelled','needs_human'
+  'bidding','bid_failed','bid_submitted',
+  'claiming','claim_failed','claimed',
+  'delivered','execution_failed','manual_attention',
+  'started','completed','failed','settled'
 ]);
 
 const TRANSITIONS = Object.freeze({
-  discovered:['qualified','failed','cancelled'],
-  qualified:['selected','failed','cancelled'],
-  selected:['claiming','needs_human','failed','cancelled'],
-  claiming:['claimed','failed','cancelled','needs_human'],
-  claimed:['executing','failed','cancelled','needs_human'],
-  executing:['qa','failed','cancelled','needs_human'],
-  qa:['delivering','failed','needs_human'],
-  delivering:['delivered','failed','needs_human'],
+  bidding:['bid_failed','bid_submitted'],
+  bid_failed:[],
+  bid_submitted:['claimed'], // an accepted dealwork bid re-enters the normal claim pipeline
+  claiming:['claim_failed','claimed'],
+  claim_failed:[],
+  claimed:['delivered','execution_failed'],
+  execution_failed:['delivered','execution_failed','manual_attention'],
+  manual_attention:['delivered','execution_failed'], // Reset auto-claim history re-opens retries
   delivered:['settled','failed'],
   settled:[],
-  failed:['selected','needs_human'],
-  cancelled:[],
-  needs_human:['selected','cancelled','failed'],
+  started:['completed','failed'],
+  completed:[],
+  failed:[],
 });
 
 export function canTransition(from,to){
@@ -70,6 +78,11 @@ export function createJobIdentity(opportunity={}){
 export function scoreOpportunity(op={},learning={},now=Date.now()){
   const budget=positive(op.budgetUsd);
   const probability=clamp(op.outcome?.probability,.005,.995,.05);
+  // op.economics.expectedProfitUsd comes from profit-engine.evaluateOpportunity, which
+  // already multiplies revenue by successProbability and already subtracts marketplace
+  // fee + model cost from the total. Re-applying probability/fee/modelCost here was
+  // double-counting both — systematically punishing riskier-but-profitable jobs twice
+  // and understating margin twice.
   const expectedProfit=positive(op.economics?.expectedProfitUsd);
   const modelCost=positive(op.capability?.estimatedModelCostUsd);
   const fee=budget*positive(op.feePercent)/100;
@@ -89,8 +102,8 @@ export function scoreOpportunity(op={},learning={},now=Date.now()){
   const deadlineRisk=deadlineFactor(op.deadline,now);
   const escrow=op.escrowed?1:.9;
   const capability=op.capability?.executable?1:.05;
-  const value=expectedProfit*Math.max(probability,.01);
-  const margin=budget>0?Math.max(0,(expectedProfit-fee-modelCost)/budget):0;
+  const value=expectedProfit;
+  const margin=budget>0?Math.max(0,expectedProfit/budget):0;
 
   // 0..100 routing score. Hard policy/economics gates still live elsewhere.
   const raw =
@@ -131,6 +144,11 @@ export function buildLearningSnapshot(jobs=[],opportunities=[]){
   for(const row of terminal){
     const source=String(row.source||'unknown');
     const skill=String(row.skill||row.capability?.skill||'general-digital');
+    // 'delivered' means submitted, not accepted/paid — on no-escrow marketplaces
+    // (Superteam Earn) a human still has to judge and claim it, sometimes days later.
+    // Counting it as a learning "success" would teach the ranking to favor sources
+    // that merely accept submissions over sources that actually pay out.
+    if(isPending(row.status)){outcomes[String(row.status||'unknown')]=(outcomes[String(row.status||'unknown')]||0)+1;continue;}
     const success=isSuccess(row.status);
     addStat(sources,source,row,success);
     addStat(skills,skill,row,success);
@@ -181,7 +199,7 @@ function latestTerminalJobs(rows){
     if(!row?.externalId)continue;
     const key=`${row.source||'unknown'}:${row.externalId}`;
     const status=String(row.status||'').toLowerCase();
-    if(!/(settled|delivered|failed|rejected|expired|cancelled)/.test(status))continue;
+    if(!/(settled|delivered|failed|rejected|expired|cancelled|paid|completed)/.test(status))continue;
     const old=latest.get(key);
     if(!old||String(row.at||row.timestamp||'')>String(old.at||old.timestamp||''))latest.set(key,row);
   }
@@ -203,7 +221,8 @@ function finalizeStats(bucket){
     netProfitUsd:round(v.grossRevenueUsd-v.costUsd)
   }]));
 }
-function isSuccess(status){return /settled|delivered|completed|paid/i.test(String(status||''));}
+function isSuccess(status){return /settled|completed|paid/i.test(String(status||''));}
+function isPending(status){return /^delivered$/i.test(String(status||'').trim());}
 function deadlineFactor(value,now){
   if(!value)return .85;
   const t=Date.parse(String(value));

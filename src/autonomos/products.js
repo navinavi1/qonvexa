@@ -96,7 +96,7 @@ async function siteSnapshot(url) {
     || firstMatch(html, /<link[^>]+href=["']([^"']+)["'][^>]+rel=["']canonical["']/i);
   const ctaTerms = ['book','schedule','contact','buy','start','get started','request','quote','call','order','demo','audit'];
   const normalizedText = stripTags(html).toLowerCase();
-  const ctaHits = ctaTerms.filter(term => normalizedText.includes(term));
+  const ctaHits = ctaTerms.filter(term => containsWord(normalizedText, term));
 
   return {
     product:'site-snapshot',
@@ -244,9 +244,9 @@ async function copyClaritySignals(url) {
   const avgWordsPerSentence = sentences.length ? words.length / sentences.length : words.length;
   const actionTerms = ['book','schedule','contact','start','buy','order','request','quote','call','demo','try','audit','get started'];
   const lower = text.toLowerCase();
-  const actionHits = actionTerms.filter(term=>lower.includes(term));
+  const actionHits = actionTerms.filter(term=>containsWord(lower,term));
   const first120 = words.slice(0,120).join(' ').toLowerCase();
-  const earlyAction = actionTerms.some(term=>first120.includes(term));
+  const earlyAction = actionTerms.some(term=>containsWord(first120,term));
   const score = Math.max(0, Math.min(100,
     (words.length >= 80 ? 20 : 10) +
     (avgWordsPerSentence > 0 && avgWordsPerSentence <= 24 ? 25 : 10) +
@@ -329,6 +329,13 @@ function matches(text, regex) { return [...String(text || '').matchAll(regex)].m
 function count(text, regex) { return matches(text, regex).length; }
 function stripTags(value) { return String(value || '').replace(/<script[\s\S]*?<\/script>/gi,' ').replace(/<style[\s\S]*?<\/style>/gi,' ').replace(/<[^>]+>/g,' ').replace(/&nbsp;/gi,' ').replace(/&amp;/gi,'&').replace(/\s+/g,' ').trim(); }
 function cleanText(value, max) { return stripTags(value).slice(0,max); }
+// Naive substring matching let single-word CTA terms match inside unrelated words —
+// 'order' inside 'disorder'/'coordinate', 'call' inside 'recall'/'callback' — inflating
+// the detected action-language score on ordinary pages that never use a call-to-action.
+function containsWord(hay, phrase) {
+  const escaped = String(phrase).replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+  return new RegExp(`\\b${escaped}\\b`,'i').test(hay);
+}
 
 export class ProductError extends Error {
   constructor(message, status = 400) { super(message); this.status = status; this.code = message; }

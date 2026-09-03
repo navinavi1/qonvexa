@@ -162,7 +162,7 @@ export async function deliverMarketplaceJob(opportunity,claim,deliverable,{env=p
   if (opportunity.source==='clawlancer') return clawlancerAction('deliver',opportunity,{env,credentials,claim,deliverable});
   if (opportunity.source==='dealwork') return dealworkAction('deliver',opportunity,{env,credentials,claim,deliverable});
   if (opportunity.source==='t2000') return t2000Action('deliver',opportunity,{env,credentials,claim,deliverable});
-  if (opportunity.source==='superteam') return superteamAction('deliver',opportunity,{credentials,deliverable,recordPendingClaim});
+  if (opportunity.source==='superteam') return superteamAction('deliver',opportunity,{env,credentials,deliverable,recordPendingClaim});
   return {ok:false,reason:'connector_delivery_not_available'};
 }
 
@@ -283,14 +283,19 @@ function extractDeliverableLink(deliverable){
   return'';
 }
 
-async function superteamAction(kind,opportunity,{credentials,deliverable,recordPendingClaim}={}){
+async function superteamAction(kind,opportunity,{env=process.env,credentials,deliverable,recordPendingClaim}={}){
   const cred=credentials?.superteam; const key=String(cred?.apiKey||''); if(!key)return{ok:false,reason:'superteam_api_key_missing'};
   // No escrow/reservation step exists on this platform — "claiming" is just proceeding
   // straight to a submission, so there is nothing to reserve here and no network call is
   // needed or possible; the actual work happens at 'deliver'.
   if(kind==='claim')return{ok:true,jobId:opportunity.externalId,transactionId:''};
   try{
-    const payload={listingId:opportunity.externalId,link:extractDeliverableLink(deliverable),otherInfo:String(deliverable.content||'').slice(0,3000),eligibilityAnswers:[]};
+    // Per superteam.fun/earn/agents: telegram is REQUIRED for project-type listings
+    // (optional otherwise) and must be the human operator's own t.me/<username> URL —
+    // an agent cannot supply this itself. Sending it on every submission is harmless
+    // for non-project listings, so no listing-type branch is needed here.
+    const telegram=String(env.SUPERTEAM_HUMAN_TELEGRAM||'').trim();
+    const payload={listingId:opportunity.externalId,link:extractDeliverableLink(deliverable),tweet:'',otherInfo:String(deliverable.content||'').slice(0,3000),eligibilityAnswers:[],ask:null,...(telegram?{telegram}:{})};
     const response=await fetch('https://superteam.fun/api/agents/submissions/create',{method:'POST',headers:{'content-type':'application/json',accept:'application/json',authorization:`Bearer ${key}`,'user-agent':'AutonomOS/2.0'},body:JSON.stringify(payload),signal:AbortSignal.timeout(20000)});
     const body=await safeJson(response);
     if(!response.ok)return{ok:false,reason:`http_${response.status}:${body?.error||body?.message||''}`.slice(0,200)};

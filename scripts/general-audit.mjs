@@ -60,6 +60,17 @@ check('Admin exposes demo/test safety toggle',/name="rejectDemoAndTestJobs"/.tes
 check('Admin submits demo/test safety toggle',/rejectDemoAndTestJobs:f\.elements\.rejectDemoAndTestJobs\.checked/.test(js));
 check('Admin copy reflects $25 general floors',/global floor \$25/.test(html));
 
+// public/ is served statically to the whole internet (express.static in server.js).
+// A stale copy of the project root — old server.js, package.json, render.yaml, Procfile,
+// a whole duplicate scripts/ dir, and historical internal .md reports — was once found
+// sitting inside public/, publicly downloadable at e.g. qonvexa.co/server.js. It held no
+// live secrets, but exposed the full old backend source and infra config to any visitor.
+// This check exists so that regression can never again go unnoticed.
+const forbiddenInPublic=['server.js','package.json','render.yaml','Procfile','scripts'];
+for(const name of forbiddenInPublic)check(`public/${name} does not exist (would be served to the internet)`,!fs.existsSync(path.join(root,'public',name)));
+const publicMdReports=fs.readdirSync(path.join(root,'public')).filter(f=>/\.md$/i.test(f)&&f.toLowerCase()!=='license.md');
+check('No stray internal .md reports inside public/',publicMdReports.length===0,publicMdReports.join(', '));
+
 const failed=checks.filter(x=>!x.ok);
 for(const c of checks)console.log(`${c.ok?'PASS':'FAIL'} ${c.name}${c.detail?` — ${c.detail}`:''}`);
 console.log(`\nGENERAL AUDIT: ${checks.length-failed.length}/${checks.length} passed`);

@@ -1,11 +1,11 @@
 export class McpHttpClient {
-  constructor({ url, token='', timeoutMs=15000, clientName='AutonomOS', clientVersion='2.0.0' }={}) {
+  constructor({ url, token='', timeoutMs=15000, clientName='AutonomOS', clientVersion='2.0.0', protocolVersion='2025-06-18' }={}) {
     this.url=String(url||''); this.token=String(token||''); this.timeoutMs=timeoutMs;
-    this.clientName=clientName; this.clientVersion=clientVersion; this.sessionId=''; this.nextId=1;
+    this.clientName=clientName; this.clientVersion=clientVersion; this.protocolVersion=protocolVersion; this.sessionId=''; this.nextId=1;
   }
   async initialize(){
     if(!/^https?:\/\//.test(this.url)) throw new Error('invalid_mcp_url');
-    const result=await this.rpc('initialize',{protocolVersion:'2025-06-18',capabilities:{},clientInfo:{name:this.clientName,version:this.clientVersion}},{captureSession:true});
+    const result=await this.rpc('initialize',{protocolVersion:this.protocolVersion,capabilities:{},clientInfo:{name:this.clientName,version:this.clientVersion}},{captureSession:true});
     try{await this.notify('notifications/initialized',{})}catch{}
     return result;
   }
@@ -24,7 +24,7 @@ export class McpHttpClient {
     const response=await fetch(this.url,{method:'POST',headers:this.headers(),body:JSON.stringify({jsonrpc:'2.0',method,params}),signal:AbortSignal.timeout(this.timeoutMs)});
     if(!response.ok&&response.status!==202&&response.status!==204)throw new Error(`mcp_notify_${response.status}`);
   }
-  headers(){return{'content-type':'application/json','accept':'application/json, text/event-stream','user-agent':`${this.clientName}/${this.clientVersion}`,...(this.token?{authorization:`Bearer ${this.token}`}:{}) ,...(this.sessionId?{'mcp-session-id':this.sessionId}:{})};}
+  headers(){return{'content-type':'application/json','accept':'application/json, text/event-stream','user-agent':`${this.clientName}/${this.clientVersion}`,'mcp-protocol-version':this.protocolVersion,...(this.token?{authorization:`Bearer ${this.token}`}:{}) ,...(this.sessionId?{'mcp-session-id':this.sessionId}:{})};}
 }
 
 async function readRpcBody(response){

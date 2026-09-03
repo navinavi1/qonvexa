@@ -71,7 +71,12 @@ export class ArtifactStore {
     try {
       const { GetObjectCommand } = await import('@aws-sdk/client-s3');
       const { getSignedUrl } = await import('@aws-sdk/s3-request-presigner');
-      const expiresIn = Math.max(60, Math.min(7 * 86400, Number(this.env.AUTONOMOS_ARTIFACT_URL_TTL_SECONDS || 86400)));
+      // Default raised from 24h to the AWS-imposed 7-day ceiling for presigned URLs (a
+      // hard SigV4 protocol limit, not something this code can extend further) — some
+      // marketplaces (Superteam Earn) can take days-to-weeks to review a submission, and
+      // a 24-hour link would already be dead long before anyone looks at it. For a link
+      // that never expires, set S3_PUBLIC_BASE_URL instead (preferred above, when set).
+      const expiresIn = Math.max(60, Math.min(7 * 86400, Number(this.env.AUTONOMOS_ARTIFACT_URL_TTL_SECONDS || 7 * 86400)));
       const url = await getSignedUrl(this.client, new GetObjectCommand({ Bucket:this.bucket, Key:cleanKey }), { expiresIn });
       return { ok:true, url, public:false, expiresInSeconds:expiresIn };
     } catch (error) {

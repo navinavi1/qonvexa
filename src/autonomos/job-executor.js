@@ -9,16 +9,30 @@ const VERIFY_TOOLS_BY_SKILL = Object.freeze({
   'data-transform': new Set(['run_python','run_shell'])
 });
 
+// A ceiling of 0/unknown means "no declared budget to derive a ceiling from" — treated as
+// no ceiling, not as "spend nothing", since a $0 budget already gets rejected upstream by
+// the economics gate before a job is ever claimed.
+export function exceedsJobSpendCeiling(toolCostUsd,ceilingUsd){
+  return Number(ceilingUsd)>0 && Number(toolCostUsd)>Number(ceilingUsd);
+}
+
 export async function executeExternalOpportunity(opportunity, capability, { llm, siteUrl='', env=process.env, config=null, abortSignal=null, memoryContext='' } = {}) {
   if (capability.mode === 'deterministic') return deterministicExecute(opportunity);
   if (!llm?.enabled) throw new Error('llm_required_for_job');
 
   const spendAuthorized = Boolean(config) && validateAction({ kind:'spend', amountUsd:0.0001 }, config).allowed;
+  // The economics gate (explainCandidacy in runtime.js) already computes this same ceiling
+  // to decide whether a job is even worth claiming — but until now nothing enforced it
+  // during execution itself. A job could pass that check on its estimate, then actually
+  // spend far more across several tool-call rounds with no per-job stop, bounded only by
+  // the flat, job-agnostic maxPaidProcurementUsd-per-call limit.
+  const jobSpendCeilingUsd = Number(opportunity?.budgetUsd || 0) * (Number(config?.maxApiCostPercentOfPayout ?? 25) / 100);
   const schema = name => TOOL_SCHEMAS.find(t => t.function.name === name);
   const availableTools = [];
   const add = name => { const item=schema(name); if(item&&!availableTools.some(x=>x.function.name===name))availableTools.push(item); };
 
-  if (spendAuthorized && env.FIRECRAWL_API_KEY) { add('web_search'); add('web_scrape'); }
+  if (spendAuthorized && (env.FIRECRAWL_API_KEY || env.TAVILY_API_KEY)) add('web_search');
+  if (spendAuthorized && env.FIRECRAWL_API_KEY) add('web_scrape');
   if (spendAuthorized && env.E2B_API_KEY) { add('run_python'); add('run_shell'); }
   if (spendAuthorized && env.BROWSERBASE_API_KEY && env.BROWSERBASE_PROJECT_ID) add('browser_task');
   if (spendAuthorized && env.COMPOSIO_API_KEY) { add('app_tool_search'); add('app_action'); }
@@ -77,6 +91,7 @@ export async function executeExternalOpportunity(opportunity, capability, { llm,
         toolCostUsd+=Number(toolResult.costUsd||0);
         toolLog.push({tool:toolName,args:summarizeToolArgs(toolName,args),ok:Boolean(toolResult.ok),error:toolResult.ok?'':String(toolResult.error||toolResult.reason||'').slice(0,180),artifacts:summarizeArtifacts(toolResult)});
         messages.push({role:'tool',tool_call_id:call.id,content:JSON.stringify(stripToolSecrets(toolResult)).slice(0,10000)});
+        if(exceedsJobSpendCeiling(toolCostUsd,jobSpendCeilingUsd))throw new Error(`job_spend_ceiling_exceeded:${toolCostUsd.toFixed(4)}_over_${jobSpendCeilingUsd.toFixed(4)}`);
       }
       continue;
     }

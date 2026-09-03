@@ -63,14 +63,19 @@ function historicalSourceRate(source, rows=[]) {
     if (!key) continue;
     latest.set(key, row);
   }
-  let successes=0, failures=0;
+  let successes=0, failures=0, pending=0;
   for (const row of latest.values()) {
     const status=String(row.status||'').toLowerCase();
-    if (/paid|settled|delivered|completed/.test(status)) successes++;
+    // 'delivered' alone is a submission, not a confirmed outcome — on no-escrow
+    // marketplaces (Superteam Earn) a human still has to judge and claim it, sometimes
+    // days later. Counting it as a success here would inflate the estimated win
+    // probability for a source whose submissions might mostly get rejected.
+    if (/paid|settled|completed/.test(status)) successes++;
     else if (/failed|rejected|expired|cancelled/.test(status)) failures++;
+    else if (status==='delivered') pending++;
   }
   const samples=successes+failures;
-  return {samples,successes,failures,observedRate:samples?round6(successes/samples):null};
+  return {samples,successes,failures,pending,observedRate:samples?round6(successes/samples):null};
 }
 
 function clamp(v,min,max){return Math.min(max,Math.max(min,Number(v)||0));}

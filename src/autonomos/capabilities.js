@@ -1,19 +1,28 @@
 const RULES = [
+  { skill:'translation', categories:['translation'], words:['translate','translation'] },
   { skill:'code-analysis', categories:['coding','code','development','software'], words:['code','bug','javascript','typescript','node','python','api','script','review','test','build','repository','github'] },
   { skill:'data-transform', categories:['data','spreadsheet'], words:['csv','json','normalize','extract','transform','parse','structured','excel','xlsx','spreadsheet','dataset'] },
   { skill:'document-generation', categories:['document','presentation','report'], words:['pdf','docx','pptx','presentation','slide deck','document','deliverable file','downloadable file'] },
   { skill:'app-automation', categories:['automation','operations','crm'], words:['gmail','google sheets','google drive','notion','slack','calendar','crm','hubspot','airtable','linear','jira','connected app','workflow'] },
   { skill:'browser-ops', categories:['browser','qa','testing'], words:['browser automation','navigate','dashboard','fill form','screenshot','web app testing','click through'] },
   { skill:'web-research', categories:['research','analysis'], words:['research','analyze','analysis','compare','website','web','public','headers','endpoint','market','report','sources'] },
-  { skill:'copywriting', categories:['writing','content','marketing'], words:['write','rewrite','copy','summary','summarize','description','intro','landing','headline','content'] },
-  { skill:'translation', categories:['translation'], words:['translate','translation'] }
+  { skill:'copywriting', categories:['writing','content','marketing'], words:['write','rewrite','copy','summary','summarize','description','intro','landing','headline','content'] }
 ];
+
+// Naive substring matching (hay.includes(word)) caused real false positives — e.g. the
+// keyword 'test' matches inside 'latest', silently misclassifying a research/writing task
+// that merely mentions "the latest developments" as code-analysis work. Word-boundary
+// matching only counts an actual whole word/phrase, not a substring of an unrelated word.
+function containsWord(hay,phrase){
+  const escaped=String(phrase).replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+  return new RegExp(`\\b${escaped}\\b`,'i').test(hay);
+}
 
 const REQUIRES_SHELL=/\b(docker(file)?|kubernetes|k8s|ci\/cd|shell access|terminal access|npm install|yarn install|pnpm install|pip install|build the (app|project)|run (the )?tests?|compile|package (the )?(app|project))\b/i;
 const REQUIRES_BROWSER=/\b(browser automation|headless browser|screenshot of the (site|app|page)|fill (out )?(the )?form|navigate (the )?(site|dashboard)|web app testing|click through|log in to (the )?(site|dashboard))\b/i;
 const REQUIRES_DEPLOY=/\b(deploy(ment)?\b|production server|release to production|trigger (a )?deployment)\b/i;
 const REQUIRES_GITHUB_PR=/\b(git\s+(clone|push|pull|checkout|commit)|pull request|\bpr\b|open (a |an )?pr\b|merge request|github repo|fix.{0,30}(bug|issue).{0,30}repo)\b/i;
-const REQUIRES_ARTIFACT=/\b(downloadable|attach(?:ed|ment)?|deliver (?:a )?(?:file|pdf|docx|xlsx|csv|zip|pptx)|create (?:a )?(?:pdf|docx|xlsx|csv|zip|pptx)|generate (?:a )?(?:pdf|docx|xlsx|csv|zip|pptx)|spreadsheet file|presentation file)\b/i;
+const REQUIRES_ARTIFACT=/\b(downloadable|attach(?:ed|ment)?|deliver (?:a )?(?:file|pdf|docx|xlsx|csv|zip|pptx)|create (?:a )?(?:pdf|docx|xlsx|csv|zip|pptx)|generate (?:a )?(?:pdf|docx|xlsx|csv|zip|pptx)|spreadsheet file|presentation file|(?:build|implement|develop|create)\s+(?:a |an |the )?(?:working\s+|functional\s+)?(?:prototype|dapp|d-app|application|smart\s+contract|api|website|web\s*app|program|bot|script|tool)|submit\s+(?:your|the)\s+(?:project|code|repo|repository|prototype|submission)|working\s+(?:prototype|demo|implementation))\b/i;
 const REQUIRES_APP=/\b(send (?:an )?email|create (?:a )?calendar event|update (?:the )?crm|update (?:a )?(?:google )?sheet|post to slack|create (?:a )?jira|create (?:a )?linear issue|edit (?:a )?notion|upload to (?:google )?drive|connected app)\b/i;
 // This system permanently refuses to hold private keys or sign transactions (see
 // policy-engine.js kind:'private_key_access' / 'wallet_export' and the "private-key access
@@ -24,13 +33,13 @@ const REQUIRES_APP=/\b(send (?:an )?email|create (?:a )?calendar event|update (?
 // fabricated a deployment claim that QA then correctly rejected after a full paid round-trip.
 const REQUIRES_ONCHAIN_TX=/\b(deploy\w*\b[\s\S]{0,40}?\b(?:mainnet|testnet|sepolia|goerli|mumbai|polygon|base|arbitrum|optimism|devnet)\b|\bsign(?:ed|ing)?\s+(?:a\s+|the\s+)?transaction\b|\bbroadcast\s+(?:a\s+|the\s+)?transaction\b|\bmint\w*\b[\s\S]{0,20}?\bfunded\s+wallet\b|\bverify\w*\b[\s\S]{0,40}?\b(?:etherscan|polygonscan|solscan|basescan)\b|\bfunded\s+(?:deployer\s+)?wallet\b)/i;
 
-export function classifyOpportunity(opportunity, { llmEnabled=false, hasGithubPrTool=false, hasShellTool=false, hasBrowserTool=false, hasDeployTool=false, hasArtifactTool=false, hasAppTool=false } = {}) {
+export function classifyOpportunity(opportunity, { llmEnabled=false, hasGithubPrTool=false, hasShellTool=false, hasBrowserTool=false, hasDeployTool=false, hasArtifactTool=false, hasAppTool=false, hasWebSearchTool=false } = {}) {
   const category=String(opportunity?.category||'').toLowerCase();
   const title=String(opportunity?.title||'');
   const description=String(opportunity?.description||'');
   const hay=`${category} ${title} ${description}`.toLowerCase();
   const safety=safetyCheck(hay);
-  const matched=RULES.map(rule=>({rule,score:(rule.categories.includes(category)?4:0)+rule.words.reduce((n,w)=>n+(hay.includes(w)?1:0),0)})).sort((a,b)=>b.score-a.score)[0];
+  const matched=RULES.map(rule=>({rule,score:(rule.categories.includes(category)?4:0)+rule.words.reduce((n,w)=>n+(containsWord(hay,w)?1:0),0)})).sort((a,b)=>b.score-a.score)[0];
   const skill=matched?.score>0?matched.rule.skill:'general-digital';
   const deterministic=canDoDeterministically(opportunity,skill);
   const needs={
@@ -40,7 +49,12 @@ export function classifyOpportunity(opportunity, { llmEnabled=false, hasGithubPr
     deploy:REQUIRES_DEPLOY.test(hay),
     artifact:REQUIRES_ARTIFACT.test(hay)||skill==='document-generation',
     app:REQUIRES_APP.test(hay)||skill==='app-automation',
-    onchainTx:REQUIRES_ONCHAIN_TX.test(hay)
+    onchainTx:REQUIRES_ONCHAIN_TX.test(hay),
+    // web-research jobs that AREN'T handled by the safe, tool-free deterministic path
+    // (robots.txt/header checks etc.) rely entirely on the LLM actually calling a real
+    // search tool for current facts. Without one, the LLM can still answer — it just
+    // answers from its own unverified training data and states it as researched fact.
+    liveVerification:skill==='web-research'&&!deterministic
   };
   const missing=[];
   if(needs.github&&!hasGithubPrTool)missing.push('github_pr');
@@ -49,6 +63,7 @@ export function classifyOpportunity(opportunity, { llmEnabled=false, hasGithubPr
   if(needs.deploy&&!hasDeployTool)missing.push('deploy');
   if(needs.artifact&&!hasArtifactTool)missing.push('artifact_storage');
   if(needs.app&&!hasAppTool)missing.push('connected_app_gateway');
+  if(needs.liveVerification&&!hasWebSearchTool)missing.push('web_search');
   // Permanently unavailable: this system never holds a private key or signs a transaction,
   // so no env flag can ever satisfy this one. Always rejected, not just when unconfigured.
   if(needs.onchainTx)missing.push('signed_onchain_transaction');

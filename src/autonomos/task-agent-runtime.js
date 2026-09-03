@@ -207,9 +207,9 @@ export function collapseWorkerSteps(steps=[],opportunity={}){
 
 function roleForOpportunity(op={}){
   const hint=`${op?.capability?.skill||''} ${op?.category||''} ${op?.title||''}`.toLowerCase();
-  if(/code|repo|bug|api|javascript|typescript|python|solidity|rust/.test(hint))return'code-worker';
-  if(/research|analysis|web|data|market/.test(hint))return'research-worker';
-  if(/write|content|translate|copy/.test(hint))return'content-worker';
+  if(/\b(code|repo|repository|bug|api|javascript|typescript|python|solidity|rust)\b/.test(hint))return'code-worker';
+  if(/\b(research|analysis|web|data|market)\b/.test(hint))return'research-worker';
+  if(/\b(write|content|translate|copy)\b/.test(hint))return'content-worker';
   return'automation-worker';
 }
 function normalizeRole(role){const value=String(role||'').toLowerCase().replace(/[^a-z0-9_-]+/g,'-').replace(/^-+|-+$/g,'');return value||'general-worker';}
