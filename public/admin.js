@@ -143,6 +143,7 @@ function renderAutonomOS(){
   setText('#auto-revenue24',usd(a.metrics?.revenue24hUsd));
   setText('#auto-cost24',usd(a.metrics?.cost24hUsd));
   setText('#auto-net',usd(a.metrics?.netProfitUsd));
+  { const diag=el('#auto-net-diag'); if(diag){ const n=Number(a.metrics?.costEntriesCount||0); const last=a.metrics?.lastCostEntryAt; diag.textContent=n?`lifetime · ${n} cost entries · last ${formatDate(last)}`:'lifetime · no cost entries recorded yet'; } }
   setText('#auto-agents',String(a.runtime?.taskAgents?.active??0));
   setText('#auto-children',String(a.runtime?.queueDepth??0));
   setText('#auto-opportunities',String(a.metrics?.opportunitiesFound??0));
