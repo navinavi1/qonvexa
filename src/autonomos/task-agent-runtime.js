@@ -74,10 +74,11 @@ export class TaskAgentRuntime {
     return ids.map(id=>this.agents.get(id)).filter(Boolean).map(x=>({...x}));
   }
 
-  markJobPhase(jobId,phase){
+  markJobPhase(jobId,phase,{onlyRole=null}={}){
     const now=new Date().toISOString();
     for(const agent of this.mutableForJob(jobId)){
       if(agent.status!=='active')continue;
+      if(onlyRole&&agent.role!==onlyRole)continue;
       agent.phase=String(phase||'working');
       agent.lastActiveAt=now;
       // Extend a lease while the owning job is demonstrably alive.
