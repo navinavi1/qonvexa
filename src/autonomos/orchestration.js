@@ -39,7 +39,7 @@ export async function runHandoffChain(roles,opportunity,plan,{execute,taskAgents
     const phaseResult=await execute({...opportunity,__plan:plan},{toolFilter,briefing});
     taskAgents?.markJobPhase(jobId,'done',{onlyRole:role});
     allToolCalls.push(...(phaseResult?.evidence?.toolCalls||[]));
-    briefing=`[${role} produced]\n${String(phaseResult?.content||'').slice(0,3000)}`;
+    briefing=`[${role} produced]\n${String(phaseResult?.content||'').slice(0,2500)}\n[tool evidence]\n${JSON.stringify(phaseResult?.evidence?.toolCalls||[]).slice(0,2200)}`;
     last=phaseResult;
   }
   return {...last,evidence:{...(last?.evidence||{}),toolCalls:allToolCalls,handoffRoles:roles}};

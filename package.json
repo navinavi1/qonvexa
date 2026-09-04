@@ -1,6 +1,6 @@
 {
-  "name": "qonvexa-autonomos-production-12-0",
-  "version": "12.0.0",
+  "name": "qonvexa-autonomos-production-13-0",
+  "version": "13.0.0",
   "private": true,
   "type": "module",
   "scripts": {

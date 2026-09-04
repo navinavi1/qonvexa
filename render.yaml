@@ -4,7 +4,7 @@ services:
     runtime: node
     plan: starter
     region: oregon
-    buildCommand: npm install --omit=dev && npm run verify
+    buildCommand: npm ci --omit=dev && npm run verify
     startCommand: npm start
     healthCheckPath: /health
     maxShutdownDelaySeconds: 30
@@ -17,7 +17,7 @@ services:
       sizeGB: 1
     envVars:
       - key: NODE_VERSION
-        value: ">=22.18.0 <25.0.0"
+        value: "24.14.1"
       - key: LAUNCH_MODE
         value: live
       - key: STORAGE_DIR
@@ -64,6 +64,14 @@ services:
         generateValue: true
       - key: IP_HASH_SALT
         generateValue: true
+      - key: AUTONOMOS_ZERO_SPEND_MODE
+        value: "false"
+      - key: AUTONOMOS_EARNED_FUNDS_ONLY
+        value: "true"
+      - key: AUTONOMOS_MAX_PAID_PROCUREMENT_USD
+        value: "3"
+      - key: AUTONOMOS_TRIGGER_PROJECT_REF
+        sync: false
       - key: AUTONOMOS_OWNER_WALLET
         value: "0x1f674bf085f6fed36fa198287d51edf0fe0bb9e2"
       - key: AUTONOMOS_ENABLED

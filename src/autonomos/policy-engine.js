@@ -2,7 +2,9 @@ export const DEFAULT_AUTONOMOS_CONFIG = Object.freeze({
   enabled: false,
   killSwitch: false,
   genesisObjective: 'Maximize sustainable net revenue by providing legitimate digital services to humans and autonomous agents.',
-  zeroSpendMode: true,
+  // Live earning mode: permit bounded work spend from earned/seed budget. Emergency Stop and
+  // explicit policy gates can still force zero spend at runtime.
+  zeroSpendMode: false,
   earnedFundsOnly: true,
   seedSpendBudgetUsd: 3,
   allowExternalSpending: false,
@@ -15,7 +17,7 @@ export const DEFAULT_AUTONOMOS_CONFIG = Object.freeze({
   maxChildren: 12,
   childSpawnConcurrencyThreshold: 3,
   childTtlMinutes: 180,
-  maxPaidProcurementUsd: 0,
+  maxPaidProcurementUsd: 3,
   maxApiCostPercentOfPayout: 25,
   maxJobsPerCycle: 6,
   maxConcurrentJobs: 4,
@@ -36,9 +38,17 @@ export const DEFAULT_AUTONOMOS_CONFIG = Object.freeze({
 });
 
 export function normalizeConfig(raw = {}) {
-  const legacy = !Object.prototype.hasOwnProperty.call(raw, 'platformGeneration');
-  const previousGeneration = Number(raw.platformGeneration || (legacy ? 0 : 3));
-  const cfg = { ...DEFAULT_AUTONOMOS_CONFIG, ...raw };
+  // Environment values are an explicit deployment override, but persisted config still wins
+  // when the caller has intentionally set a value in the admin plane.
+  const env=process.env;
+  const envOverrides={};
+  if(env.AUTONOMOS_ZERO_SPEND_MODE!==undefined) envOverrides.zeroSpendMode=/^(1|true|yes|on)$/i.test(String(env.AUTONOMOS_ZERO_SPEND_MODE));
+  if(env.AUTONOMOS_EARNED_FUNDS_ONLY!==undefined) envOverrides.earnedFundsOnly=/^(1|true|yes|on)$/i.test(String(env.AUTONOMOS_EARNED_FUNDS_ONLY));
+  if(env.AUTONOMOS_MAX_PAID_PROCUREMENT_USD!==undefined) envOverrides.maxPaidProcurementUsd=Number(env.AUTONOMOS_MAX_PAID_PROCUREMENT_USD);
+  const mergedRaw={...envOverrides,...raw};
+  const legacy = !Object.prototype.hasOwnProperty.call(mergedRaw, 'platformGeneration');
+  const previousGeneration = Number(mergedRaw.platformGeneration || (legacy ? 0 : 3));
+  const cfg = { ...DEFAULT_AUTONOMOS_CONFIG, ...mergedRaw };
   if (legacy && Number(raw.maxJobsPerCycle) === 2) cfg.maxJobsPerCycle = 6;
   // Generation 4 raises the legacy penny-job defaults while preserving any owner-customized floors.
   if (previousGeneration < 4) {

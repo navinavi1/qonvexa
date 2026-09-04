@@ -14,7 +14,7 @@ assert.equal(transitioned.previousState,'claimed');
 const id1=createJobIdentity({source:'t2000',externalId:'job-42'});
 const id2=createJobIdentity({source:'t2000',externalId:'job-42'});
 assert.equal(id1.id,id2.id);
-assert.equal(id1.idempotencyKey,'t2000:job-42');
+assert.equal(id1.idempotencyKey,'5:t2000|6:job-42');
 
 const learning=buildLearningSnapshot([
   {source:'t2000',externalId:'a',status:'settled',budgetUsd:100,costUsd:4,skill:'research-worker',at:'2026-09-01T10:00:00Z'},

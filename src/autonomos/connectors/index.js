@@ -304,7 +304,7 @@ async function superteamAction(kind,opportunity,{env=process.env,credentials,del
     // to the human's own wallet only after they visit the claim URL below. Nothing about
     // this can be automated further (by design — see superteam.fun/skill.md), so the
     // dashboard needs to surface it clearly rather than implying it's handled.
-    if(cred.claimCode)recordPendingClaim?.({listingId:opportunity.externalId,title:opportunity.title,claimUrl:`https://superteam.fun/earn/claim/${cred.claimCode}`,submittedAt:new Date().toISOString()});
+    // Submission is not a win. Keep the claimCode private until the marketplace reports a win.
     return{ok:true,transactionId:opportunity.externalId,body,pendingHumanClaim:true};
   }catch(error){return{ok:false,reason:String(error?.message||error).slice(0,200)}}
 }
@@ -407,7 +407,9 @@ async function t2000Action(kind,opportunity,{env,credentials,claim,deliverable}=
           ? [{batchId},{batch_id:batchId},{id:batchId}]
           : [{openingId:ext},{id:ext},{opening_id:ext},{jobId:ext}];
         let last='';
-        for(const args of claimCandidates){
+        const selectedClaims=selectMcpArguments(claimTool?.inputSchema||claimTool?.parameters||null,claimCandidates);
+        if(!selectedClaims.length)return{ok:false,reason:'t2000_claim_schema_not_supported'};
+        for(const args of selectedClaims.slice(0,2)){
           if(Object.values(args).every(v=>!String(v||'')))continue;
           try{claimed=extractMcpToolPayload(await client.callTool(claimTool.name,args));if(claimed)break}catch(error){last=String(error?.message||error)}
         }
@@ -433,24 +435,46 @@ async function t2000Action(kind,opportunity,{env,credentials,claim,deliverable}=
     // Current t2000 docs define the delivery itself as the body string. Keep small
     // backward-compatible fallbacks after the documented body shape in case their live
     // tool schema names the field differently; tools/call will reject invalid shapes.
-    const deliverCandidates=[
-      {jobId,body},
-      {jobId,delivery:body},
-      {jobId,deliverable:body},
-      {job_id:jobId,body}
-    ];
+    const candidateSet=[{jobId,body},{jobId,delivery:body},{jobId,deliverable:body},{job_id:jobId,body}];
+    const candidates=selectMcpArguments(deliverTool?.inputSchema || deliverTool?.parameters || null,candidateSet);
+    if (!candidates.length) return {ok:false,reason:'t2000_delivery_schema_not_supported',tool:deliverTool.name};
     let last='';
-    for(const args of deliverCandidates){
+    for(const args of candidates.slice(0,2)){
       try{const result=extractMcpToolPayload(await client.callTool(deliverTool.name,args));return{ok:true,tool:deliverTool.name,jobId:String(result?.jobId||result?.job_id||result?.id||jobId),transactionId:String(result?.transactionId||result?.tx||result?.digest||''),body:result}}catch(error){last=String(error?.message||error)}
     }
     return{ok:false,reason:last.slice(0,220)||'t2000_deliver_failed'};
   }catch(error){return{ok:false,reason:String(error?.message||error).slice(0,240)}}
 }
 
+
+function selectMcpArguments(schema,candidates=[]){
+  if(!schema||typeof schema!=='object') return candidates.slice(0,1);
+  const props=Array.isArray(schema?.properties)?schema.properties:Object.keys(schema?.properties||{});
+  const required=new Set(Array.isArray(schema?.required)?schema.required:[]);
+  return candidates.filter(args=>{
+    const keys=Object.keys(args||{});
+    if(props.length && keys.some(k=>!props.includes(k))) return false;
+    for(const key of required) if(args?.[key]===undefined||args?.[key]===null||args?.[key]==='') return false;
+    return true;
+  });
+}
+
 function t2000Token(_env,credentials){return String(credentials?.t2000?.accessToken||'').trim();}
-function t2000Amount(raw={}){
-  const direct=raw.sellerPayoutUsdc??raw.seller_payout_usdc??raw.payoutUsdc??raw.payout_usdc??raw.maxUsdc??raw.max_usdc??raw.priceUsdc??raw.price_usdc??raw.amountUsdc??raw.amount_usdc??raw.budgetUsdc??raw.budget_usdc??raw.budgetUsd??raw.priceUsd??raw.amountUsd??raw.budget??raw.price;
-  const n=Number(direct||0); if(Number.isFinite(n)&&n>=0)return n;
+export function t2000Amount(raw={}){
+  // Only accept fields whose units are explicit or are part of the documented t2000
+  // USD/USDC payloads. Never infer units from magnitude.
+  const explicit=[
+    ['sellerPayoutUsdc',raw.sellerPayoutUsdc],['seller_payout_usdc',raw.seller_payout_usdc],
+    ['payoutUsdc',raw.payoutUsdc],['payout_usdc',raw.payout_usdc],
+    ['maxUsdc',raw.maxUsdc],['max_usdc',raw.max_usdc],['minUsdc',raw.minUsdc],['min_usdc',raw.min_usdc],
+    ['priceUsdc',raw.priceUsdc],['price_usdc',raw.price_usdc],['budgetUsdc',raw.budgetUsdc],['budget_usdc',raw.budget_usdc],
+    ['rewardUsdc',raw.rewardUsdc],['reward_usdc',raw.reward_usdc],
+    ['budgetUsd',raw.budgetUsd],['priceUsd',raw.priceUsd],['amountUsd',raw.amountUsd],['rewardUsd',raw.rewardUsd],
+    ['budget',raw.budget],['price',raw.price],['reward',raw.reward]
+  ];
+  for(const [,value] of explicit){const n=Number(value);if(Number.isFinite(n)&&n>=0)return n;}
+  const atomic=[['amount_usdc_atomic',raw.amount_usdc_atomic],['amountAtomic',raw.amountAtomic],['amount_atomic',raw.amount_atomic],['price_usdc_atomic',raw.price_usdc_atomic],['reward_usdc_atomic',raw.reward_usdc_atomic]];
+  for(const [,value] of atomic){const n=Number(value);if(Number.isFinite(n)&&n>=0)return n/1e6;}
   return 0;
 }
 
@@ -576,9 +600,11 @@ export async function syncMarketplaceTransactions({env=process.env,credentials={
       if(r.ok){
         for(const tx of txs.slice(0,100)){
           const status=String(tx.status||tx.state||'').toLowerCase();
-          const amountAtomic=tx.amount_usdc_wei??tx.amount_wei??tx.price_wei??tx.amount;
-          const rawAmount = tx.amountUsd ?? tx.priceUsd ?? (Number(amountAtomic||0)>1000 ? Number(amountAtomic)/1e6 : Number(amountAtomic||0));
-          const amountUsd=Number(rawAmount || 0);
+          const explicitUsd=tx.amountUsd??tx.priceUsd??tx.rewardUsd;
+          const explicitUsdc=tx.amountUsdc??tx.priceUsdc??tx.rewardUsdc;
+          const atomic=tx.amount_usdc_wei??tx.price_wei??tx.amount_wei??tx.amount_usdc_atomic;
+          const rawAmount=explicitUsd!=null?Number(explicitUsd):explicitUsdc!=null?Number(explicitUsdc):atomic!=null?Number(atomic)/1e6:0;
+          const amountUsd=Number.isFinite(rawAmount)&&rawAmount>=0?rawAmount:0;
           rows.push({source:'clawlancer',externalTransactionId:String(tx.id||tx.transaction_id||tx.tx_id||''),listingId:String(tx.listing_id||tx.listingId||''),status,amountUsd,currency:'USDC',network:'eip155:8453',payoutAddress:String(tx.payout_address||tx.wallet_address||''),raw:tx});
         }
         health.clawlancer={ok:true,count:rows.length};

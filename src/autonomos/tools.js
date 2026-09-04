@@ -141,7 +141,7 @@ export async function e2bRunShell({ command, files = [], collectPaths = [] } = {
   // E2B is isolated, but this still blocks common credential exfiltration, host metadata,
   // network scanning and destructive-root commands. Legitimate package installs/builds/tests
   // are explicitly allowed inside the sandbox.
-  if (/\b(curl|wget)\b[^\n]*(169\.254\.169\.254|metadata\.google|localhost:3000)|\b(nmap|masscan|hydra|sqlmap)\b|\brm\s+-rf\s+\/(?:\s|$)|\b(printenv|env)\b.*(KEY|TOKEN|SECRET)/i.test(cmd)) {
+  if (/\b(curl|wget|ftp|telnet|nc|ncat|socat)\b[^\n]*(169\.254\.169\.254|metadata\.google|localhost:3000|127\.0\.0\.1)|\b(nmap|masscan|hydra|sqlmap)\b|\brm\s+-rf\s+\/(?:\s|$)|\b(printenv|env)\b.*(KEY|TOKEN|SECRET)|\bssh\b|\bscp\b/i.test(cmd)) {
     return { ok: false, error: 'shell_command_blocked_by_policy' };
   }
   const inputFiles = (Array.isArray(files) ? files : []).slice(0, 30);
@@ -149,13 +149,14 @@ export async function e2bRunShell({ command, files = [], collectPaths = [] } = {
   let sbx;
   try {
     const { Sandbox } = await import('@e2b/code-interpreter');
-    sbx = await Sandbox.create({ apiKey:key, timeoutMs:60000 });
+    const commandTimeout=Math.min(180000, Number(env.AUTONOMOS_E2B_COMMAND_TIMEOUT_MS || 90000));
+    sbx = await Sandbox.create({ apiKey:key, timeoutMs:Math.max(30000, commandTimeout + 15000) });
     for (const file of inputFiles) {
       const rel = cleanRelativePath(file?.path);
       if (!rel) continue;
       await sbx.files.write(`/home/user/${rel}`, String(file?.content ?? '').slice(0, 750000));
     }
-    const runPromise = sbx.commands.run(cmd, { timeoutMs:Math.min(180000, Number(env.AUTONOMOS_E2B_COMMAND_TIMEOUT_MS || 90000)) });
+    const runPromise = sbx.commands.run(cmd, { timeoutMs:commandTimeout });
     const result = signal ? await Promise.race([runPromise, abortPromise(signal)]) : await runPromise;
     const response = { ok:Number(result?.exitCode ?? 1) === 0, exitCode:Number(result?.exitCode ?? 1), stdout:String(result?.stdout || '').slice(0,12000), stderr:String(result?.stderr || '').slice(0,6000), artifacts:[] };
     if (response.ok && wanted.length) {
@@ -304,7 +305,9 @@ export async function codeRabbitReview({ files = [], focus='bugs security correc
     const stdout = String(result?.stdout || '').slice(0,50000);
     const findings = parseCodeRabbitFindings(stdout).slice(0,100);
     const severe = findings.filter(x=>/critical|high|error|warning/i.test(String(x.severity || x.level || x.type || '')));
-    return { ok:Number(result?.exitCode ?? 1) === 0 || findings.length > 0, exitCode:Number(result?.exitCode ?? 1), focus:String(focus || '').slice(0,300), reviewedFiles:cleanFiles.length, findings, severeFindings:severe.slice(0,40), rawSummary:findings.length ? '' : stdout.slice(0,8000), stderr:String(result?.stderr || '').slice(0,4000) };
+    const exitCode=Number(result?.exitCode ?? 1);
+    const severeFindings=severe.slice(0,40);
+    return { ok:exitCode===0 && severeFindings.length===0, reviewCompleted:exitCode===0, reviewPassed:exitCode===0 && severeFindings.length===0, exitCode, focus:String(focus || '').slice(0,300), reviewedFiles:cleanFiles.length, findings, severeFindings, rawSummary:findings.length ? '' : stdout.slice(0,8000), stderr:String(result?.stderr || '').slice(0,4000) };
   } catch (error) {
     return { ok:false, error:signal?.aborted ? 'aborted_by_emergency_stop' : String(error?.message || error).slice(0,300) };
   } finally { if (sbx) { try { await sbx.kill(); } catch {} } }
@@ -367,9 +370,10 @@ export const TOOL_SCHEMAS = [
   {type:'function',function:{name:'open_pull_request',description:'Propose verified code changes to a public GitHub repo via a fork and Pull Request. Never merges automatically.',parameters:{type:'object',properties:{repoUrl:{type:'string'},baseBranch:{type:'string'},newBranch:{type:'string'},commitMessage:{type:'string'},files:{type:'array',items:{type:'object',properties:{path:{type:'string'},content:{type:'string'}},required:['path','content']}}},required:['repoUrl','newBranch','commitMessage','files']}}}
 ];
 
-export async function runTool(name, args, env = process.env, { config = null, validateAction = null, signal = null } = {}) {
+export async function runTool(name, args, env = process.env, { config = null, validateAction = null, signal = null, remainingBudgetUsd = null, jobId = '' } = {}) {
   if (signal?.aborted) return { ok:false, error:'aborted_by_emergency_stop', costUsd:0 };
   const costUsd = estimateToolCostUsd(name, args, env);
+  if (remainingBudgetUsd !== null && remainingBudgetUsd !== undefined && Number.isFinite(Number(remainingBudgetUsd)) && costUsd > Number(remainingBudgetUsd) + 1e-9) return { ok:false, error:`job_budget_exceeded:need_${costUsd.toFixed(6)}_remaining_${Number(remainingBudgetUsd).toFixed(6)}`, costUsd:0 };
   if (config && validateAction && costUsd > 0) {
     const policy = validateAction({ kind:'spend', amountUsd:costUsd }, config);
     if (!policy.allowed) return { ok:false, error:`spend_not_authorized:${policy.reason}`, costUsd:0 };
@@ -388,7 +392,13 @@ export async function runTool(name, args, env = process.env, { config = null, va
   else if (name === 'browser_task') result = await browserTask(args, env, signal);
   else if (name === 'app_tool_search') result = await composioSearch(args, env, signal);
   else if (name === 'app_action') result = await composioExecute(args, env, signal);
-  else if (name === 'store_artifact') result = await storeArtifact(args, env);
+  else if (name === 'store_artifact') {
+    const original=String(args?.key||'artifact');
+    const clean=cleanArtifactKey(original)||'artifact';
+    const prefix=jobId ? `jobs/${cleanRelativePath(jobId)}/` : 'jobs/adhoc/';
+    const namespaced=clean.startsWith(prefix)?clean:`${prefix}${clean.replace(/^jobs\//,'')}`;
+    result = await storeArtifact({...args,key:namespaced}, env);
+  }
   else if (name === 'coderabbit_review') result = await codeRabbitReview(args, env, signal);
   else if (name === 'deploy_webhook') result = await deployWebhook(args, env, signal);
   else if (name === 'open_pull_request') result = await githubOpenPullRequest(args, env, signal);

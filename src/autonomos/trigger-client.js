@@ -24,7 +24,7 @@ export async function dispatchTriggerPaidOpportunity(opportunity, env = process.
   // A cycle may rediscover the same marketplace listing before the durable run has
   // finished. Trigger.dev idempotency ensures that repeated heartbeats do not create
   // duplicate paid claims/deliveries for the same external job.
-  const idempotencyKey=`autonomos:${source}:${externalId}`.slice(0,240);
+  const idempotencyKey=`autonomos_${crypto.createHash('sha256').update(`${source}\0${externalId}`).digest('hex')}`;
   try {
     const { tasks, configure } = await import('@trigger.dev/sdk');
     configure({ accessToken:String(env.TRIGGER_SECRET_KEY), ...(env.TRIGGER_API_URL?{baseURL:String(env.TRIGGER_API_URL)}:{}) });

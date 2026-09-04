@@ -1088,7 +1088,18 @@ function requireAdmin(req, res, next) {
   if (getAdminSession(req)) return next();
   const bearer=String(req.get('authorization')||'').match(/^Bearer\s+(.+)$/i)?.[1]||'';
   if(!bearer||!process.env.AUTH0_DOMAIN||!process.env.AUTH0_AUDIENCE)return res.status(401).json({ error: 'Unauthorized' });
-  verifyAuth0Bearer(bearer,process.env).then(result=>{if(!result.ok)return res.status(401).json({error:'Unauthorized'});req.auth0=result;next();}).catch(()=>res.status(401).json({error:'Unauthorized'}));
+  verifyAuth0Bearer(bearer,process.env).then(result=>{
+    if(!result.ok)return res.status(401).json({error:'Unauthorized'});
+    const requiredPermission=String(process.env.AUTH0_ADMIN_PERMISSION||'').trim();
+    const requiredRole=String(process.env.AUTH0_ADMIN_ROLE||'').trim();
+    const scopes=new Set(String(result.scope||'').split(/\s+/).filter(Boolean));
+    const permissions=new Set(Array.isArray(result.permissions)?result.permissions.map(String):[]);
+    const hasPermission=!requiredPermission||permissions.has(requiredPermission)||scopes.has(requiredPermission);
+    const roles=new Set(Array.isArray(result.roles)?result.roles.map(String):[]);
+    const hasRole=!requiredRole||roles.has(requiredRole);
+    if(!hasPermission||!hasRole)return res.status(403).json({error:'Forbidden'});
+    req.auth0=result;next();
+  }).catch(()=>res.status(401).json({error:'Unauthorized'}));
 }
 
 function safeCredentialEqual(a, b) {
@@ -1119,7 +1130,7 @@ function readJson(filename, fallback = {}) {
 function writeJsonAtomic(filename, value) {
   fs.mkdirSync(storageDir, { recursive:true });
   const file = path.join(storageDir, filename);
-  const tmp = `${file}.tmp`;
+  const tmp = `${file}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2,10)}.tmp`;
   fs.writeFileSync(tmp, JSON.stringify(value, null, 2), 'utf8');
   fs.renameSync(tmp, file);
 }

@@ -9,11 +9,13 @@ export class AgentMemory {
     if(!this.env.DATABASE_URL)return{ok:false,reason:'database_url_missing'};
     try{
       const {Pool}=await import('pg');
-      this.pool=new Pool({connectionString:this.env.DATABASE_URL,ssl:/localhost|127\.0\.0\.1/.test(this.env.DATABASE_URL)?undefined:{rejectUnauthorized:false}});
+      this.pool=new Pool({connectionString:this.env.DATABASE_URL,ssl:/localhost|127\.0\.0\.1/.test(this.env.DATABASE_URL)?undefined:{rejectUnauthorized:true}});
       await this.pool.query('CREATE EXTENSION IF NOT EXISTS vector');
       await this.pool.query(`CREATE TABLE IF NOT EXISTS autonomos_memory (
         id bigserial primary key,
         memory_key text unique not null,
+        tenant_scope text not null default 'global',
+        job_scope text not null default '',
         kind text not null,
         content text not null,
         metadata jsonb not null default '{}'::jsonb,
@@ -22,7 +24,10 @@ export class AgentMemory {
         created_at timestamptz not null default now(),
         updated_at timestamptz not null default now()
       )`);
+      await this.pool.query(`ALTER TABLE autonomos_memory ADD COLUMN IF NOT EXISTS tenant_scope text NOT NULL DEFAULT 'global'`);
+      await this.pool.query(`ALTER TABLE autonomos_memory ADD COLUMN IF NOT EXISTS job_scope text NOT NULL DEFAULT ''`);
       await this.pool.query('CREATE INDEX IF NOT EXISTS autonomos_memory_kind_updated_idx ON autonomos_memory(kind, updated_at DESC)');
+      await this.pool.query('CREATE INDEX IF NOT EXISTS autonomos_memory_scope_idx ON autonomos_memory(tenant_scope, job_scope, kind, updated_at DESC)');
       this.ready=true;return{ok:true,dimensions:this.dim};
     }catch(error){this.logger.warn?.('AutonomOS memory init failed',error?.message||error);return{ok:false,reason:String(error?.message||error)}}
   }
@@ -43,47 +48,49 @@ export class AgentMemory {
     }catch{return null;}
   }
 
-  async remember({key,kind='experience',content,metadata={},utility=0.5,embedding=null}){
+  async remember({key,kind='experience',content,metadata={},utility=0.5,embedding=null,tenantScope='global',jobScope=''}){
     if(!this.ready||!this.pool)return{ok:false,reason:'memory_not_ready'};
     const text=String(content).slice(0,50000);
     const vector=embedding||await this.embed(text);
     await this.pool.query(
-      `INSERT INTO autonomos_memory(memory_key,kind,content,metadata,utility,embedding)
-       VALUES($1,$2,$3,$4,$5,$6::vector)
-       ON CONFLICT(memory_key) DO UPDATE SET content=excluded.content,metadata=excluded.metadata,utility=excluded.utility,
+      `INSERT INTO autonomos_memory(memory_key,tenant_scope,job_scope,kind,content,metadata,utility,embedding)
+       VALUES($1,$2,$3,$4,$5,$6,$7,$8::vector)
+       ON CONFLICT(memory_key) DO UPDATE SET tenant_scope=excluded.tenant_scope,job_scope=excluded.job_scope,content=excluded.content,metadata=excluded.metadata,utility=excluded.utility,
        embedding=COALESCE(excluded.embedding,autonomos_memory.embedding),updated_at=now()`,
-      [String(key),String(kind),text,metadata,Number(utility),vector?vectorLiteral(vector):null]
+      [String(key),String(tenantScope||'global'),String(jobScope||''),String(kind),text,metadata,Number(utility),vector?vectorLiteral(vector):null]
     );
     return{ok:true,embedded:Boolean(vector)};
   }
 
-  async recent(kind='experience',limit=8){
+  async recent(kind='experience',limit=8,{tenantScope='global',jobScope=''}={}){
     if(!this.ready||!this.pool)return[];
-    const {rows}=await this.pool.query('SELECT memory_key,kind,content,metadata,utility,created_at FROM autonomos_memory WHERE kind=$1 ORDER BY utility DESC, updated_at DESC LIMIT $2',[kind,limitSafe(limit)]);
+    const {rows}=await this.pool.query(`SELECT memory_key,kind,content,metadata,utility,created_at FROM autonomos_memory WHERE kind=$1 AND tenant_scope=$2 AND (job_scope='' OR job_scope=$3) ORDER BY utility DESC, updated_at DESC LIMIT $4`,[kind,String(tenantScope||'global'),String(jobScope||''),limitSafe(limit)]);
     return rows;
   }
 
-  async recall(query,{kind='experience',limit=6,minSimilarity=0.35}={}){
+  async recall(query,{kind='experience',limit=6,minSimilarity=0.35,tenantScope='global',jobScope=''}={}){
     if(!this.ready||!this.pool)return[];
     const vector=await this.embed(query);
-    if(!vector)return this.recent(kind,limit);
+    if(!vector)return this.recent(kind,limit,{tenantScope,jobScope});
     try{
       const {rows}=await this.pool.query(
         `SELECT memory_key,kind,content,metadata,utility,created_at,
                 1 - (embedding <=> $1::vector) AS similarity
          FROM autonomos_memory
-         WHERE kind=$2 AND embedding IS NOT NULL
+         WHERE kind=$2 AND tenant_scope=$3 AND (job_scope='' OR job_scope=$4) AND embedding IS NOT NULL
          ORDER BY embedding <=> $1::vector, utility DESC
          LIMIT $3`,
-        [vectorLiteral(vector),kind,limitSafe(limit)]
+        [vectorLiteral(vector),kind,String(tenantScope||'global'),String(jobScope||''),limitSafe(limit)]
       );
       return rows.filter(r=>Number(r.similarity||0)>=Number(minSimilarity||0));
-    }catch{return this.recent(kind,limit);}
+    }catch{return this.recent(kind,limit,{tenantScope,jobScope});}
   }
 
   async contextForOpportunity(opportunity,{limit=5}={}){
     const query=`${opportunity?.source||''} ${opportunity?.category||''} ${opportunity?.title||''}\n${String(opportunity?.description||'').slice(0,6000)}`;
-    const rows=await this.recall(query,{kind:'experience',limit}).catch(()=>[]);
+    const tenantScope=String(opportunity?.tenantScope||opportunity?.clientId||'global');
+    const jobScope=String(opportunity?.jobId||'');
+    const rows=await this.recall(query,{kind:'experience',limit,tenantScope,jobScope}).catch(()=>[]);
     if(!rows.length)return{context:'',hits:[]};
     const hits=rows.map(r=>({key:r.memory_key,similarity:r.similarity??null,utility:r.utility,metadata:r.metadata||{}}));
     const context=rows.map((r,i)=>`[Past experience ${i+1}${r.similarity!=null?`, similarity ${Number(r.similarity).toFixed(2)}`:''}]\n${String(r.content||'').slice(0,1600)}`).join('\n\n');

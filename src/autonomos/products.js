@@ -79,7 +79,7 @@ export async function validatePublicUrl(value) {
 
 async function siteSnapshot(url) {
   const started = Date.now();
-  const fetched = await safeFetch(url, { method:'GET', maxBytes:1_000_000 });
+  const fetched = await safeFetch(url, { method:'GET', maxBytes:1_000_000, requireSuccess:true, requireHtml:true });
   const html = fetched.text;
   const title = firstMatch(html, /<title[^>]*>([\s\S]*?)<\/title>/i);
   const description = firstMatch(html, /<meta[^>]+name=["']description["'][^>]+content=["']([^"']*)["'][^>]*>/i)
@@ -152,7 +152,7 @@ async function robotsAudit(url) {
 }
 
 async function securityHeaders(url) {
-  const fetched = await safeFetch(url, { method:'GET', maxBytes:80_000 });
+  const fetched = await safeFetch(url, { method:'GET', maxBytes:80_000, requireSuccess:true, requireHtml:true });
   const headers = fetched.headers;
   const checks = {
     strictTransportSecurity:Boolean(headers['strict-transport-security']),
@@ -207,7 +207,7 @@ async function conversionSignals(url) {
 
 
 async function technologyFingerprint(url) {
-  const fetched = await safeFetch(url, { method:'GET', maxBytes:1_000_000 });
+  const fetched = await safeFetch(url, { method:'GET', maxBytes:1_000_000, requireSuccess:true, requireHtml:true });
   const html = fetched.text.toLowerCase();
   const headerText = JSON.stringify(fetched.headers).toLowerCase();
   const detections = [
@@ -237,7 +237,7 @@ async function technologyFingerprint(url) {
 }
 
 async function copyClaritySignals(url) {
-  const fetched = await safeFetch(url, { method:'GET', maxBytes:1_000_000 });
+  const fetched = await safeFetch(url, { method:'GET', maxBytes:1_000_000, requireSuccess:true, requireHtml:true });
   const text = stripTags(fetched.text);
   const words = text.split(/\s+/).filter(Boolean);
   const sentences = text.split(/[.!?]+/).map(x=>x.trim()).filter(Boolean);
@@ -264,7 +264,7 @@ async function copyClaritySignals(url) {
   };
 }
 
-async function safeFetch(initialUrl, { method='GET', maxBytes=1_000_000 } = {}) {
+async function safeFetch(initialUrl, { method='GET', maxBytes=1_000_000, requireSuccess=true, requireHtml=false } = {}) {
   let current = initialUrl instanceof URL ? new URL(initialUrl) : await validatePublicUrl(initialUrl);
   for (let hop=0; hop<4; hop += 1) {
     await assertPublicHostname(current.hostname);
@@ -284,6 +284,9 @@ async function safeFetch(initialUrl, { method='GET', maxBytes=1_000_000 } = {}) 
       continue;
     }
     const declared = Number(response.headers.get('content-length') || 0);
+    if (requireSuccess && (response.status < 200 || response.status >= 300)) throw new ProductError(`upstream_http_${response.status}`, 502);
+    const contentType=String(response.headers.get('content-type')||'').toLowerCase();
+    if (requireHtml && contentType && !/(text\/html|application\/xhtml\+xml|text\/plain)/i.test(contentType)) throw new ProductError('unexpected_content_type', 502);
     if (declared > maxBytes) throw new ProductError('response_too_large', 413);
     const buffer = Buffer.from(await response.arrayBuffer());
     if (buffer.byteLength > maxBytes) throw new ProductError('response_too_large', 413);

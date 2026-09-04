@@ -27,7 +27,7 @@ check('Trigger.dev durable dispatch is wired into main cycle',/dispatchTriggerPa
 check('Trigger.dev durable dispatch is wired into fast cycle',/dispatchTriggerPaidOpportunity\(op,env\)/.test(runtime));
 const triggerClient=read('src/autonomos/trigger-client.js');
 check('Trigger.dev dispatch uses SDK task trigger API',/tasks\.trigger\(/.test(triggerClient));
-check('Trigger.dev dispatch has per-opportunity idempotency',/idempotencyKey/.test(triggerClient)&&/autonomos:\$\{source\}:\$\{externalId\}/.test(triggerClient));
+check('Trigger.dev dispatch has per-opportunity idempotency',/idempotencyKey/.test(triggerClient)&&/createHash\('sha256'\)/.test(triggerClient));
 check('Demo/test filter participates in candidacy',/demo_or_test_opportunity/.test(runtime));
 
 const server=read('server.js');

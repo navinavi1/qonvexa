@@ -41,6 +41,7 @@ export function classifyOpportunity(opportunity, { llmEnabled=false, hasGithubPr
   const safety=safetyCheck(hay);
   const matched=RULES.map(rule=>({rule,score:(rule.categories.includes(category)?4:0)+rule.words.reduce((n,w)=>n+(containsWord(hay,w)?1:0),0)})).sort((a,b)=>b.score-a.score)[0];
   const skill=matched?.score>0?matched.rule.skill:'general-digital';
+  const recognized=Boolean(matched?.score>0);
   const deterministic=canDoDeterministically(opportunity,skill);
   const needs={
     github:REQUIRES_GITHUB_PR.test(hay),
@@ -73,8 +74,8 @@ export function classifyOpportunity(opportunity, { llmEnabled=false, hasGithubPr
     confidence:Math.min(1,(matched?.score||0)/6),
     safe:safety.safe,
     safetyReason:safety.reason,
-    executable:safety.safe&&!needsUnavailableTooling&&(deterministic||llmEnabled),
-    mode:needsUnavailableTooling?'unsupported_missing_tooling':needs.github?'llm_with_github_pr':deterministic?'deterministic':llmEnabled?'llm_with_tools':'unsupported_without_llm',
+    executable:safety.safe&&!needsUnavailableTooling&&recognized&&(deterministic||llmEnabled),
+    mode:!recognized?'unsupported_unrecognized':needsUnavailableTooling?'unsupported_missing_tooling':needs.github?'llm_with_github_pr':deterministic?'deterministic':llmEnabled?'llm_with_tools':'unsupported_without_llm',
     missingTooling:needsUnavailableTooling,
     missingTools:missing,
     requiresArtifact:needs.artifact,

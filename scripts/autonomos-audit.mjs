@@ -153,7 +153,8 @@ await ok('runtime boots without any paid API or private key', async () => {
     assert.equal(snap.runtime.taskAgents.active, 0);
     assert.ok(snap.products.length >= 6);
     assert.equal(snap.treasury.ownerWallet.toLowerCase(), wallet.toLowerCase());
-    assert.equal(snap.config.zeroSpendMode, true);
+    assert.equal(snap.config.zeroSpendMode, false);
+    assert.equal(snap.config.maxPaidProcurementUsd, 3);
     assert.equal(snap.config.privateKeysStored, false);
     assert.equal(snap.version, '4.0.0');
     assert.ok('opportunitiesFound' in snap.metrics);

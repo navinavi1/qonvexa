@@ -23,10 +23,10 @@ export const JOB_STATES = Object.freeze([
 
 const TRANSITIONS = Object.freeze({
   bidding:['bid_failed','bid_submitted'],
-  bid_failed:[],
+  bid_failed:['bidding'],
   bid_submitted:['claimed'], // an accepted dealwork bid re-enters the normal claim pipeline
   claiming:['claim_failed','claimed'],
-  claim_failed:[],
+  claim_failed:['claiming'],
   claimed:['delivered','execution_failed'],
   execution_failed:['delivered','execution_failed','manual_attention'],
   manual_attention:['delivered','execution_failed'], // Reset auto-claim history re-opens retries
@@ -38,7 +38,9 @@ const TRANSITIONS = Object.freeze({
 });
 
 export function canTransition(from,to){
-  return String(TRANSITIONS[String(from)||'discovered']||[]).includes(String(to));
+  const source=String(from||'discovered'); const target=String(to||'');
+  if(source===target)return true;
+  return String(TRANSITIONS[source]||[]).includes(target);
 }
 
 export function transitionJob(job,to,detail={}){
@@ -61,7 +63,7 @@ export function transitionJob(job,to,detail={}){
 export function createJobIdentity(opportunity={}){
   const source=String(opportunity.source||'unknown');
   const externalId=String(opportunity.externalId||'');
-  const stable=`${source}:${externalId}`;
+  const stable=`${source.length}:${source}|${externalId.length}:${externalId}`;
   return {
     id:`agency_${crypto.createHash('sha256').update(stable).digest('hex').slice(0,20)}`,
     idempotencyKey:stable,
