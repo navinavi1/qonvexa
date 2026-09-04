@@ -28,7 +28,7 @@
       <header class="admin-top">
         <div>
           <div class="admin-brand"><span class="brand-mark">Q</span><strong>QONVEXA</strong></div>
-          <p>Owner dashboard · QONVEXA 12.0 · AutonomOS 3.0</p>
+          <p>Owner dashboard · QONVEXA · AutonomOS 7.0</p>
         </div>
         <div class="admin-top-actions">
           <span id="admin-user" class="admin-user"></span>
@@ -98,172 +98,126 @@
       </section>
 
       <section class="admin-view" data-panel="autonomos">
-        <div class="autonomos-hero">
+        <div class="autonomos-hero autonomos-v7-hero">
           <div>
-            <small>AUTONOMOUS AI COMPANY</small>
-            <h1>AutonomOS</h1>
-            <p>Scout → qualify → claim → plan → spawn specialists → execute → QA → deliver → settle → learn.</p>
+            <small>AUTONOMOS 7.0 · LIVE OPERATIONS</small>
+            <h1>Mission Control</h1>
+            <p>Discover → qualify → claim/bid → execute → QA → deliver → settle. Permanent failures never return to agents.</p>
           </div>
           <div class="autonomos-controls">
             <span id="autonomos-runtime-badge" class="autonomos-badge">Loading…</span>
-            <button id="autonomos-start" class="button" type="button">Start 24/7</button>
-            <button id="autonomos-stop" class="admin-secondary" type="button">Stop</button>
-            <button id="autonomos-cycle" class="admin-secondary" type="button">Run cycle</button>
-            <button id="autonomos-reset-claims" class="admin-secondary" type="button" title="Clears opportunities wrongly blacklisted during connector bootstrap so they get retried">Reset auto-claim history</button>
-            <button id="autonomos-emergency" class="admin-secondary autonomos-danger" type="button">EMERGENCY STOP</button>
+            <button id="autonomos-start" class="button" type="button">▶ Start 24/7</button>
+            <button id="autonomos-stop" class="admin-secondary" type="button">Ⅱ Pause</button>
+            <button id="autonomos-cycle" class="admin-secondary" type="button">↻ Scan new jobs</button>
+            <button id="autonomos-retry-transient" class="admin-secondary" type="button" title="Retry only temporary network/market failures. Permanent Graveyard entries remain blocked.">Retry transient</button>
+            <button id="autonomos-emergency" class="admin-secondary autonomos-danger" type="button">Emergency stop</button>
           </div>
         </div>
 
-        <section class="admin-panel autonomos-panel autonomos-t2000-card">
-          <div class="admin-panel-head autonomos-t2000-head">
-            <div>
-              <small>T2000 · PASSPORT CONNECT</small>
-              <h2>Connect this AutonomOS to t2000</h2>
-              <p class="settings-note">One-time Google OAuth connects the same t2000 Passport you already use. No new Agent ID, wallet or manual API key is created.</p>
-            </div>
-            <div class="autonomos-t2000-actions">
-              <span id="autonomos-t2000-badge" class="autonomos-mini-badge t2000-offline">Not connected</span>
-              <button id="autonomos-t2000-connect" class="button" type="button">Connect t2000</button>
-              <button id="autonomos-t2000-refresh" class="admin-secondary" type="button" hidden>Refresh jobs</button>
-              <button id="autonomos-t2000-disconnect" class="admin-secondary" type="button" hidden>Disconnect</button>
-            </div>
-          </div>
-          <div id="autonomos-t2000-details" class="autonomos-t2000-details">
-            <span>Connect to enable Open Jobs, paid Service orders, claim, work-order fetch and delivery directly from this AutonomOS screen.</span>
-          </div>
-          <p id="autonomos-t2000-status" class="admin-status" role="status"></p>
-        </section>
-
-        <div class="autonomos-stat-grid">
-          <article class="autonomos-stat"><small>OWNER TREASURY</small><strong id="auto-treasury">—</strong><span>USDC · Base</span></article>
-          <article class="autonomos-stat"><small>24H REVENUE</small><strong id="auto-revenue24">$0.00</strong><span>real settled revenue</span></article>
-          <article class="autonomos-stat"><small>24H COST</small><strong id="auto-cost24">$0.00</strong><span>tracked external cost</span></article>
+        <div class="autonomos-stat-grid autonomos-v7-metrics">
+          <article class="autonomos-stat"><small>READY NOW</small><strong id="auto-ready">0</strong><span>qualified & executable</span></article>
+          <article class="autonomos-stat"><small>NEW</small><strong id="auto-new">0</strong><span>first-seen job versions</span></article>
+          <article class="autonomos-stat"><small>ACTIVE</small><strong id="auto-agents">0</strong><span>task agents working now</span></article>
+          <article class="autonomos-stat"><small>24H REVENUE</small><strong id="auto-revenue24">$0.00</strong><span>settled revenue</span></article>
+          <article class="autonomos-stat"><small>24H COST</small><strong id="auto-cost24">$0.00</strong><span>model + tools</span></article>
           <article class="autonomos-stat"><small>NET PROFIT</small><strong id="auto-net">$0.00</strong><span id="auto-net-diag">lifetime</span></article>
-          <article class="autonomos-stat"><small>ACTIVE TASK AGENTS</small><strong id="auto-agents">0</strong><span>spawned only for live work</span></article>
-          <article class="autonomos-stat"><small>QUEUE</small><strong id="auto-children">0</strong><span>qualified &amp; attempted last cycle</span></article>
-          <article class="autonomos-stat"><small>OPPORTUNITIES</small><strong id="auto-opportunities">0</strong><span>unique discovered</span></article>
-          <article class="autonomos-stat"><small>CLAIMED</small><strong id="auto-claimed">0</strong><span>market jobs</span></article>
           <article class="autonomos-stat"><small>DELIVERED</small><strong id="auto-delivered">0</strong><span>submitted work</span></article>
           <article class="autonomos-stat"><small>PAID</small><strong id="auto-paid">0</strong><span>settled payouts</span></article>
-          <article class="autonomos-stat"><small>JOBS</small><strong id="auto-jobs">0</strong><span>completed/delivered</span></article>
-          <article class="autonomos-stat"><small>CYCLES</small><strong id="auto-cycles">0</strong><span>heartbeat loops only</span></article>
+          <article class="autonomos-stat"><small>RETRY</small><strong id="auto-retry">0</strong><span>temporary failures only</span></article>
+          <article class="autonomos-stat"><small>GRAVEYARD</small><strong id="auto-graveyard">0</strong><span>permanently hidden from agents</span></article>
+          <span id="auto-treasury" hidden>—</span><span id="auto-children" hidden>0</span><span id="auto-opportunities" hidden>0</span><span id="auto-claimed" hidden>0</span><span id="auto-jobs" hidden>0</span><span id="auto-cycles" hidden>0</span>
         </div>
+
+        <section class="admin-panel autonomos-panel autonomos-command-panel">
+          <div class="admin-panel-head"><div><small>JOB COMMAND CENTER</small><h2>Work pipeline</h2><p class="settings-note">Only the selected operational lane is shown. Graveyard is permanent for the same job fingerprint and is never sent back to agents.</p></div><div id="autonomos-funnel" class="autonomos-funnel"></div></div>
+          <div class="autonomos-queue-tabs" role="tablist" aria-label="Job pipeline">
+            <button class="autonomos-queue-tab active" data-job-tab="ready" type="button">Ready</button>
+            <button class="autonomos-queue-tab" data-job-tab="new" type="button">New</button>
+            <button class="autonomos-queue-tab" data-job-tab="proposal" type="button">Bid / Competitive</button>
+            <button class="autonomos-queue-tab" data-job-tab="working" type="button">Working</button>
+            <button class="autonomos-queue-tab" data-job-tab="retry" type="button">Retry</button>
+            <button class="autonomos-queue-tab" data-job-tab="delivered" type="button">Delivered</button>
+            <button class="autonomos-queue-tab" data-job-tab="paid" type="button">Paid</button>
+            <button class="autonomos-queue-tab" data-job-tab="graveyard" type="button">Graveyard</button>
+          </div>
+          <div class="autonomos-job-table-wrap"><table class="autonomos-job-table"><thead><tr><th>Job</th><th>Market</th><th>Payout</th><th>Mode</th><th>Status</th><th>Seen / deadline</th><th>Reason</th></tr></thead><tbody id="autonomos-job-queue"></tbody></table></div>
+        </section>
 
         <div class="autonomos-two-col autonomos-operator-row">
           <section class="admin-panel autonomos-panel">
-            <div class="admin-panel-head"><div><small>LIVE EXECUTION</small><h2>Active tasks</h2></div></div>
+            <div class="admin-panel-head"><div><small>LIVE EXECUTION</small><h2>Jobs being worked now</h2></div></div>
             <div id="autonomos-active-jobs" class="autonomos-event-list"></div>
           </section>
           <section class="admin-panel autonomos-panel">
-            <div class="admin-panel-head"><div><small>DYNAMIC WORKFORCE</small><h2>Task-scoped agents</h2></div></div>
+            <div class="admin-panel-head"><div><small>AGENT FLEET</small><h2>Who is doing what</h2></div></div>
             <div id="autonomos-task-agents" class="autonomos-event-list"></div>
           </section>
         </div>
 
         <div class="autonomos-two-col">
           <section class="admin-panel autonomos-panel">
-            <div class="admin-panel-head"><div><small>GLOBAL WORK RADAR</small><h2>Where agents are looking</h2></div></div>
-            <div id="autonomos-market-radar" class="autonomos-event-list"></div>
+            <div class="admin-panel-head"><div><small>MARKET HEALTH & YIELD</small><h2>Marketplace control</h2></div></div>
+            <div id="autonomos-market-radar" class="autonomos-event-list autonomos-scroll-list"></div>
           </section>
           <section class="admin-panel autonomos-panel">
-            <div class="admin-panel-head"><div><small>MARKET JOB PIPELINE</small><h2>Recent claim / delivery activity</h2></div></div>
-            <div id="autonomos-market-jobs" class="autonomos-event-list"></div>
+            <div class="admin-panel-head"><div><small>RECENT OUTCOMES</small><h2>Claim / execution / delivery</h2></div></div>
+            <div id="autonomos-market-jobs" class="autonomos-event-list autonomos-scroll-list"></div>
           </section>
         </div>
 
-        <section class="admin-panel autonomos-panel">
-          <div class="admin-panel-head"><div><small>DIAGNOSTIC</small><h2>Why nothing gets claimed</h2></div></div>
-          <p class="settings-note">Every opportunity discovered this cycle, with the exact reason(s) it was or wasn't auto-claimed. If CLAIMED stays at 0, the answer is here — not a guess.</p>
-          <div id="autonomos-candidacy" class="autonomos-event-list"></div>
-        </section>
-
-        <section class="admin-panel autonomos-panel">
-          <div class="admin-panel-head"><div><small>ACTION NEEDED</small><h2>Superteam wins — claim your payout</h2></div></div>
-          <p class="settings-note">Superteam Earn has no escrow and no automatic payout — agents can't hold or sign for funds there. Every submission below needs YOU to open the link and claim it with your own wallet, or the win is invisible and the money never arrives.</p>
-          <div id="autonomos-pending-claims" class="autonomos-event-list"></div>
+        <section class="admin-panel autonomos-panel autonomos-t2000-card">
+          <div class="admin-panel-head autonomos-t2000-head"><div><small>T2000 · PASSPORT</small><h2>Open Jobs + Seller Orders</h2><p class="settings-note">Open-board jobs are filtered by payout; already-paid seller orders stay active even when the public board is weak.</p></div><div class="autonomos-t2000-actions"><span id="autonomos-t2000-badge" class="autonomos-mini-badge t2000-offline">Not connected</span><button id="autonomos-t2000-connect" class="button" type="button">Connect</button><button id="autonomos-t2000-refresh" class="admin-secondary" type="button" hidden>Refresh</button><button id="autonomos-t2000-disconnect" class="admin-secondary" type="button" hidden>Disconnect</button></div></div>
+          <div id="autonomos-t2000-details" class="autonomos-t2000-details"></div><p id="autonomos-t2000-status" class="admin-status" role="status"></p>
         </section>
 
         <div class="autonomos-two-col">
           <section class="admin-panel autonomos-panel">
-            <div class="admin-panel-head"><div><small>TREASURY</small><h2>Owner wallet & profit policy</h2></div><button id="autonomos-refresh-wallet" class="admin-link" type="button">Refresh balance →</button></div>
-            <div id="autonomos-wallet" class="autonomos-wallet"></div>
-            <div id="autonomos-allocations" class="allocation-grid"></div>
-            <p class="settings-note">Private keys and seed phrases are never stored here. Revenue receivers use only the public wallet address.</p>
-          </section>
-
-          <form id="autonomos-config-form" class="admin-panel admin-form autonomos-panel">
-            <div class="admin-panel-head"><div><small>POLICY ENGINE</small><h2>Autonomy limits</h2></div></div>
-            <label>Genesis objective<textarea name="genesisObjective" rows="3" maxlength="1000"></textarea></label>
-            <div class="autonomos-form-grid">
-              <label>Heartbeat, seconds<input name="heartbeatSeconds" type="number" min="30" max="3600"></label>
-              <label>Fast claim poll, seconds<input name="fastClaimPollSeconds" type="number" min="10" max="3600"></label>
-              <label>Minimum margin, %<input name="minMarginPercent" type="number" min="0" max="95" step="1"></label>
-              <label>Reserve, %<input name="reservePercent" type="number" min="0" max="100"></label>
-              <label>Growth, %<input name="growthPercent" type="number" min="0" max="100"></label>
-              <label>Experiments, %<input name="experimentPercent" type="number" min="0" max="100"></label>
-              <label>Max dynamic workers<input name="maxChildren" type="number" min="1" max="32"></label>
-              <label>Jobs per cycle<input name="maxJobsPerCycle" type="number" min="0" max="20"></label>
-              <label>Global minimum job payout, $<input name="minJobPayoutUsd" type="number" min="0" max="100000" step="0.01"></label>
-              <label>Clawlancer minimum, $<input name="clawlancerMinJobPayoutUsd" type="number" min="0" max="100000" step="1"></label>
-              <label>Dealwork minimum, $<input name="dealworkMinJobPayoutUsd" type="number" min="0" max="100000" step="1"></label>
-              <label>Superteam minimum, $<input name="superteamMinJobPayoutUsd" type="number" min="0" max="100000" step="1"></label>
-              <label>t2000 Open Jobs minimum, $<input name="t2000MinOpenJobPayoutUsd" type="number" min="0" max="100000" step="1"></label>
-              <label>t2000 priority tier, $<input name="t2000PriorityOpenJobPayoutUsd" type="number" min="0" max="100000" step="1"></label>
-              <label>t2000 premium tier, $<input name="t2000PremiumOpenJobPayoutUsd" type="number" min="0" max="100000" step="1"></label>
-              <label>Max API/model cost, % payout<input name="maxApiCostPercentOfPayout" type="number" min="0" max="80"></label>
-            </div>
-            <p class="settings-note">Low-value jobs are rejected by default: global floor $25, Clawlancer $25, Dealwork $25, Superteam $25. t2000 Open Jobs are filtered separately: default minimum $35, priority $65+, premium $100+. Demo/test/sandbox opportunities are also rejected before auto-claim unless you explicitly disable that protection. Already-assigned seller-queue work is not discarded after claim; AutonomOS finishes obligations it has already accepted.</p>
-            <p class="settings-note">Fast claim poll only re-checks Clawlancer/t2000 open listings — it does not redo treasury/offer/competition work, so it can safely run much more often than the full heartbeat.</p>
-            <div class="autonomos-form-grid">
-              <label class="autonomos-check"><input name="zeroSpendMode" type="checkbox"> <span>Zero-spend mode (block ANY job with API/model cost)</span></label>
-              <label class="autonomos-check"><input name="earnedFundsOnly" type="checkbox"> <span>Earned-funds-only (spend only already-earned growth+experiment budget)</span></label>
-              <label class="autonomos-check"><input name="allowExternalSpending" type="checkbox"> <span>Allow unrestricted spending (ignores earned-funds cap — use with care)</span></label>
-              <label>One-time seed budget, $<input name="seedSpendBudgetUsd" type="number" min="0" max="50" step="0.5"></label>
-              <label>Max $ per single paid tool call<input name="maxPaidProcurementUsd" type="number" min="0" max="100000" step="0.01"></label>
-            </div>
-            <p class="settings-note"><strong>Required for Firecrawl/E2B to actually run:</strong> even with the toggles above set correctly, every paid tool call (web_search, web_scrape, run_python) is also checked against this ceiling — it defaults to $0, which silently blocks all of them regardless of the toggles. Set it above your expected per-call cost (e.g. 0.05) to actually let agents spend.</p>
-            <p class="settings-note">Seed budget is the one-time head start (before any revenue) that lets Earned-funds-only mode take the first jobs at all — without it, a brand-new deployment with $0 revenue can never afford its first paid job.</p>
-            <p class="settings-note">Precedence: Zero-spend wins if on. Otherwise Earned-funds-only (default) caps spend to money AutonomOS has actually already earned. Unrestricted only applies once both of the above are off.</p>
-            <label class="autonomos-check"><input name="autoClaimJobs" type="checkbox"> <span>Automatically claim qualified escrow-funded jobs</span></label>
-            <label class="autonomos-check"><input name="requireEscrowForAutoClaim" type="checkbox"> <span>Require escrow/pre-funded status for automatic claims</span></label>
-            <label class="autonomos-check"><input name="rejectDemoAndTestJobs" type="checkbox"> <span>Reject demo/test/sandbox jobs before automatic claim</span></label>
-            <label class="autonomos-check"><input name="autoReplication" type="checkbox"> <span>Allow bounded task-scoped worker creation for accepted jobs</span></label>
-            <button class="button" type="submit">Save AutonomOS policy</button>
-            <p id="autonomos-config-status" class="admin-status" role="status"></p>
-          </form>
-        </div>
-
-        <section class="admin-panel autonomos-panel">
-          <div class="admin-panel-head"><div><small>CONTROL PLANE</small><h2>Permanent roles</h2><p class="settings-note">Only coordination, policy, economics, QA, treasury and safety stay resident. Research/code/content/automation workers are created per accepted job and destroyed afterward.</p></div><span id="autonomos-llm" class="autonomos-mini-badge"></span></div>
-          <div id="autonomos-agent-grid" class="autonomos-agent-grid"></div>
-        </section>
-
-        <div class="autonomos-two-col">
-          <section class="admin-panel autonomos-panel">
-            <div class="admin-panel-head"><div><small>MACHINE PRODUCTS</small><h2>Services agents can sell</h2></div></div>
-            <div id="autonomos-products" class="autonomos-product-list"></div>
+            <div class="admin-panel-head"><div><small>TREASURY & PAYMENTS</small><h2>Escrow, payout & owner wallet</h2></div><button id="autonomos-refresh-wallet" class="admin-link" type="button">Refresh →</button></div>
+            <div id="autonomos-wallet" class="autonomos-wallet"></div><div id="autonomos-allocations" class="allocation-grid"></div>
+            <p class="settings-note">Display-only payout layer. Private keys and seed phrases are never stored in AutonomOS.</p>
           </section>
           <section class="admin-panel autonomos-panel">
-            <div class="admin-panel-head"><div><small>MARKET RAILS</small><h2>Connectors</h2></div></div>
-            <div id="autonomos-connectors" class="autonomos-connector-list"></div>
-          </section>
-        </div>
-
-        <div class="autonomos-two-col">
-          <section class="admin-panel autonomos-panel">
-            <div class="admin-panel-head"><div><small>SERVICE READINESS</small><h2>Infrastructure</h2></div></div>
-            <div id="autonomos-infrastructure" class="autonomos-connector-list"></div>
-          </section>
-          <section class="admin-panel autonomos-panel">
-            <div class="admin-panel-head"><div><small>SETUP GAPS</small><h2>What still needs external credentials</h2></div></div>
+            <div class="admin-panel-head"><div><small>ACTION CENTER</small><h2>Needs attention</h2></div></div>
+            <div id="autonomos-pending-claims" class="autonomos-event-list"></div>
             <div id="autonomos-missing" class="autonomos-event-list"></div>
           </section>
         </div>
 
+        <details class="admin-panel autonomos-panel autonomos-disclosure">
+          <summary><span><small>POLICIES</small><b>Autonomy & profitability rules</b></span><span>Configure →</span></summary>
+          <form id="autonomos-config-form" class="admin-form autonomos-policy-form">
+            <p class="settings-note">Production defaults: global floor $25, Clawlancer $25, Dealwork $25, Superteam $25; t2000 Open Jobs $35. Demo/test jobs are rejected before claim.</p>
+            <label>Genesis objective<textarea name="genesisObjective" rows="3" maxlength="1000"></textarea></label>
+            <div class="autonomos-form-grid">
+              <label>Heartbeat, sec<input name="heartbeatSeconds" type="number" min="30" max="3600"></label><label>Fast poll, sec<input name="fastClaimPollSeconds" type="number" min="10" max="3600"></label><label>Minimum margin, %<input name="minMarginPercent" type="number" min="0" max="95" step="1"></label>
+              <label>Global min payout, $<input name="minJobPayoutUsd" type="number" min="0" max="100000" step="0.01"></label><label>Clawlancer min, $<input name="clawlancerMinJobPayoutUsd" type="number" min="0" max="100000" step="1"></label><label>Dealwork min, $<input name="dealworkMinJobPayoutUsd" type="number" min="0" max="100000" step="1"></label>
+              <label>Superteam min, $<input name="superteamMinJobPayoutUsd" type="number" min="0" max="100000" step="1"></label><label>t2000 min, $<input name="t2000MinOpenJobPayoutUsd" type="number" min="0" max="100000" step="1"></label><label>Max API cost, % payout<input name="maxApiCostPercentOfPayout" type="number" min="0" max="80"></label>
+              <label>Max workers<input name="maxChildren" type="number" min="1" max="32"></label><label>Jobs / cycle<input name="maxJobsPerCycle" type="number" min="0" max="20"></label><label>Max paid tool call, $<input name="maxPaidProcurementUsd" type="number" min="0" max="100000" step="0.01"></label>
+              <label>Seed budget, $<input name="seedSpendBudgetUsd" type="number" min="0" max="50" step="0.5"></label><label>Reserve, %<input name="reservePercent" type="number" min="0" max="100"></label><label>Growth, %<input name="growthPercent" type="number" min="0" max="100"></label>
+              <label>Experiments, %<input name="experimentPercent" type="number" min="0" max="100"></label><label>t2000 priority, $<input name="t2000PriorityOpenJobPayoutUsd" type="number" min="0" max="100000" step="1"></label><label>t2000 premium, $<input name="t2000PremiumOpenJobPayoutUsd" type="number" min="0" max="100000" step="1"></label>
+            </div>
+            <div class="autonomos-form-grid autonomos-policy-checks">
+              <label class="autonomos-check"><input name="zeroSpendMode" type="checkbox"><span>Zero-spend mode</span></label><label class="autonomos-check"><input name="earnedFundsOnly" type="checkbox"><span>Earned-funds-only</span></label><label class="autonomos-check"><input name="allowExternalSpending" type="checkbox"><span>Allow external spending</span></label>
+              <label class="autonomos-check"><input name="autoClaimJobs" type="checkbox"><span>Auto-claim qualified jobs</span></label><label class="autonomos-check"><input name="requireEscrowForAutoClaim" type="checkbox"><span>Require escrow for instant claims</span></label><label class="autonomos-check"><input name="rejectDemoAndTestJobs" type="checkbox"><span>Reject demo/test jobs</span></label><label class="autonomos-check"><input name="autoReplication" type="checkbox"><span>Spawn task specialists</span></label>
+            </div>
+            <button class="button" type="submit">Save policies</button><p id="autonomos-config-status" class="admin-status" role="status"></p>
+          </form>
+        </details>
+
+        <div class="autonomos-two-col">
+          <details class="admin-panel autonomos-panel autonomos-disclosure" open><summary><span><small>MARKET RAILS</small><b>Connectors & watch lanes</b></span><span>Inspect →</span></summary><div id="autonomos-connectors" class="autonomos-connector-list autonomos-scroll-list"></div></details>
+          <details class="admin-panel autonomos-panel autonomos-disclosure"><summary><span><small>INFRASTRUCTURE</small><b>Execution readiness</b></span><span>Inspect →</span></summary><div id="autonomos-infrastructure" class="autonomos-connector-list"></div></details>
+        </div>
+
+        <details class="admin-panel autonomos-panel autonomos-disclosure">
+          <summary><span><small>CONTROL PLANE</small><b>Permanent agents</b></span><span id="autonomos-llm" class="autonomos-mini-badge"></span></summary><div id="autonomos-agent-grid" class="autonomos-agent-grid"></div>
+        </details>
+        <details class="admin-panel autonomos-panel autonomos-disclosure"><summary><span><small>SELLER PRODUCTS</small><b>Services agents can sell</b></span><span>Inspect →</span></summary><div id="autonomos-products" class="autonomos-product-list"></div></details>
+
         <section class="admin-panel autonomos-panel">
-          <div class="admin-panel-head"><div><small>LIVE AUDIT LOG</small><h2>AutonomOS events</h2></div></div>
-          <div id="autonomos-events" class="activity-list"></div>
+          <div class="admin-panel-head"><div><small>LIVE EVENT STREAM</small><h2>System timeline</h2></div></div><div id="autonomos-events" class="activity-list"></div>
         </section>
+        <div id="autonomos-candidacy" hidden></div>
       </section>
 
       <section class="admin-view" data-panel="activity">

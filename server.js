@@ -409,6 +409,10 @@ app.post('/api/admin/autonomos/reset-claim-history', requireAdmin, requireSameSi
   res.json(autonomos.resetClaimHistory());
 });
 
+app.post('/api/admin/autonomos/retry-transient', requireAdmin, requireSameSiteMutation, (_req, res) => {
+  res.json(autonomos.retryTransientFailures());
+});
+
 app.post('/api/admin/autonomos/treasury/refresh', requireAdmin, requireSameSiteMutation, async (_req, res) => {
   res.json(await autonomos.refreshTreasury());
 });

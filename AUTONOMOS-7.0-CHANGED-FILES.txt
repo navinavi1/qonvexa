@@ -1,0 +1,18 @@
+AutonomOS 7.0 — changed/new files only
+
+01. .env.example
+02. .env.production.example
+03. AUTONOMOS-7.0-DEPLOY.md
+04. AUTONOMOS-7.0-REBUILD-REPORT.md
+05. package.json
+06. public/admin.css
+07. public/admin.html
+08. public/admin.js
+09. scripts/autonomos-audit.mjs
+10. scripts/autonomos2-flow-test.mjs
+11. scripts/job-registry-test.mjs
+12. server.js
+13. src/autonomos/connectors/index.js
+14. src/autonomos/job-registry.js
+15. src/autonomos/runtime.js
+16. AUTONOMOS-7.0-CHANGED-FILES.txt

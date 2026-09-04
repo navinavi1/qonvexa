@@ -18,6 +18,14 @@ const CONNECTOR_DEFS = Object.freeze([
   { id:'olas-mech', name:'Olas Mech Marketplace', kind:'seller+discovery', description:'Agent-to-agent paid Mech services.', requiredEnv:['OLAS_MECH_API_KEY'], optionalEnv:['OLAS_MECH_ENDPOINT'] },
   { id:'nevermined', name:'Nevermined', kind:'payments', description:'Fiat + crypto agent payment facilitator and metering.', requiredEnv:['NVM_API_KEY'], optionalEnv:['NVM_PLAN_ID'] },
   { id:'openserv', name:'OpenServ', kind:'discovery', description:'Agent/workflow ecosystem; optional authenticated connector.', requiredEnv:['OPENSERV_API_KEY'], optionalEnv:[] },
+  // AutonomOS 7.0 market expansion. Only ClawJobs has a verified public jobs API here.
+  // The remaining sources are intentionally feed-gated: we never invent undocumented
+  // claim endpoints or pretend a human-first marketplace is autonomously claimable.
+  { id:'clawjobs', name:'ClawJobs', kind:'jobs-watch', description:'Base/USDC jobs with a documented public jobs API. Proposals require an API key and worker stake, so discovery is automatic while claim remains gated.', requiredEnv:[], optionalEnv:['CLAWJOBS_API_KEY'] },
+  { id:'laborx', name:'LaborX', kind:'jobs-watch', description:'Crypto freelance marketplace watch lane. Activates only when a verified JSON feed/API URL is supplied; never counted as Ready Now by default.', requiredEnv:[], optionalEnv:['LABORX_AGENT_FEED_URL','LABORX_API_KEY'] },
+  { id:'dework', name:'Dework', kind:'jobs-watch', description:'DAO bounty watch lane. Activates only with a verified JSON feed/API URL supplied by the operator.', requiredEnv:[], optionalEnv:['DEWORK_BOUNTY_FEED_URL','DEWORK_API_KEY'] },
+  { id:'bountycaster', name:'Bountycaster', kind:'competitive-watch', description:'Crypto bounty discovery lane. Competitive/social claim workflow stays non-autonomous unless a verified API/feed is configured.', requiredEnv:[], optionalEnv:['BOUNTYCASTER_FEED_URL','BOUNTYCASTER_API_KEY'] },
+  { id:'questbook', name:'Questbook / grants', kind:'grants-watch', description:'Grant/proposal discovery lane. Kept separate from instant paid jobs and only activates with a verified feed/API URL.', requiredEnv:[], optionalEnv:['QUESTBOOK_FEED_URL','QUESTBOOK_API_KEY'] },
   // P1 fix: Firecrawl/E2B previously had no entry here at all, so the dashboard could show
   // a fully green AutonomOS while one or both tool keys were missing, unauthorized, or
   // dropped — job-executor would then silently run with fewer tools than the operator
@@ -48,6 +56,15 @@ export function connectorStatuses(env = process.env, x402Status = {}, persistedC
     if (def.id === 't2000') {
       const connected=Boolean(String(persistedCredentials?.t2000?.accessToken||'').trim());
       return { ...def, status:connected?'ready':'connect_required', configured:connected, missing:connected?[]:['Connect t2000 in the AutonomOS dashboard (Google OAuth → existing Passport).'], mode:'passport_connect_oauth' };
+    }
+    if (def.id === 'clawjobs') {
+      const hasKey=Boolean(String(env.CLAWJOBS_API_KEY||'').trim());
+      return { ...def, status:hasKey?'discovery_ready_claim_gated':'discovery_ready', configured:true, missing:hasKey?[]:['API key + stake-capable wallet required before proposals can be automated safely'], mode:'proposal_stake_required' };
+    }
+    const feedEnv={laborx:'LABORX_AGENT_FEED_URL',dework:'DEWORK_BOUNTY_FEED_URL',bountycaster:'BOUNTYCASTER_FEED_URL',questbook:'QUESTBOOK_FEED_URL'}[def.id];
+    if(feedEnv){
+      const configured=Boolean(String(env[feedEnv]||'').trim());
+      return { ...def, status:configured?'watch_feed_ready':'watchlist', configured, missing:configured?[]:[`${feedEnv} (verified official/API feed URL)`], mode:'discovery_only' };
     }
     const missing=def.requiredEnv.filter(key=>!String(env[key]||'').trim());
     return { ...def, status:missing.length?'needs_credentials':'ready', configured:missing.length===0, missing };
@@ -139,7 +156,12 @@ export async function discoverMarketOpportunities({ env=process.env, credentials
     ['clawlancer',()=>discoverClawlancer(env,credentials,limit)],
     ['dealwork',()=>discoverDealwork(env,credentials,limit)],
     ['t2000',()=>discoverT2000(env,credentials,limit)],
-    ['superteam',()=>discoverSuperteam(credentials,limit)]
+    ['superteam',()=>discoverSuperteam(credentials,limit)],
+    ['clawjobs',()=>discoverClawJobs(env,limit)],
+    ['laborx',()=>discoverConfiguredFeed('laborx',env.LABORX_AGENT_FEED_URL,env.LABORX_API_KEY,limit,{currency:'USDC',network:'crypto',escrowed:false,claimMode:'watchlist_only'})],
+    ['dework',()=>discoverConfiguredFeed('dework',env.DEWORK_BOUNTY_FEED_URL,env.DEWORK_API_KEY,limit,{currency:'USDC',network:'crypto',escrowed:false,claimMode:'watchlist_only'})],
+    ['bountycaster',()=>discoverConfiguredFeed('bountycaster',env.BOUNTYCASTER_FEED_URL,env.BOUNTYCASTER_API_KEY,limit,{currency:'USDC',network:'crypto',escrowed:false,claimMode:'competitive_manual'})],
+    ['questbook',()=>discoverConfiguredFeed('questbook',env.QUESTBOOK_FEED_URL,env.QUESTBOOK_API_KEY,limit,{currency:'USDC',network:'crypto',escrowed:false,claimMode:'grant_proposal'})]
   ].filter(([id])=>!want||want.has(id));
   const results=await Promise.allSettled(jobs.map(([,fn])=>fn()));
   jobs.forEach(([id],i)=>{
@@ -268,6 +290,51 @@ async function discoverSuperteam(credentials,limit){
     },{feePercent:0,currency:'USDC',network:'Solana',escrowed:false,claimMode:'competitive_submission'}));
     return {signals,health:{ok:true,count:signals.length}};
   }catch(error){return {signals:[],health:{ok:false,error:String(error?.message||error).slice(0,180)}}}
+}
+
+async function discoverClawJobs(env,limit){
+  try{
+    const key=String(env.CLAWJOBS_API_KEY||'').trim();
+    const response=await fetch(`https://clawjobs.com/api/v1/jobs?status=open&limit=${Math.min(100,limit)}`,{headers:{accept:'application/json','user-agent':'AutonomOS/7.0',...(key?{authorization:`Bearer ${key}`}:{})},signal:AbortSignal.timeout(15000)});
+    const body=await safeJson(response);
+    if(!response.ok)return{signals:[],health:{ok:false,status:response.status,error:body?.error||body?.message||''}};
+    const rows=Array.isArray(body)?body:findArrayByKey(body,['jobs','data','items','results']);
+    const signals=rows.slice(0,limit).map(raw=>normalizeOpportunity('clawjobs',{
+      ...raw,
+      externalId:raw.id||raw.jobId||raw.job_id||raw.slug,
+      title:raw.title||raw.name||'ClawJobs opportunity',
+      description:raw.description||raw.brief||raw.requirements||raw.title||'',
+      budgetUsd:Number(raw.budgetUsd??raw.rewardUsd??raw.reward??raw.amount??raw.price??0),
+      status:raw.status||'open',
+      url:raw.url||raw.link||`https://clawjobs.com/jobs/${raw.id||raw.jobId||raw.slug||''}`,
+      claimMode:'proposal_stake_required'
+    },{feePercent:3,currency:String(raw.currency||'USDC'),network:'Base',escrowed:true,claimMode:'proposal_stake_required'})).filter(x=>x.externalId);
+    return{signals,health:{ok:true,count:signals.length,authenticated:Boolean(key),claimReady:false,mode:'proposal_stake_required'}};
+  }catch(error){return{signals:[],health:{ok:false,error:String(error?.message||error).slice(0,180)}}}
+}
+
+async function discoverConfiguredFeed(source,url,apiKey,limit,defaults={}){
+  const endpoint=String(url||'').trim();
+  if(!endpoint)return{signals:[],health:{ok:true,count:0,disabled:true,reason:'verified_feed_url_not_configured'}};
+  if(!/^https:\/\//i.test(endpoint))return{signals:[],health:{ok:false,error:'feed_url_must_use_https'}};
+  try{
+    const key=String(apiKey||'').trim();
+    const response=await fetch(endpoint,{headers:{accept:'application/json','user-agent':'AutonomOS/7.0',...(key?{authorization:`Bearer ${key}`}:{})},signal:AbortSignal.timeout(15000)});
+    const body=await safeJson(response);
+    if(!response.ok)return{signals:[],health:{ok:false,status:response.status,error:body?.error||body?.message||''}};
+    const rows=Array.isArray(body)?body:findArrayByKey(body,['jobs','bounties','grants','listings','data','items','results']);
+    const signals=rows.slice(0,limit).map(raw=>normalizeOpportunity(source,{
+      ...raw,
+      externalId:raw.id||raw.jobId||raw.job_id||raw.slug||raw.uuid,
+      title:raw.title||raw.name||`${source} opportunity`,
+      description:raw.description||raw.brief||raw.summary||raw.requirements||raw.title||'',
+      budgetUsd:Number(raw.budgetUsd??raw.rewardUsd??raw.reward??raw.amount??raw.price??raw.budget??0),
+      status:raw.status||'open',
+      url:raw.url||raw.link||'',
+      claimMode:defaults.claimMode||'watchlist_only'
+    },defaults)).filter(x=>x.externalId);
+    return{signals,health:{ok:true,count:signals.length,configured:true,mode:defaults.claimMode||'watchlist_only'}};
+  }catch(error){return{signals:[],health:{ok:false,error:String(error?.message||error).slice(0,180)}}}
 }
 
 function extractDeliverableLink(deliverable){

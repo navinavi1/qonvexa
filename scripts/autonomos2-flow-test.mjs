@@ -33,7 +33,7 @@ try{
   assert.equal(cycle.claimed,1);
   assert.equal(cycle.delivered,1);
   const snap=await runtime.snapshot();
-  assert.equal(snap.version,'4.0.0');
+  assert.equal(snap.version,'7.0.0');
   assert.equal(snap.metrics.claimedJobs,1);
   assert.equal(snap.metrics.deliveredJobs,1);
   assert.equal(snap.metrics.paidJobs,1);
