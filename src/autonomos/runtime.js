@@ -150,6 +150,11 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
     const migrated=jobRegistry.migrateLegacy({handledKeys:[...handled],jobs:store.readNdjson('jobs.ndjson',0)});
     store.writeJson('job-registry-migration-v71.json',{...migrated,at:new Date().toISOString()});
   }
+  const registryPolicyRepair=store.readJson('job-registry-policy-repair-v72.json',null);
+  if(!registryPolicyRepair){
+    const repaired=jobRegistry.rescueOverbroadPolicyTombstones();
+    store.writeJson('job-registry-policy-repair-v72.json',{...repaired,at:new Date().toISOString()});
+  }
   const settledTx = new Set(store.readJson('settled-transactions.json', []));
   // Tracks failed claim attempts per opportunity so transient errors (timeouts, 5xx,
   // network blips) can be retried on a later cycle instead of the opportunity being
@@ -454,7 +459,7 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
       }
       setAgentMetric('opportunity-radar',{tasks:1});
       updateT2000QualificationHealth(normalized);
-      setAgent('opportunity-radar','working');state.marketSummary=summarizeOpportunities(normalized);state.marketFunnel=buildMarketFunnel(normalized);state.marketplaceYield=buildMarketplaceYield(normalized,jobHistory,cycleLedger);setAgentMetric('opportunity-radar',{tasks:1});
+      setAgent('opportunity-radar','working');state.marketSummary=summarizeOpportunities(normalized);setAgentMetric('opportunity-radar',{tasks:1});
       setAgent('opportunity-radar','working');state.competition=competitionSnapshot(normalized);setAgentMetric('opportunity-radar',{tasks:1});
       setAgent('economics-agent','working');
       // P1 fix: slice(0,100) in raw discovery order (x402-bazaar first, then clawlancer
@@ -464,6 +469,10 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
       // never survived the slice. Now it samples per-source so every auto-claimable
       // source is represented regardless of how many x402/clawlancer signals came in.
       for(const row of normalized) applyPermanentDiscoveryDisposition(row);
+      // Derive dashboard counters only AFTER every registry disposition has been applied,
+      // so counters and queue tabs describe the same snapshot.
+      state.marketFunnel=buildMarketFunnel(normalized);
+      state.marketplaceYield=buildMarketplaceYield(normalized,jobHistory,cycleLedger);
       state.opportunityEconomics=sampleAcrossSources(normalized,['clawlancer','dealwork','t2000','superteam','clawjobs','laborx','dework','bountycaster','questbook'],60).map(x=>({source:x.source,externalId:x.externalId,title:x.title,budgetUsd:x.budgetUsd,currency:x.currency,claimMode:x.claimMode,deadline:x.deadline,observedAt:x.observedAt,capability:x.capability,outcome:x.outcome,economics:x.economics,payoutRoute:x.payoutRoute,preflight:x.preflight,candidacy:explainCandidacy(x),registry:jobRegistry.get(x)}));
       setAgentMetric('economics-agent',{tasks:1});
 
@@ -559,9 +568,9 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
     // but they are not the revenue target of this deployment. Keep seller-queue work that
     // is already assigned to us flowing (we have already accepted that obligation), while
     // refusing to claim any NEW t2000 Open Job below the dedicated floor.
-    const marketFloors={clawlancer:Number(config.clawlancerMinJobPayoutUsd||25),dealwork:Number(config.dealworkMinJobPayoutUsd||25),superteam:Number(config.superteamMinJobPayoutUsd||25)};
+    const marketFloors={clawlancer:Number(config.clawlancerMinJobPayoutUsd||10),dealwork:Number(config.dealworkMinJobPayoutUsd||10),superteam:Number(config.superteamMinJobPayoutUsd||10)};
     if(!paidAssignedT2000Order&&marketFloors[op.source]!==undefined&&Number(op.budgetUsd||0)<marketFloors[op.source])reasons.push(`${op.source}_job_below_floor:${marketFloors[op.source]}`);
-    if(op.source==='t2000'&&!paidAssignedT2000Order&&Number(op.budgetUsd||0)<Number(config.t2000MinOpenJobPayoutUsd||35))reasons.push(`t2000_open_job_below_floor:${config.t2000MinOpenJobPayoutUsd}`);
+    if(op.source==='t2000'&&!paidAssignedT2000Order&&Number(op.budgetUsd||0)<Number(config.t2000MinOpenJobPayoutUsd||10))reasons.push(`t2000_open_job_below_floor:${config.t2000MinOpenJobPayoutUsd}`);
     if(!op.capability?.executable)reasons.push(`capability_not_executable:${op.capability?.mode||'unknown'}${op.capability?.missingTools?.length?`:missing_${op.capability.missingTools.join('+')}`:''}`);
     if(!paidAssignedT2000Order&&!op.economics?.allowed)reasons.push(`economics_blocked:${op.economics?.reason||'unknown'}`);
     if(!paidAssignedT2000Order&&op.payoutRoute&&op.payoutRoute.ok===false)reasons.push(`payout_blocked:${op.payoutRoute.reason||'unknown'}`);
@@ -572,14 +581,38 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
   }
   function applyPermanentDiscoveryDisposition(op){
     const candidacy=explainCandidacy(op);
-    const permanentReason=(candidacy.reasons||[]).find(reason=>
-      /^budget_below_|_job_below_floor:|^t2000_open_job_below_floor:|^demo_or_test_opportunity$|^status_not_open:|^not_escrowed_and_escrow_required$|^economics_blocked:non_positive_profit/.test(String(reason))
-    );
-    if(permanentReason&&!String(permanentReason).startsWith('registry_blocked:')){
-      jobRegistry.markPermanent(op,{owner:'policy',reasonCode:'discovery_policy_rejection',reason:permanentReason});
+    const reasons=(candidacy.reasons||[]).map(String);
+    const competitive=['bid','competitive_submission','grant_proposal','competitive_manual','proposal_stake_required'].includes(String(op.claimMode||''));
+    const registryBlocked=reasons.find(r=>r.startsWith('registry_blocked:'));
+    if(registryBlocked)return candidacy;
+
+    // Permanent means externally final, not merely unattractive under today's policy.
+    // Floor/economics/escrow/source-policy decisions are reversible and therefore go to
+    // Policy Hold rather than the immutable Graveyard.
+    const explicitFinalStatus=reasons.find(r=>/^status_not_open:(closed|expired|cancelled|canceled|removed|rejected|filled|completed)/i.test(r));
+    const permanentReason=reasons.find(r=>/^demo_or_test_opportunity$/.test(r))||explicitFinalStatus;
+    if(permanentReason){
+      jobRegistry.markPermanent(op,{owner:'market',reasonCode:explicitFinalStatus?'market_status_final':'demo_or_test_listing',reason:permanentReason});
+      return candidacy;
+    }
+
+    const systemReason=reasons.find(r=>/capability_not_executable|payout_blocked:|auth|credential|api_key|registry_blocked:system_blocked/.test(r));
+    if(systemReason){
+      jobRegistry.markSystemBlocked(op,{reasonCode:'preflight_or_internal_capability_hold',reason:systemReason,capabilityVersion:capabilityVersion()});
+      return candidacy;
+    }
+
+    const competitiveOnly=reasons.length>0&&reasons.every(r=>/competitive_auto_submit_disabled/.test(r));
+    if(competitive&&(candidacy.isCandidate||competitiveOnly)){
+      jobRegistry.setState(op,'proposal',{failureOwner:'',reasonCode:candidacy.isCandidate?'competitive_eligible':'competitive_visible_auto_submit_off',reason:candidacy.isCandidate?'Competitive opportunity passed preflight/economics.':'Visible for scoring only; auto-submit is disabled and no work has been accepted.'});
+      return candidacy;
+    }
+
+    const reversiblePolicyReason=reasons.find(r=>/budget_below_|_job_below_floor:|t2000_open_job_below_floor:|economics_blocked:|estimated_model_cost_|not_escrowed_and_escrow_required|source_not_in_auto_claim_allowlist|status_not_open:|competitive_auto_submit_disabled/.test(r));
+    if(reversiblePolicyReason){
+      jobRegistry.markPolicyHold(op,{reasonCode:'not_eligible_current_policy',reason:reversiblePolicyReason});
     }else if(candidacy.isCandidate){
-      const competitive=['bid','competitive_submission','grant_proposal'].includes(String(op.claimMode||''));
-      jobRegistry.setState(op,competitive?'proposal':'ready',{reasonCode:competitive?'qualified_competitive_lane':'qualified_ready'});
+      jobRegistry.setState(op,competitive?'proposal':'ready',{failureOwner:'',reasonCode:competitive?'qualified_competitive_lane':'qualified_ready',reason:''});
     }
     return candidacy;
   }
@@ -593,7 +626,7 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
     if(op.source==='t2000'){
       if(budget>=Number(config.t2000PremiumOpenJobPayoutUsd||100))t2000TierBonus=100_000;
       else if(budget>=Number(config.t2000PriorityOpenJobPayoutUsd||65))t2000TierBonus=50_000;
-      else if(budget>=Number(config.t2000MinOpenJobPayoutUsd||35))t2000TierBonus=10_000;
+      else if(budget>=Number(config.t2000MinOpenJobPayoutUsd||10))t2000TierBonus=10_000;
     }
     return t2000TierBonus+Number(op.economics?.expectedProfitUsd||0)*Math.max(0.05,Number(op.outcome?.probability||0.05));
   }
@@ -938,11 +971,11 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
   function optimizeOffers(signals){const changes=[];for(const product of MACHINE_PRODUCTS){const tags=new Set(product.tags.map(x=>String(x).toLowerCase()));const comps=signals.filter(s=>Number(s.budgetUsd)>0&&(s.tags||[]).some?.(t=>tags.has(String(t).toLowerCase()))).map(s=>Number(s.budgetUsd)).filter(Number.isFinite);if(comps.length<5)continue;const marketMedian=median(comps);const current=Number(offers[product.id]?.priceUsd??product.priceUsd);const floor=Math.max(.001,product.priceUsd*.5),ceiling=Math.max(floor,product.priceUsd*4),target=Math.max(floor,Math.min(ceiling,marketMedian*.75)),maxStep=Math.max(.001,current*.1),next=round(Math.max(floor,Math.min(ceiling,current+Math.max(-maxStep,Math.min(maxStep,target-current)))));if(Math.abs(next-current)<.0005)continue;offers[product.id]={...(offers[product.id]||{}),priceUsd:next,updatedAt:new Date().toISOString(),basis:'market_median',sampleSize:comps.length};changes.push({productId:product.id,from:current,to:next,marketMedian,samples:comps.length});}if(changes.length){store.writeJson('offers.json',offers);for(const c of changes)event('price_optimized',c);}return{mode:'bounded_market_pricing',changes,at:new Date().toISOString()};}
   function boundedEvolution(signals){const bySource={};for(const s of signals)bySource[s.source]=(bySource[s.source]||0)+1;return{mode:'market_feedback',sources:bySource,at:new Date().toISOString()};}
   function marketFloor(op){
-    if(op?.source==='t2000')return Number(config.t2000MinOpenJobPayoutUsd||35);
+    if(op?.source==='t2000')return Number(config.t2000MinOpenJobPayoutUsd||10);
     if(op?.source==='clawlancer')return Number(config.clawlancerMinJobPayoutUsd||25);
     if(op?.source==='dealwork')return Number(config.dealworkMinJobPayoutUsd||25);
     if(op?.source==='superteam')return Number(config.superteamMinJobPayoutUsd||25);
-    return Number(config.minJobPayoutUsd||25);
+    return Number(config.minJobPayoutUsd||10);
   }
   function blockerBucket(reason=''){
     const r=String(reason);
@@ -962,11 +995,16 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
     const aboveFloor=paid.filter(x=>x.source==='t2000'&&x.claimMode==='already_assigned'||Number(x.budgetUsd||0)>=marketFloor(x));
     const executable=aboveFloor.filter(x=>x.capability?.executable);
     const profitable=executable.filter(x=>x.economics?.allowed);
+    // Funnel stages are strict subsets. A later stage can never be larger than an earlier
+    // stage; this fixes the misleading 17 profitable -> 151 claimable display.
+    const claimableRows=profitable.filter(x=>{
+      const c=explainCandidacy(x);
+      return !c.reasons.some(r=>/source_not_in_auto_claim_allowlist|competitive_auto_submit_disabled|not_escrowed_and_escrow_required|status_not_open|registry_blocked|payout_blocked|estimated_model_cost|capability_not_executable|budget_below_|_job_below_floor|t2000_open_job_below_floor|economics_blocked/.test(String(r)));
+    });
+    const readyRows=claimableRows.filter(x=>explainCandidacy(x).isCandidate);
     const evaluated=rows.map(x=>({row:x,c:explainCandidacy(x)}));
-    const claimable=evaluated.filter(x=>!x.c.reasons.some(r=>/source_not_in_auto_claim_allowlist|competitive_auto_submit_disabled|not_escrowed_and_escrow_required|status_not_open/.test(String(r)))).length;
-    const ready=evaluated.filter(x=>x.c.isCandidate).length;
     const blockers={};for(const {c} of evaluated)for(const reason of c.reasons){const k=blockerBucket(reason);blockers[k]=(blockers[k]||0)+1;}
-    return{rawSignals:rows.length,paidJobs:paid.length,aboveFloor:aboveFloor.length,executable:executable.length,profitable:profitable.length,claimable,ready,blockers,at:new Date().toISOString()};
+    return{rawSignals:rows.length,paidJobs:paid.length,aboveFloor:aboveFloor.length,executable:executable.length,profitable:profitable.length,claimable:claimableRows.length,ready:readyRows.length,blockers,at:new Date().toISOString()};
   }
   function buildMarketplaceYield(rows,jobs=[],ledger=[]){
     const sources=[...new Set(rows.map(x=>x.source).filter(Boolean))];
@@ -1059,7 +1097,7 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
     const h=state.connectorHealth?.t2000;
     if(!h)return;
     const open=(rows||[]).filter(op=>op.source==='t2000'&&op.claimMode!=='already_assigned');
-    const min=Number(config.t2000MinOpenJobPayoutUsd||35);
+    const min=Number(config.t2000MinOpenJobPayoutUsd||10);
     const priority=Number(config.t2000PriorityOpenJobPayoutUsd||65);
     const premium=Number(config.t2000PremiumOpenJobPayoutUsd||100);
     state.connectorHealth.t2000={...h,openFloorUsd:min,eligibleOpenCount:open.filter(op=>Number(op.budgetUsd||0)>=min).length,priorityOpenCount:open.filter(op=>Number(op.budgetUsd||0)>=priority).length,premiumOpenCount:open.filter(op=>Number(op.budgetUsd||0)>=premium).length};

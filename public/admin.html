@@ -129,19 +129,21 @@
           <article class="autonomos-stat"><small>DELIVERED</small><strong id="auto-delivered">0</strong><span>submitted work</span></article>
           <article class="autonomos-stat"><small>PAID</small><strong id="auto-paid">0</strong><span>settled payouts</span></article>
           <article class="autonomos-stat"><small>RETRY</small><strong id="auto-retry">0</strong><span>temporary failures only</span></article>
+          <article class="autonomos-stat"><small>POLICY HOLD</small><strong id="auto-policy-hold">0</strong><span>reversible filter / economics holds</span></article>
           <article class="autonomos-stat"><small>SYSTEM BLOCKED</small><strong id="auto-system-blocked">0</strong><span>our capability / execution holds</span></article>
-          <article class="autonomos-stat"><small>GRAVEYARD</small><strong id="auto-graveyard">0</strong><span>permanently hidden from agents</span></article>
+          <article class="autonomos-stat"><small>GRAVEYARD</small><strong id="auto-graveyard">0</strong><span>external final failures only</span></article>
           <span id="auto-treasury" hidden>—</span><span id="auto-children" hidden>0</span><span id="auto-opportunities" hidden>0</span><span id="auto-claimed" hidden>0</span><span id="auto-jobs" hidden>0</span><span id="auto-cycles" hidden>0</span>
         </div>
 
         <section class="admin-panel autonomos-panel autonomos-command-panel">
-          <div class="admin-panel-head"><div><small>JOB COMMAND CENTER</small><h2>Work pipeline</h2><p class="settings-note">Only the selected operational lane is shown. Graveyard is permanent by marketplace + external job ID and is never sent back to agents.</p></div><div id="autonomos-funnel" class="autonomos-funnel"></div></div>
+          <div class="admin-panel-head"><div><small>JOB COMMAND CENTER</small><h2>Work pipeline</h2><p class="settings-note">Only the selected operational lane is shown. Policy Hold is reversible; Graveyard is reserved for externally final jobs and never returns to agents.</p></div><div id="autonomos-funnel" class="autonomos-funnel"></div></div>
           <div class="autonomos-queue-tabs" role="tablist" aria-label="Job pipeline">
             <button class="autonomos-queue-tab active" data-job-tab="ready" type="button">Ready</button>
             <button class="autonomos-queue-tab" data-job-tab="new" type="button">New</button>
             <button class="autonomos-queue-tab" data-job-tab="proposal" type="button">Bid / Competitive</button>
             <button class="autonomos-queue-tab" data-job-tab="working" type="button">Working</button>
             <button class="autonomos-queue-tab" data-job-tab="retry" type="button">Retry</button>
+            <button class="autonomos-queue-tab" data-job-tab="policyHold" type="button">Policy Hold</button>
             <button class="autonomos-queue-tab" data-job-tab="systemBlocked" type="button">System Blocked</button>
             <button class="autonomos-queue-tab" data-job-tab="delivered" type="button">Delivered</button>
             <button class="autonomos-queue-tab" data-job-tab="paid" type="button">Paid</button>
@@ -195,7 +197,7 @@
         <details class="admin-panel autonomos-panel autonomos-disclosure">
           <summary><span><small>POLICIES</small><b>Autonomy & profitability rules</b></span><span>Configure →</span></summary>
           <form id="autonomos-config-form" class="admin-form autonomos-policy-form">
-            <p class="settings-note">Production defaults: global floor $25, Clawlancer $25, Dealwork $25, Superteam $25; t2000 Open Jobs $35. Demo/test jobs are rejected before claim.</p>
+            <p class="settings-note">Production defaults: global floor $10, Clawlancer $10, Dealwork $10, Superteam $10; t2000 Open Jobs $10. Policy/economics failures go to reversible Policy Hold; only externally final jobs go to Graveyard.</p>
             <label>Genesis objective<textarea name="genesisObjective" rows="3" maxlength="1000"></textarea></label>
             <div class="autonomos-form-grid">
               <label>Heartbeat, sec<input name="heartbeatSeconds" type="number" min="30" max="3600"></label><label>Fast poll, sec<input name="fastClaimPollSeconds" type="number" min="10" max="3600"></label><label>Minimum margin, %<input name="minMarginPercent" type="number" min="0" max="95" step="1"></label>

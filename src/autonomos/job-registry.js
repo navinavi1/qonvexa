@@ -3,6 +3,7 @@ import crypto from 'node:crypto';
 const TERMINAL_STATUSES=new Set(['graveyard','delivered','paid','settled','completed','expired','cancelled','rejected']);
 const OWNED_STATUSES=new Set(['bid_submitted','claimed','executing','qa','delivered','paid','settled','completed']);
 const SYSTEM_BLOCKED_STATUSES=new Set(['system_blocked','capability_hold','manual_attention']);
+const POLICY_HOLD_STATUSES=new Set(['policy_hold','not_eligible']);
 
 export class JobRegistry {
   constructor({store,maxRecords=12000}={}){
@@ -80,6 +81,30 @@ export class JobRegistry {
     this.persist();return {...this.records[identity]};
   }
 
+
+  markPolicyHold(opportunity,{reasonCode='policy_hold',reason='',owner='policy'}={}){
+    const identity=jobIdentity(opportunity);const row=this.records[identity]||this.observe(opportunity);const now=new Date().toISOString();
+    this.records[identity]={...row,status:'policy_hold',terminal:false,failureOwner:String(owner||'policy'),reasonCode:String(reasonCode).slice(0,120),reason:String(reason).slice(0,500),retryAfter:'',lastStateAt:now};
+    this.persist();return {...this.records[identity]};
+  }
+
+  rescueOverbroadPolicyTombstones(){
+    let rescued=0;const now=new Date().toISOString();
+    for(const [identity,tomb] of Object.entries(this.tombstones)){
+      if(String(tomb?.failureOwner||'')!=='policy')continue;
+      const reason=String(tomb?.reason||'');
+      const keepPermanent=/demo_or_test_opportunity|status_not_open:(?:closed|expired|cancelled|canceled|removed|rejected|filled|completed)\b/i.test(reason);
+      const wasOverbroad=/budget_below_|_job_below_floor:|t2000_open_job_below_floor:|economics_blocked:|not_escrowed_and_escrow_required|status_not_open:/i.test(reason);
+      if(!wasOverbroad||keepPermanent)continue;
+      delete this.tombstones[identity];
+      const row=this.records[identity]||{identity,source:tomb.source||identity.split(':')[0],externalId:tomb.externalId||identity.slice(identity.indexOf(':')+1),firstSeenAt:now,lastSeenAt:now,seenCount:1};
+      this.records[identity]={...row,status:'policy_hold',terminal:false,failureOwner:'policy',reasonCode:'rescued_from_overbroad_graveyard',reason:`Re-evaluate after v7.2 policy fix: ${reason}`.slice(0,500),closedAt:'',retryAfter:'',lastStateAt:now};
+      rescued++;
+    }
+    if(rescued){this.store.writeJson('job-tombstones.json',this.tombstones);this.persist();}
+    return {ok:true,rescued};
+  }
+
   markSystemBlocked(opportunity,{reasonCode='system_blocked',reason='',attempts=1,capabilityVersion=''}={}){
     const identity=jobIdentity(opportunity);const row=this.records[identity]||this.observe(opportunity);const now=new Date().toISOString();
     this.records[identity]={...row,status:'system_blocked',terminal:false,failureOwner:'our_system',reasonCode:String(reasonCode).slice(0,120),reason:String(reason).slice(0,500),attempts:Number(attempts||1),retryAfter:'',capabilityVersion:String(capabilityVersion||''),lastStateAt:now};
@@ -112,13 +137,13 @@ export class JobRegistry {
 
   summary(){
     const rows=Object.values(this.records),count=pred=>rows.filter(pred).length;
-    return {total:rows.length,new:count(x=>x.status==='new'),ready:count(x=>x.status==='ready'),proposal:count(x=>x.status==='proposal'),working:count(x=>['bid_submitted','claimed','executing','qa'].includes(x.status)),retry:count(x=>x.status==='retry'),systemBlocked:count(x=>SYSTEM_BLOCKED_STATUSES.has(x.status)),graveyard:Object.keys(this.tombstones).length,delivered:count(x=>x.status==='delivered'),paid:count(x=>['paid','settled','completed'].includes(x.status)),updatedAt:new Date().toISOString()};
+    return {total:rows.length,new:count(x=>x.status==='new'),ready:count(x=>x.status==='ready'),proposal:count(x=>x.status==='proposal'),working:count(x=>['bid_submitted','claimed','executing','qa'].includes(x.status)),retry:count(x=>x.status==='retry'),policyHold:count(x=>POLICY_HOLD_STATUSES.has(x.status)),systemBlocked:count(x=>SYSTEM_BLOCKED_STATUSES.has(x.status)),graveyard:Object.keys(this.tombstones).length,delivered:count(x=>x.status==='delivered'),paid:count(x=>['paid','settled','completed'].includes(x.status)),updatedAt:new Date().toISOString()};
   }
 
   queues({limit=80}={}){
     const rows=Object.values(this.records).sort((a,b)=>Date.parse(b.lastStateAt||b.lastSeenAt||0)-Date.parse(a.lastStateAt||a.lastSeenAt||0));
     const take=statuses=>rows.filter(x=>statuses.includes(x.status)).slice(0,limit).map(x=>({...x}));
-    return {new:take(['new','ready']),proposal:take(['proposal']),working:take(['bid_submitted','claimed','executing','qa']),retry:take(['retry']),systemBlocked:take(['system_blocked','capability_hold','manual_attention']),delivered:take(['delivered']),paid:take(['paid','settled','completed']),graveyard:take(['graveyard'])};
+    return {new:take(['new','ready']),proposal:take(['proposal']),working:take(['bid_submitted','claimed','executing','qa']),retry:take(['retry']),policyHold:take(['policy_hold','not_eligible']),systemBlocked:take(['system_blocked','capability_hold','manual_attention']),delivered:take(['delivered']),paid:take(['paid','settled','completed']),graveyard:take(['graveyard'])};
   }
 
   migrateLegacy({handledKeys=[],jobs=[]}={}){
@@ -161,7 +186,8 @@ export function classifyFailure(errorLike,{phase='execution'}={}){
   const text=String(errorLike?.message||errorLike||'').toLowerCase();
   if(/already[_ -]?claimed|already[_ -]?assigned|job[_ -]?taken|no longer available|not[_ -]?available|expired|closed|cancelled|listing[_ -]?removed|not[_ -]?found|http_404|http_410|http_409/.test(text))return {owner:'market',permanent:true,reasonCode:'market_job_no_longer_available'};
   if(/api[_ -]?key[_ -]?missing|unauthorized|forbidden|http_401|http_403/.test(text))return {owner:'our_system',permanent:false,reasonCode:'connector_credentials_or_auth_failure'};
-  if(/budget_below_|job_below_floor|demo_or_test|economics_blocked:non_positive_profit|not_escrowed_and_escrow_required/.test(text))return {owner:'policy',permanent:true,reasonCode:'policy_rejected_job_version'};
+  if(/demo_or_test/.test(text))return {owner:'policy',permanent:true,reasonCode:'demo_or_test_listing'};
+  if(/budget_below_|job_below_floor|economics_blocked:|not_escrowed_and_escrow_required/.test(text))return {owner:'policy',permanent:false,reasonCode:'policy_hold'};
   if(/delivery_failed:http_(404|409|410)/.test(text))return {owner:'market',permanent:true,reasonCode:'market_delivery_target_closed'};
   if(/delivery_failed:http_(400|401|403|422)/.test(text))return {owner:'our_system',permanent:false,reasonCode:'delivery_payload_or_auth_failure'};
   if(/timeout|timed out|econnreset|econnrefused|enotfound|fetch failed|network|http_429|http_5\d\d|temporar/.test(text))return {owner:'transient',permanent:false,reasonCode:'transient_market_or_network_failure'};

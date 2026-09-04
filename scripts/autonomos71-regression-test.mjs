@@ -53,9 +53,24 @@ assert.equal(result.evidence.usage.prompt_tokens,20);
 assert.equal(result.evidence.toolCostUsd,0.02);
 assert.ok(result.evidence.evidencePack,'canonical final evidence pack must be created after all phases');
 
-const migrated=normalizeConfig({platformGeneration:4,minJobPayoutUsd:10});
-assert.equal(migrated.platformGeneration,5,'legacy policy config must migrate to current generation');
-assert.equal(migrated.minJobPayoutUsd,25,'legacy $10 global floor must migrate to the $25 production floor');
+const policyOp={source:'dealwork',externalId:'policy-rescue-1',title:'Research report',description:'Research and deliver a report',budgetUsd:50,currency:'USD',claimMode:'bid'};
+registry.observe(policyOp);
+registry.markPermanent(policyOp,{owner:'policy',reasonCode:'discovery_policy_rejection',reason:'status_not_open:error'});
+assert.equal(registry.summary().graveyard,2);
+const rescued=registry.rescueOverbroadPolicyTombstones();
+assert.equal(rescued.rescued,1,'non-final policy tombstones must be rescued for re-evaluation');
+assert.equal(registry.get(policyOp).status,'policy_hold');
+assert.equal(registry.summary().policyHold,1);
+assert.equal(registry.summary().graveyard,1);
+
+const migrated=normalizeConfig({platformGeneration:5,minJobPayoutUsd:25,clawlancerMinJobPayoutUsd:25,dealworkMinJobPayoutUsd:25,superteamMinJobPayoutUsd:25,t2000MinOpenJobPayoutUsd:35,minMarginPercent:35,maxApiCostPercentOfPayout:25});
+assert.equal(migrated.platformGeneration,6,'v5 policy config must migrate to current generation');
+assert.equal(migrated.minJobPayoutUsd,10,'v5 $25 global floor must relax to the $10 production floor');
+assert.equal(migrated.clawlancerMinJobPayoutUsd,10);
+assert.equal(migrated.dealworkMinJobPayoutUsd,10);
+assert.equal(migrated.t2000MinOpenJobPayoutUsd,10);
+assert.equal(migrated.minMarginPercent,20);
+assert.equal(migrated.maxApiCostPercentOfPayout,35);
 assert.equal(migrated.autoCompetitiveSubmissions,false,'competitive auto-submit must default off');
 
 console.log('AUTONOMOS 7.1 REGRESSION: PASS');

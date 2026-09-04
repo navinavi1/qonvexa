@@ -1,0 +1,11 @@
+AutonomOS 7.2 Filter Recovery — changed files only
+
+src/autonomos/runtime.js
+src/autonomos/job-registry.js
+src/autonomos/policy-engine.js
+public/admin.html
+public/admin.js
+scripts/autonomos71-regression-test.mjs
+scripts/general-audit.mjs
+
+No repository files need to be deleted.
