@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import { planJob } from './planner.js';
 import { evaluateDeliverable } from './qa-engine.js';
 import { withAgentTrace } from './langfuse-observability.js';
+import { buildAcceptanceContract, buildPhaseAcceptanceContract, buildEvidencePack } from './acceptance-engine.js';
 
 // Which tools each specialist role is scoped to during a real handoff. A research
 // specialist never gets run_python; a build specialist never gets web_search. This is
@@ -31,18 +32,30 @@ export function distinctExecutionRoles(plan){
 export async function runHandoffChain(roles,opportunity,plan,{execute,taskAgents,jobId,onEvent}){
   let briefing='';
   const allToolCalls=[];
+  const phases=[];
+  let totalPromptTokens=0,totalCompletionTokens=0,totalToolCostUsd=0;
   let last=null;
+  const jobContract=opportunity.acceptanceContract||buildAcceptanceContract(opportunity);
   for(const role of roles){
     taskAgents?.markJobPhase(jobId,'executing',{onlyRole:role});
     onEvent('specialist_handoff',{jobId,role,briefingChars:briefing.length});
     const toolFilter=SPECIALIST_TOOLS[role]||null;
-    const phaseResult=await execute({...opportunity,__plan:plan},{toolFilter,briefing});
+    const phaseContract=buildPhaseAcceptanceContract(jobContract,role);
+    const phaseOpportunity={...opportunity,acceptanceContract:phaseContract,__phaseRole:role,__jobAcceptanceContract:jobContract};
+    const phaseResult=await execute(phaseOpportunity,{toolFilter,briefing,phaseRole:role});
     taskAgents?.markJobPhase(jobId,'done',{onlyRole:role});
-    allToolCalls.push(...(phaseResult?.evidence?.toolCalls||[]));
-    briefing=`[${role} produced]\n${String(phaseResult?.content||'').slice(0,2500)}\n[tool evidence]\n${JSON.stringify(phaseResult?.evidence?.toolCalls||[]).slice(0,2200)}`;
+    const calls=phaseResult?.evidence?.toolCalls||[];
+    allToolCalls.push(...calls);
+    totalPromptTokens+=Number(phaseResult?.evidence?.usage?.prompt_tokens||0);
+    totalCompletionTokens+=Number(phaseResult?.evidence?.usage?.completion_tokens||0);
+    totalToolCostUsd+=Number(phaseResult?.evidence?.toolCostUsd||0);
+    phases.push({role,content:String(phaseResult?.content||'').slice(0,12000),hash:phaseResult?.hash||'',toolCalls:calls,qaGates:phaseResult?.evidence?.qaGates||null,acceptance:phaseResult?.evidence?.acceptance||null});
+    briefing=`[${role} produced]\n${String(phaseResult?.content||'').slice(0,5000)}\n[tool evidence]\n${JSON.stringify(calls).slice(0,4000)}`;
     last=phaseResult;
   }
-  return {...last,evidence:{...(last?.evidence||{}),toolCalls:allToolCalls,handoffRoles:roles}};
+  const merged={...last,evidence:{...(last?.evidence||{}),usage:{prompt_tokens:totalPromptTokens,completion_tokens:totalCompletionTokens},toolCostUsd:totalToolCostUsd,toolCalls:allToolCalls,handoffRoles:roles,phases,acceptanceContract:jobContract}};
+  merged.evidence.evidencePack=buildEvidencePack({jobId,opportunity:{...opportunity,acceptanceContract:jobContract},deliverable:merged,plan});
+  return merged;
 }
 
 export async function orchestrateJob(opportunity,opts={}){
@@ -105,7 +118,7 @@ async function buildGraphRunner({llm,execute,memoryPack,taskAgents,jobId,env,abo
       const qa=await evaluateDeliverable(state.opportunity,state.deliverable,{llm,abortSignal,env});
       onEvent('qa_evaluated',{ok:qa.ok,score:qa.score,mode:qa.mode});
       if(!qa.ok)throw new Error(`qa_failed:${qa.reasons.join(',').slice(0,180)}`);
-      return{qa,deliverable:attachEvidence(state.deliverable,state.plan,qa,memoryPack.hits)};
+      return{qa,deliverable:attachEvidence(state.deliverable,state.plan,qa,memoryPack.hits,state.opportunity,jobId)};
     })
     .addEdge(START,'executor').addEdge('executor','qa').addEdge('qa',END)
     .compile(checkpointer?{checkpointer}:undefined);
@@ -126,9 +139,11 @@ async function runSequential(opportunity,plan,{llm,execute,memoryPack,taskAgents
   const qa=await evaluateDeliverable(opportunity,deliverable,{llm,abortSignal,env});
   onEvent('qa_evaluated',{ok:qa.ok,score:qa.score,mode:qa.mode});
   if(!qa.ok)throw new Error(`qa_failed:${qa.reasons.join(',').slice(0,180)}`);
-  return attachEvidence(deliverable,plan,qa,memoryPack.hits);
+  return attachEvidence(deliverable,plan,qa,memoryPack.hits,opportunity,jobId);
 }
 
-function attachEvidence(deliverable,plan,qa,memoryHits){
-  return {...deliverable,evidence:{...(deliverable.evidence||{}),plan,qa,memoryHits}};
+function attachEvidence(deliverable,plan,qa,memoryHits,opportunity,jobId){
+  const merged={...deliverable,evidence:{...(deliverable.evidence||{}),plan,qa,memoryHits}};
+  merged.evidence.evidencePack=buildEvidencePack({jobId,opportunity:{...opportunity,acceptanceContract:opportunity?.acceptanceContract||buildAcceptanceContract(opportunity)},deliverable:merged,plan,qa});
+  return merged;
 }

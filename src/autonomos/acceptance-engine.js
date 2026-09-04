@@ -57,6 +57,30 @@ export function buildAcceptanceContract(opportunity = {}) {
   };
 }
 
+
+export function buildPhaseAcceptanceContract(contract = {}, role = '') {
+  const phaseRole=String(role||'');
+  const idsByRole={
+    'research-worker':new Set(['research-grounded','sources','links']),
+    'code-worker':new Set(['implementation','verification','tests','artifact','file-format','links']),
+    'automation-worker':new Set(['implementation','verification','artifact','file-format','links']),
+    'content-worker':new Set(['sources','artifact','file-format','links'])
+  };
+  const evidenceTools={
+    'research-worker':new Set(['web_search','web_scrape','browser_task']),
+    'code-worker':new Set(['run_shell','run_python','coderabbit_review','open_pull_request','store_artifact','deploy_webhook']),
+    'automation-worker':new Set(['app_tool_search','app_action','browser_task','store_artifact']),
+    'content-worker':new Set(['store_artifact'])
+  };
+  const ids=idsByRole[phaseRole]||new Set();const tools=evidenceTools[phaseRole]||new Set();
+  const requirements=(contract.requirements||[]).filter(r=>ids.has(r.id));
+  const evidence=(contract.evidence||[]).map(e=>({...e,tools:(e.tools||[]).filter(t=>tools.has(t))})).filter(e=>e.tools?.length);
+  const artifactCapable=['code-worker','automation-worker','content-worker'].includes(phaseRole);
+  const artifacts=artifactCapable?(contract.artifacts||[]):[];
+  const mustUseTool=evidence.length>0;
+  return {...contract,phaseRole,requirements,evidence,artifacts,mustUseTool,minimumSuccessfulToolCalls:mustUseTool?1:0};
+}
+
 export function validateAcceptanceContract(contract = {}, deliverable = {}) {
   const reasons = [];
   const ev = deliverable?.evidence || {};

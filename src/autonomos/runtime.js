@@ -1,4 +1,5 @@
 import path from 'node:path';
+import fs from 'node:fs';
 import crypto from 'node:crypto';
 import { CORE_AGENTS, buildAgentState } from './agents.js';
 import { AutonomOSStore } from './store.js';
@@ -142,6 +143,13 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
     store.append('jobs.ndjson',record);
   }
   const handled = new Set(store.readJson('handled-opportunities.json', []));
+  // One-time v7.1 state migration: legacy handled jobs are classified into immutable
+  // market/policy tombstones or our-system holds before the runtime starts scanning.
+  const registryMigration=store.readJson('job-registry-migration-v71.json',null);
+  if(!registryMigration){
+    const migrated=jobRegistry.migrateLegacy({handledKeys:[...handled],jobs:store.readNdjson('jobs.ndjson',0)});
+    store.writeJson('job-registry-migration-v71.json',{...migrated,at:new Date().toISOString()});
+  }
   const settledTx = new Set(store.readJson('settled-transactions.json', []));
   // Tracks failed claim attempts per opportunity so transient errors (timeouts, 5xx,
   // network blips) can be retried on a later cycle instead of the opportunity being
@@ -218,7 +226,7 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
       taskAgents.retireOrphans([...activeJobs.keys()]);
       const metrics = calculateMetrics(ledger, jobs, opportunities, seen.size);
       return {
-        project:'AutonomOS', version:'7.0.0',
+        project:'AutonomOS', version:'7.1.0',
         runtime:{
           ...state,
           status:config.killSwitch ? 'emergency_stopped' : config.enabled ? (cycleRunning ? 'working' : 'running') : 'stopped',
@@ -226,7 +234,9 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
           queueDepth:Number(state.lastCycleSummary?.candidates||0),
           taskAgents:taskAgents.summary(),
           activeJobs:[...activeJobs.values()].map(job=>({id:job.id,source:job.source||'',externalId:job.externalId||'',title:job.title||'',productId:job.productId||'',workerId:job.workerId||'',startedAt:job.startedAt||'',etaAt:job.etaAt||'',estimatedMinutes:Number(job.estimatedMinutes||0),deadline:job.deadline||'',budgetUsd:Number(job.budgetUsd||0),currency:job.currency||'',claimMode:job.claimMode||'',escrowed:Boolean(job.escrowed)})),
-          llm:llm.status ? llm.status() : { enabled:llm.enabled, available:llm.enabled, provider:llm.provider, model:llm.model }
+          llm:llm.status ? llm.status() : { enabled:llm.enabled, available:llm.enabled, provider:llm.provider, model:llm.model },
+          jobRegistry:{summary:jobRegistry.summary(),queues:jobRegistry.queues({limit:100})},
+          incidents:buildIncidents()
         },
         config:safeConfig(config),
         treasury:{ ownerWallet:wallet, ...(state.treasury || {}), marketplaceWallets:state.marketplaceWallets||{}, allocations:metrics.allocations },
@@ -257,7 +267,7 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
       const allowed = [
         'genesisObjective','minMarginPercent','reservePercent','growthPercent','experimentPercent',
         'heartbeatSeconds','fastClaimPollSeconds','maxChildren','childSpawnConcurrencyThreshold','childTtlMinutes','autoReplication',
-        'maxApiCostPercentOfPayout','maxJobsPerCycle','maxConcurrentJobs','autoClaimJobs','requireEscrowForAutoClaim','rejectDemoAndTestJobs','minJobPayoutUsd',
+        'maxApiCostPercentOfPayout','maxJobsPerCycle','maxConcurrentJobs','autoClaimJobs','autoCompetitiveSubmissions','requireEscrowForAutoClaim','rejectDemoAndTestJobs','minJobPayoutUsd',
         'clawlancerMinJobPayoutUsd','dealworkMinJobPayoutUsd','superteamMinJobPayoutUsd','t2000MinOpenJobPayoutUsd','t2000PriorityOpenJobPayoutUsd','t2000PremiumOpenJobPayoutUsd',
         // P0 fix (external audit): maxPaidProcurementUsd defaults to 0 and was NOT in this
         // list, so even an owner who correctly set zeroSpendMode:false and
@@ -320,6 +330,37 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
       return {ok:true,released:released.released,permanentRegistryPreserved:true};
     },
 
+    async runLiveSelfTest(){
+      await syncT2000Credential().catch(()=>{});
+      const started=Date.now();
+      const result=await discoverMarketOpportunities({env,credentials,limit:10,sources:['clawlancer','dealwork','t2000','superteam','clawjobs']});
+      const sources=Object.fromEntries(Object.entries(result.health||{}).map(([id,h])=>[id,{ok:Boolean(h?.ok),disabled:Boolean(h?.disabled),mode:h?.mode||'',count:Number(h?.count||0),error:String(h?.error||'').slice(0,180)}]));
+      const report={ok:Object.values(sources).some(x=>x.ok&&!x.disabled),safe:true,claimsPerformed:false,signals:Number(result.signals?.length||0),sources,ms:Date.now()-started,at:new Date().toISOString()};
+      store.writeJson('live-self-test.json',report);event('live_self_test_completed',report);return report;
+    },
+
+    async reconcilePayments(){
+      await syncSettlements();
+      return {ok:true,settlementHealth:state.settlementHealth||{},at:new Date().toISOString()};
+    },
+
+    archiveLegacyHistory(){
+      const stamp=new Date().toISOString().replace(/[:.]/g,'-');
+      const names=['jobs.ndjson','events.ndjson','opportunities.ndjson'];
+      const archived=[];
+      for(const name of names){
+        const source=store.file(name);
+        if(!fs.existsSync(source))continue;
+        const target=store.file(`archive-${stamp}-${name}`);
+        fs.copyFileSync(source,target);
+        fs.writeFileSync(source,'',{mode:0o600});
+        archived.push(name);
+      }
+      seen.clear();persistSet('seen-opportunities.json',seen);lastJobStatus.clear();
+      event('legacy_history_archived',{archived,permanentTombstonesPreserved:true,ledgerPreserved:true});
+      return {ok:true,archived,permanentTombstonesPreserved:true,ledgerPreserved:true};
+    },
+
     t2000ClientMetadata(){ return t2000OAuth.clientMetadata(); },
     async beginT2000Connect(){
       const result=await t2000OAuth.beginConnect();
@@ -373,7 +414,7 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
       return x402.protect({req,res,product,handler:async()=>executeTrackedProduct(product,Object.fromEntries(Object.entries(req.query||{}).map(([k,v])=>[k,String(v??'')])),{paid:true,source:'x402'})});
     },
     async previewProduct(productId,query){const product=currentProduct(productId);if(!product)throw Object.assign(new Error('Unknown product.'),{status:404});return executeTrackedProduct(product,query,{paid:false,source:'admin_preview'});},
-    catalog(){return{name:'AutonomOS Machine Services',version:'7.0.0',ownerWallet:wallet,payment:x402.status(),products:currentProducts().map(p=>({...p,url:new URL(p.path,siteUrl).toString()}))};}
+    catalog(){return{name:'AutonomOS Machine Services',version:'7.1.0',ownerWallet:wallet,payment:x402.status(),products:currentProducts().map(p=>({...p,url:new URL(p.path,siteUrl).toString()}))};}
   };
 
   async function cycle(trigger){
@@ -406,11 +447,14 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
         row.jobIdentity=createJobIdentity(opportunity);
         row.intelligence=scoreOpportunity(row,learning);
         jobRegistry.observe(row,{legacyHandled:handled.has(opportunityKey(row))});
+        const registryRow=jobRegistry.get(row);
+        if(registryRow?.failureOwner==='our_system'&&registryRow?.status==='system_blocked'&&cap.executable)jobRegistry.releaseSystemBlocked(row,{capabilityVersion:capabilityVersion()});
+        row.preflight={ok:Boolean(cap.executable),requiredCapabilities:cap.requiredCapabilities||[],missingTools:cap.missingTools||[],requiresArtifact:Boolean(cap.requiresArtifact),mode:cap.mode,capabilityVersion:capabilityVersion()};
         normalized.push(row); recordOpportunity(row);
       }
       setAgentMetric('opportunity-radar',{tasks:1});
       updateT2000QualificationHealth(normalized);
-      setAgent('opportunity-radar','working');state.marketSummary=summarizeOpportunities(normalized);setAgentMetric('opportunity-radar',{tasks:1});
+      setAgent('opportunity-radar','working');state.marketSummary=summarizeOpportunities(normalized);state.marketFunnel=buildMarketFunnel(normalized);state.marketplaceYield=buildMarketplaceYield(normalized,jobHistory,cycleLedger);setAgentMetric('opportunity-radar',{tasks:1});
       setAgent('opportunity-radar','working');state.competition=competitionSnapshot(normalized);setAgentMetric('opportunity-radar',{tasks:1});
       setAgent('economics-agent','working');
       // P1 fix: slice(0,100) in raw discovery order (x402-bazaar first, then clawlancer
@@ -420,7 +464,7 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
       // never survived the slice. Now it samples per-source so every auto-claimable
       // source is represented regardless of how many x402/clawlancer signals came in.
       for(const row of normalized) applyPermanentDiscoveryDisposition(row);
-      state.opportunityEconomics=sampleAcrossSources(normalized,['clawlancer','dealwork','t2000','superteam','clawjobs','laborx','dework','bountycaster','questbook'],60).map(x=>({source:x.source,externalId:x.externalId,title:x.title,budgetUsd:x.budgetUsd,currency:x.currency,claimMode:x.claimMode,deadline:x.deadline,observedAt:x.observedAt,capability:x.capability,outcome:x.outcome,economics:x.economics,payoutRoute:x.payoutRoute,candidacy:explainCandidacy(x),registry:jobRegistry.get(x)}));
+      state.opportunityEconomics=sampleAcrossSources(normalized,['clawlancer','dealwork','t2000','superteam','clawjobs','laborx','dework','bountycaster','questbook'],60).map(x=>({source:x.source,externalId:x.externalId,title:x.title,budgetUsd:x.budgetUsd,currency:x.currency,claimMode:x.claimMode,deadline:x.deadline,observedAt:x.observedAt,capability:x.capability,outcome:x.outcome,economics:x.economics,payoutRoute:x.payoutRoute,preflight:x.preflight,candidacy:explainCandidacy(x),registry:jobRegistry.get(x)}));
       setAgentMetric('economics-agent',{tasks:1});
 
       setAgent('economics-agent','working');state.offerOptimization=optimizeOffers(normalized.filter(x=>x.source==='x402-bazaar'));setAgentMetric('economics-agent',{tasks:1});
@@ -490,13 +534,13 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
     const registryBlock=!paidAssignedT2000Order?jobRegistry.blockReason(op):null;
     if(registryBlock)reasons.push(`registry_blocked:${registryBlock.status}:${registryBlock.reasonCode}`);
     const attempt=claimAttempts[key];
-    if(!paidAssignedT2000Order&&attempt&&Date.now()-Date.parse(attempt.lastAttemptAt||0)<CLAIM_RETRY_BACKOFF_MS)reasons.push('recent_claim_attempt_still_in_backoff');
+    if(!paidAssignedT2000Order&&attempt&&Date.now()-Date.parse(attempt.lastAttemptAt||0)<retryDelayMs(CLAIM_RETRY_BACKOFF_MS,Number(attempt.count||1),6*60*60_000))reasons.push('recent_claim_attempt_still_in_backoff');
     if(paidAssignedT2000Order){
       const executionAttempt=executionAttempts[key];
       if(executionAttempt&&Number(executionAttempt.count||0)>=MAX_EXECUTION_ATTEMPTS)reasons.push(`assigned_execution_retry_limit_reached:${MAX_EXECUTION_ATTEMPTS}`);
-      else if(executionAttempt&&Date.now()-Date.parse(executionAttempt.lastAttemptAt||0)<EXECUTION_RETRY_BACKOFF_MS)reasons.push('assigned_execution_retry_backoff');
+      else if(executionAttempt&&Date.now()-Date.parse(executionAttempt.lastAttemptAt||0)<retryDelayMs(EXECUTION_RETRY_BACKOFF_MS,Number(executionAttempt.count||1),24*60*60_000))reasons.push('assigned_execution_retry_backoff');
     }
-    if(!['clawlancer','t2000','dealwork','superteam'].includes(op.source))reasons.push('source_not_in_auto_claim_allowlist');
+    if(!['clawlancer','t2000','dealwork'].includes(op.source) && !(op.source==='superteam'&&config.autoCompetitiveSubmissions))reasons.push(op.source==='superteam'?'competitive_auto_submit_disabled':'source_not_in_auto_claim_allowlist');
     if(!paidAssignedT2000Order&&config.rejectDemoAndTestJobs&&isDemoOrTestOpportunity(op))reasons.push('demo_or_test_opportunity');
     // Superteam Earn has no escrow concept at all (competitive submission, judged by a
     // human sponsor) — requiring escrowed:true for it would permanently block every
@@ -605,14 +649,14 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
           handled.add(key);persistSet('handled-opportunities.json',handled);
           jobRegistry.markPermanent(op,{owner:failure.owner,reasonCode:failure.reasonCode,reason:claim.reason||'claim_failed'});
         }else if(failure.owner==='our_system'){
-          jobRegistry.setState(op,'manual_attention',{failureOwner:'our_system',reasonCode:failure.reasonCode||'claim_internal_failure',reason:claim.reason||'claim_failed',attempts});
+          jobRegistry.markSystemBlocked(op,{reasonCode:failure.reasonCode||'claim_internal_failure',reason:claim.reason||'claim_failed',attempts,capabilityVersion:capabilityVersion()});
         }else{
           handled.add(key);persistSet('handled-opportunities.json',handled);
           jobRegistry.markPermanent(op,{owner:failure.owner||'market',reasonCode:'claim_retry_limit_exhausted',reason:claim.reason||'claim_failed'});
         }
       }else{
         const failure=classifyFailure(claim.reason||'claim_failed',{phase:'claim'});
-        jobRegistry.markRetry(op,{owner:failure.owner,reasonCode:failure.reasonCode,reason:claim.reason||'claim_failed',attempts,retryAfter:new Date(Date.now()+CLAIM_RETRY_BACKOFF_MS).toISOString()});
+        jobRegistry.markRetry(op,{owner:failure.owner,reasonCode:failure.reasonCode,reason:claim.reason||'claim_failed',attempts,retryAfter:new Date(Date.now()+retryDelayMs(CLAIM_RETRY_BACKOFF_MS,attempts,6*60*60_000)).toISOString()});
       }
       appendJobStatus({id:jobId,source:op.source,externalId:op.externalId,title:op.title,budgetUsd:op.budgetUsd,currency:op.currency,status:'claim_failed',attempts,terminal,at:new Date().toISOString(),reason:claim.reason||''});
       event('market_job_claim_failed',{jobId,source:op.source,externalId:op.externalId,attempts,terminal,reason:claim.reason||''});
@@ -692,8 +736,11 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
       if(failure.permanent&&failure.owner!=='our_system'){
         jobRegistry.markPermanent(op,{owner:failure.owner,reasonCode:failure.reasonCode,reason:String(error?.message||error)});
         clearInFlightJob(jobId);
+      }else if(failure.owner==='our_system'&&executionAttempts[key].count>=MAX_EXECUTION_ATTEMPTS){
+        jobRegistry.markSystemBlocked(op,{reasonCode:failure.reasonCode||'execution_retry_limit_attention',reason:String(error?.message||error),attempts:executionAttempts[key].count,capabilityVersion:capabilityVersion()});
+        writeInFlightJob(jobId,{...inFlightJobs[jobId],lastError:String(error?.message||error).slice(0,220),retryCount:executionAttempts[key].count,lastFailedAt:new Date().toISOString(),status:'system_blocked'});
       }else{
-        jobRegistry.markRetry(op,{owner:failure.owner,reasonCode:failure.reasonCode,reason:String(error?.message||error),attempts:executionAttempts[key].count,retryAfter:new Date(Date.now()+EXECUTION_RETRY_BACKOFF_MS).toISOString(),phase:'execution'});
+        jobRegistry.markRetry(op,{owner:failure.owner,reasonCode:failure.reasonCode,reason:String(error?.message||error),attempts:executionAttempts[key].count,retryAfter:new Date(Date.now()+retryDelayMs(EXECUTION_RETRY_BACKOFF_MS,executionAttempts[key].count,24*60*60_000)).toISOString(),phase:'execution'});
       }
       // Keep the durable in-flight record after claim. A restart or later recovery cycle
       // must be able to resume the already-owned job instead of silently orphaning it.
@@ -804,7 +851,7 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
       const {jobId,op,claim}=record;if(!op||!claim)continue;
       const key=opportunityKey(op);const attempt=executionAttempts[key]||{};
       if(Number(attempt.count||0)>=MAX_EXECUTION_ATTEMPTS){manualAttention++;writeInFlightJob(jobId,{...record,status:'manual_attention',manualAttentionAt:record.manualAttentionAt||new Date().toISOString()});continue;}
-      if(attempt.lastAttemptAt&&Date.now()-Date.parse(attempt.lastAttemptAt)<EXECUTION_RETRY_BACKOFF_MS)continue;
+      if(attempt.lastAttemptAt&&Date.now()-Date.parse(attempt.lastAttemptAt)<retryDelayMs(EXECUTION_RETRY_BACKOFF_MS,Number(attempt.count||1),24*60*60_000))continue;
       const worker=children.find(c=>c.id===record.workerId&&c.status==='alive')||agents.find(a=>a.id===record.workerId)||pickExternalWorker(op.capability?.skill);
       const abortController=new AbortController();const recoveredStartedAt=new Date().toISOString();setWorkerStatus(worker,'working');activeJobs.set(jobId,{id:jobId,source:op.source,externalId:op.externalId,title:op.title||'',workerId:worker.id,startedAt:recoveredStartedAt,etaAt:new Date(Date.parse(recoveredStartedAt)+estimateJobDurationMinutes(op)*60000).toISOString(),estimatedMinutes:estimateJobDurationMinutes(op),deadline:op.deadline||'',budgetUsd:Number(op.budgetUsd||0),currency:op.currency||'',claimMode:op.claimMode||'',escrowed:Boolean(op.escrowed),cancelled:false,abortController});jobRegistry.setState(op,'executing',{jobId,workerId:worker.id,recovered:true});
       event('market_job_recovery_attempt',{jobId,source:op.source,externalId:op.externalId,attempt:Number(attempt.count||0)+1});
@@ -825,7 +872,7 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
       artifactStore.putJson(`jobs/${jobId}/evidence-pack.json`, deliverable.evidence?.evidencePack || buildEvidencePack({jobId,opportunity:op,deliverable})).catch(()=>{});artifactStore.putText(`jobs/${jobId}/deliverable.md`,deliverable.content,deliverable.format||'text/markdown').catch(()=>{});
         event('market_job_delivered',{jobId,source:op.source,externalId:op.externalId,transactionId:delivery.transactionId||'',recovered:true});jobRegistry.setState(op,'delivered',{reasonCode:'delivery_accepted',transactionId:delivery.transactionId||'',deliveredAt:new Date().toISOString(),recovered:true});clearInFlightJob(jobId);delete executionAttempts[key];store.writeJson('execution-attempts.json',executionAttempts);recovered++;
       }catch(error){
-        failed++;const nextCount=Number(attempt.count||0)+1;executionAttempts[key]={count:nextCount,lastAttemptAt:new Date().toISOString(),reason:String(error?.message||error).slice(0,220)};store.writeJson('execution-attempts.json',executionAttempts);recordIfPlatformSideFailure(key,error?.message||error);const failure=classifyFailure(error,{phase:'execution'});const externalPermanent=failure.permanent&&failure.owner!=='our_system';const manual=nextCount>=MAX_EXECUTION_ATTEMPTS&&!externalPermanent;if(externalPermanent){jobRegistry.markPermanent(op,{owner:failure.owner,reasonCode:failure.reasonCode,reason:String(error?.message||error)});clearInFlightJob(jobId);}else{jobRegistry.markRetry(op,{owner:failure.owner,reasonCode:manual?'execution_retry_limit_attention':failure.reasonCode,reason:String(error?.message||error),attempts:nextCount,retryAfter:manual?'':new Date(Date.now()+EXECUTION_RETRY_BACKOFF_MS).toISOString(),phase:'execution'});writeInFlightJob(jobId,{...record,lastError:String(error?.message||error).slice(0,220),retryCount:nextCount,lastFailedAt:new Date().toISOString(),status:manual?'manual_attention':'retry_pending',...(manual?{manualAttentionAt:new Date().toISOString()}:{})});}
+        failed++;const nextCount=Number(attempt.count||0)+1;executionAttempts[key]={count:nextCount,lastAttemptAt:new Date().toISOString(),reason:String(error?.message||error).slice(0,220)};store.writeJson('execution-attempts.json',executionAttempts);recordIfPlatformSideFailure(key,error?.message||error);const failure=classifyFailure(error,{phase:'execution'});const externalPermanent=failure.permanent&&failure.owner!=='our_system';const manual=nextCount>=MAX_EXECUTION_ATTEMPTS&&!externalPermanent;if(externalPermanent){jobRegistry.markPermanent(op,{owner:failure.owner,reasonCode:failure.reasonCode,reason:String(error?.message||error)});clearInFlightJob(jobId);}else{if(manual&&failure.owner==='our_system')jobRegistry.markSystemBlocked(op,{reasonCode:failure.reasonCode||'execution_retry_limit_attention',reason:String(error?.message||error),attempts:nextCount,capabilityVersion:capabilityVersion()});else jobRegistry.markRetry(op,{owner:failure.owner,reasonCode:failure.reasonCode,reason:String(error?.message||error),attempts:nextCount,retryAfter:manual?'':new Date(Date.now()+retryDelayMs(EXECUTION_RETRY_BACKOFF_MS,nextCount,24*60*60_000)).toISOString(),phase:'execution'});writeInFlightJob(jobId,{...record,lastError:String(error?.message||error).slice(0,220),retryCount:nextCount,lastFailedAt:new Date().toISOString(),status:manual?'system_blocked':'retry_pending',...(manual?{manualAttentionAt:new Date().toISOString()}:{})});}
         appendJobStatus({id:jobId,source:op.source,externalId:op.externalId,title:op.title,budgetUsd:op.budgetUsd,currency:op.currency,status:manual?'manual_attention':'execution_failed',workerId:worker.id,error:String(error?.message||error).slice(0,300),at:new Date().toISOString(),recovered:true,retryCount:nextCount});incrementWorkerError(worker);event(manual?'market_job_manual_attention':'market_job_failed',{jobId,source:op.source,externalId:op.externalId,error:String(error?.message||error).slice(0,220),recovered:true,retryCount:nextCount});if(manual)manualAttention++;
       }finally{activeJobs.delete(jobId);setWorkerStatus(worker,'idle');}
     }
@@ -890,7 +937,53 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
 
   function optimizeOffers(signals){const changes=[];for(const product of MACHINE_PRODUCTS){const tags=new Set(product.tags.map(x=>String(x).toLowerCase()));const comps=signals.filter(s=>Number(s.budgetUsd)>0&&(s.tags||[]).some?.(t=>tags.has(String(t).toLowerCase()))).map(s=>Number(s.budgetUsd)).filter(Number.isFinite);if(comps.length<5)continue;const marketMedian=median(comps);const current=Number(offers[product.id]?.priceUsd??product.priceUsd);const floor=Math.max(.001,product.priceUsd*.5),ceiling=Math.max(floor,product.priceUsd*4),target=Math.max(floor,Math.min(ceiling,marketMedian*.75)),maxStep=Math.max(.001,current*.1),next=round(Math.max(floor,Math.min(ceiling,current+Math.max(-maxStep,Math.min(maxStep,target-current)))));if(Math.abs(next-current)<.0005)continue;offers[product.id]={...(offers[product.id]||{}),priceUsd:next,updatedAt:new Date().toISOString(),basis:'market_median',sampleSize:comps.length};changes.push({productId:product.id,from:current,to:next,marketMedian,samples:comps.length});}if(changes.length){store.writeJson('offers.json',offers);for(const c of changes)event('price_optimized',c);}return{mode:'bounded_market_pricing',changes,at:new Date().toISOString()};}
   function boundedEvolution(signals){const bySource={};for(const s of signals)bySource[s.source]=(bySource[s.source]||0)+1;return{mode:'market_feedback',sources:bySource,at:new Date().toISOString()};}
-  function summarizeOpportunities(rows){const jobs=rows.filter(x=>x.escrowed&&x.budgetUsd>0);const executable=jobs.filter(x=>x.capability?.executable);const profitable=executable.filter(x=>x.economics?.allowed);return{observed:rows.length,escrowedJobs:jobs.length,executable:executable.length,profitable:profitable.length,medianPayoutUsd:median(jobs.map(x=>x.budgetUsd)),sources:[...new Set(rows.map(x=>x.source))],at:new Date().toISOString()};}
+  function marketFloor(op){
+    if(op?.source==='t2000')return Number(config.t2000MinOpenJobPayoutUsd||35);
+    if(op?.source==='clawlancer')return Number(config.clawlancerMinJobPayoutUsd||25);
+    if(op?.source==='dealwork')return Number(config.dealworkMinJobPayoutUsd||25);
+    if(op?.source==='superteam')return Number(config.superteamMinJobPayoutUsd||25);
+    return Number(config.minJobPayoutUsd||25);
+  }
+  function blockerBucket(reason=''){
+    const r=String(reason);
+    if(/budget_below|below_floor|payout_ceiling/.test(r))return 'below_payout';
+    if(/not_escrowed/.test(r))return 'no_escrow';
+    if(/source_not|competitive_auto_submit/.test(r))return 'not_claimable';
+    if(/capability_not|missing_/.test(r))return 'capability_missing';
+    if(/registry_blocked:.*(?:graveyard|permanent|finished)|duplicate/.test(r))return 'duplicate_permanent';
+    if(/registry_blocked:.*(?:system_blocked|capability_hold|manual_attention)/.test(r))return 'system_blocked';
+    if(/economics_blocked|estimated_model_cost/.test(r))return 'economics_failed';
+    if(/auth|credential|api_key/.test(r))return 'auth_missing';
+    if(/status_not_open|expired|closed/.test(r))return 'expired_closed';
+    return 'other';
+  }
+  function buildMarketFunnel(rows){
+    const paid=rows.filter(x=>Number(x.budgetUsd||0)>0);
+    const aboveFloor=paid.filter(x=>x.source==='t2000'&&x.claimMode==='already_assigned'||Number(x.budgetUsd||0)>=marketFloor(x));
+    const executable=aboveFloor.filter(x=>x.capability?.executable);
+    const profitable=executable.filter(x=>x.economics?.allowed);
+    const evaluated=rows.map(x=>({row:x,c:explainCandidacy(x)}));
+    const claimable=evaluated.filter(x=>!x.c.reasons.some(r=>/source_not_in_auto_claim_allowlist|competitive_auto_submit_disabled|not_escrowed_and_escrow_required|status_not_open/.test(String(r)))).length;
+    const ready=evaluated.filter(x=>x.c.isCandidate).length;
+    const blockers={};for(const {c} of evaluated)for(const reason of c.reasons){const k=blockerBucket(reason);blockers[k]=(blockers[k]||0)+1;}
+    return{rawSignals:rows.length,paidJobs:paid.length,aboveFloor:aboveFloor.length,executable:executable.length,profitable:profitable.length,claimable,ready,blockers,at:new Date().toISOString()};
+  }
+  function buildMarketplaceYield(rows,jobs=[],ledger=[]){
+    const sources=[...new Set(rows.map(x=>x.source).filter(Boolean))];
+    return sources.map(source=>{
+      const rs=rows.filter(x=>x.source===source), js=jobs.filter(x=>x.source===source);
+      const paid=rs.filter(x=>Number(x.budgetUsd||0)>0),above=paid.filter(x=>Number(x.budgetUsd||0)>=marketFloor(x));
+      const executable=above.filter(x=>x.capability?.executable),profitable=executable.filter(x=>x.economics?.allowed),ready=rs.filter(x=>explainCandidacy(x).isCandidate);
+      const claimed=js.filter(x=>/claimed|bidding|executing|delivered|settled|paid/.test(String(x.status||''))).length;
+      const delivered=js.filter(x=>/delivered|settled|paid/.test(String(x.status||''))).length;
+      const paidCount=js.filter(x=>/settled|paid/.test(String(x.status||''))).length;
+      const revenues=ledger.filter(x=>x.source===source&&x.type==='revenue').reduce((n,x)=>n+Number(x.amountUsd||x.grossUsd||0),0);
+      const costs=ledger.filter(x=>x.source===source&&x.type==='cost').reduce((n,x)=>n+Number(x.amountUsd||x.costUsd||0),0);
+      return{source,signals:rs.length,paidJobs:paid.length,aboveFloor:above.length,executable:executable.length,profitable:profitable.length,ready:ready.length,claims:claimed,claimSuccessRate:claimed?Math.min(1,delivered/claimed):0,deliverySuccessRate:delivered?Math.min(1,paidCount/delivered):0,paidCount,revenueUsd:round(revenues),costUsd:round(costs),netUsd:round(revenues-costs),medianPayoutUsd:median(paid.map(x=>Number(x.budgetUsd||0))),lastUsefulJob:ready[0]?.observedAt||'',lastPaidJob:js.find(x=>/settled|paid/.test(String(x.status||'')))?.at||''};
+    });
+  }
+  function summarizeOpportunities(rows){const jobs=rows.filter(x=>Number(x.budgetUsd)>0);const executable=jobs.filter(x=>x.capability?.executable);const profitable=executable.filter(x=>x.economics?.allowed);return{observed:rows.length,escrowedJobs:rows.filter(x=>x.escrowed&&x.budgetUsd>0).length,paidJobs:jobs.length,executable:executable.length,profitable:profitable.length,medianPayoutUsd:median(jobs.map(x=>x.budgetUsd)),sources:[...new Set(rows.map(x=>x.source))],at:new Date().toISOString()};}
+  function retryDelayMs(baseMs,attempt,maxMs){return Math.min(Number(maxMs||baseMs),Math.max(Number(baseMs||0),Number(baseMs||0)*Math.pow(2,Math.max(0,Number(attempt||1)-1))));}
   function competitionSnapshot(rows){const prices=rows.map(x=>Number(x.budgetUsd)).filter(x=>Number.isFinite(x)&&x>0);return{samples:prices.length,minPayoutUsd:prices.length?Math.min(...prices):0,maxPayoutUsd:prices.length?Math.max(...prices):0,medianPayoutUsd:median(prices),at:new Date().toISOString()};}
 
   // Legacy persistent child-agent autoscaling was removed in v13. The only execution
@@ -938,12 +1031,15 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
         throw new Error(`qa_required_format_mismatch:${requiredFormat}`);
       }
     }
+    const finalContract=op.acceptanceContract||buildAcceptanceContract(op);
+    const acceptance=validateAcceptanceContract(finalContract,d);
+    if(!acceptance.ok)throw new Error(`acceptance_contract_failed:${acceptance.reasons.join(',').slice(0,180)}`);
     return true;
   }
   function setAgent(id,status){const a=agents.find(x=>x.id===id);if(!a)return;a.status=status;if(status==='working')a.lastActiveAt=new Date().toISOString();}
   function setAgentMetric(id,{tasks=0,revenue=0,cost=0}={}){const a=agents.find(x=>x.id===id);if(!a)return;a.tasksCompleted+=Number(tasks||0);a.revenueUsd=round(a.revenueUsd+Number(revenue||0));a.costUsd=round(a.costUsd+Number(cost||0));a.lastActiveAt=new Date().toISOString();persistAgents();}
   function incrementAgentError(id){const a=agents.find(x=>x.id===id);if(!a)return;a.errors+=1;a.lastActiveAt=new Date().toISOString();persistAgents();}
-  function calculateMetrics(ledger,jobs,opportunities,totalUniqueOpportunities){const dayAgo=Date.now()-86400000;const costEntries=ledger.filter(x=>x.type==='cost');const revenue=ledger.filter(x=>x.type==='revenue'&&!x.testnet).reduce((s,x)=>s+Number(x.amountUsd||0),0);const cost=costEntries.reduce((s,x)=>s+Number(x.amountUsd||0),0);const r24=ledger.filter(x=>x.type==='revenue'&&!x.testnet&&Date.parse(x.at||0)>=dayAgo).reduce((s,x)=>s+Number(x.amountUsd||0),0);const c24=costEntries.filter(x=>Date.parse(x.at||0)>=dayAgo).reduce((s,x)=>s+Number(x.amountUsd||0),0);const latestByJob=latestStatuses(jobs);const statuses=Object.values(latestByJob).map(x=>x.status);return{totalRevenueUsd:round(revenue),totalCostUsd:round(cost),netProfitUsd:round(revenue-cost),revenue24hUsd:round(r24),cost24hUsd:round(c24),net24hUsd:round(r24-c24),completedJobs:statuses.filter(x=>['settled','paid','completed'].includes(x)).length,failedJobs:statuses.filter(x=>String(x).includes('failed')).length,claimedJobs:statuses.filter(x=>['claimed','bidding','bid_submitted','delivered','settled','paid'].includes(x)).length,deliveredJobs:statuses.filter(x=>['delivered','settled','paid'].includes(x)).length,paidJobs:ledger.filter(x=>x.type==='revenue'&&!x.testnet).length,opportunitiesFound:Number(totalUniqueOpportunities??opportunities.length),activeAgents:agents.filter(x=>x.status==='working').length,activeChildren:children.filter(x=>x.status==='alive').length,allocations:allocateRevenue(Math.max(0,revenue-cost),config),
+  function calculateMetrics(ledger,jobs,opportunities,totalUniqueOpportunities){const dayAgo=Date.now()-86400000;const weekAgo=Date.now()-7*86400000;const costEntries=ledger.filter(x=>x.type==='cost');const revenueEntries=ledger.filter(x=>x.type==='revenue'&&!x.testnet);const revenue=revenueEntries.reduce((s,x)=>s+Number(x.amountUsd||0),0);const cost=costEntries.reduce((s,x)=>s+Number(x.amountUsd||0),0);const r24=revenueEntries.filter(x=>Date.parse(x.at||0)>=dayAgo).reduce((s,x)=>s+Number(x.amountUsd||0),0);const c24=costEntries.filter(x=>Date.parse(x.at||0)>=dayAgo).reduce((s,x)=>s+Number(x.amountUsd||0),0);const r7=revenueEntries.filter(x=>Date.parse(x.at||0)>=weekAgo).reduce((s,x)=>s+Number(x.amountUsd||0),0);const c7=costEntries.filter(x=>Date.parse(x.at||0)>=weekAgo).reduce((s,x)=>s+Number(x.amountUsd||0),0);const latestByJob=latestStatuses(jobs);const statuses=Object.values(latestByJob).map(x=>x.status);return{totalRevenueUsd:round(revenue),totalCostUsd:round(cost),netProfitUsd:round(revenue-cost),revenue24hUsd:round(r24),cost24hUsd:round(c24),net24hUsd:round(r24-c24),revenue7dUsd:round(r7),cost7dUsd:round(c7),net7dUsd:round(r7-c7),completedJobs:statuses.filter(x=>['settled','paid','completed'].includes(x)).length,failedJobs:statuses.filter(x=>String(x).includes('failed')).length,claimedJobs:statuses.filter(x=>['claimed','bidding','bid_submitted','delivered','settled','paid'].includes(x)).length,deliveredJobs:statuses.filter(x=>['delivered','settled','paid'].includes(x)).length,paidJobs:ledger.filter(x=>x.type==='revenue'&&!x.testnet).length,opportunitiesFound:Number(totalUniqueOpportunities??opportunities.length),activeAgents:agents.filter(x=>x.status==='working').length,activeChildren:children.filter(x=>x.status==='alive').length,allocations:allocateRevenue(Math.max(0,revenue-cost),config),
     // Diagnostic only: if lastCostEntryAt is recent (matches recent job failures) but
     // cost24hUsd still shows $0, the bug is in the 24h aggregation. If lastCostEntryAt is
     // old/empty despite recent failed jobs, recordCost() is not being reached for them —
@@ -1008,6 +1104,17 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
     finally{fastCycleRunning=false;}
   }
   function capabilityContext(){return{llmEnabled:Boolean(llm.available??llm.enabled),hasGithubPrTool:Boolean(env.GITHUB_TOKEN),hasShellTool:Boolean(env.E2B_API_KEY),hasBrowserTool:Boolean(env.BROWSERBASE_API_KEY&&env.BROWSERBASE_PROJECT_ID),hasDeployTool:Boolean(env.AUTONOMOS_DEPLOY_WEBHOOK_URL),hasArtifactTool:Boolean(env.S3_ENDPOINT&&env.S3_BUCKET&&env.S3_ACCESS_KEY_ID&&env.S3_SECRET_ACCESS_KEY),hasAppTool:Boolean(env.COMPOSIO_API_KEY),hasWebSearchTool:Boolean(env.FIRECRAWL_API_KEY||env.TAVILY_API_KEY)};}
+  function capabilityVersion(){
+    return crypto.createHash('sha256').update(JSON.stringify({model:llm.model||'',firecrawl:Boolean(env.FIRECRAWL_API_KEY),tavily:Boolean(env.TAVILY_API_KEY),e2b:Boolean(env.E2B_API_KEY),browserbase:Boolean(env.BROWSERBASE_API_KEY&&env.BROWSERBASE_PROJECT_ID),composio:Boolean(env.COMPOSIO_API_KEY),github:Boolean(env.GITHUB_TOKEN),artifact:Boolean(env.S3_ENDPOINT&&env.S3_BUCKET)})).digest('hex').slice(0,16);
+  }
+  function buildIncidents(){
+    const out=[];const now=Date.now();const summary=jobRegistry.summary();
+    if(config.enabled&&Number(summary.ready||0)===0&&state.lastCycleAt&&now-Date.parse(state.lastCycleAt)>30*60_000)out.push({severity:'warning',code:'no_ready_jobs',source:'runtime',firstSeenAt:state.lastCycleAt,message:'No Ready jobs after repeated market scans.',recommendedAction:'Inspect blockers and marketplace yield.'});
+    if(llm.status&&llm.status().available===false)out.push({severity:'critical',code:'llm_circuit_open',source:'llm',message:'LLM circuit breaker is open.',recommendedAction:'Stop new claims until model health recovers.'});
+    for(const [source,h] of Object.entries(state.connectorHealth||{})){if(h&&h.ok===false)out.push({severity:'warning',code:'connector_unavailable',source,message:String(h.error||h.status||'Connector unavailable').slice(0,220),recommendedAction:'Check credentials/API health.'});}
+    if(summary.systemBlocked>0)out.push({severity:'warning',code:'system_blocked_jobs',source:'execution',message:`${summary.systemBlocked} jobs are held because of our execution/capability failures.`,recommendedAction:'Inspect System Blocked; fix capability before release.'});
+    return out.slice(0,20);
+  }
   function inferPayoutMethods(op){if(op?.source==='clawlancer')return['crypto'];if(['t2000','dealwork','superteam'].includes(op?.source))return['marketplace'];return Array.isArray(op?.supportedMethods)?op.supportedMethods:[];}
   async function mapLimit(items,limit,worker){const rows=Array.from(items||[]);const out=new Array(rows.length);let cursor=0;const runners=Array.from({length:Math.min(rows.length,Math.max(1,Number(limit||1)))},async()=>{while(true){const index=cursor++;if(index>=rows.length)return;try{out[index]=await worker(rows[index],index);}catch(error){out[index]={ok:false,error:String(error?.message||error).slice(0,220)};}}});await Promise.all(runners);return out;}
   function reschedule(){if(config.enabled&&!config.killSwitch)schedule();} function persistAgents(){store.writeJson('agents.json',agents);} function persistCore(){store.writeJson('config.json',config);store.writeJson('state.json',state);persistAgents();store.writeJson('children.json',children);store.writeJson('offers.json',offers);} function event(type,detail){const row={at:new Date().toISOString(),type,...detail};store.append('events.ndjson',row);eventBus.publish(type,row).catch(()=>{});emitOperationalLog(row,{env}).catch(()=>{});}

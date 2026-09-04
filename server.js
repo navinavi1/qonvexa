@@ -413,6 +413,20 @@ app.post('/api/admin/autonomos/retry-transient', requireAdmin, requireSameSiteMu
   res.json(autonomos.retryTransientFailures());
 });
 
+app.post('/api/admin/autonomos/archive-legacy-history', requireAdmin, requireSameSiteMutation, (_req, res) => {
+  const result=autonomos.archiveLegacyHistory();
+  logAdminEvent('autonomos_legacy_history_archived', { archived:result.archived||[] });
+  res.json(result);
+});
+
+app.post('/api/admin/autonomos/live-self-test', requireAdmin, requireSameSiteMutation, async (_req, res) => {
+  res.json(await autonomos.runLiveSelfTest());
+});
+
+app.post('/api/admin/autonomos/reconcile-payments', requireAdmin, requireSameSiteMutation, async (_req, res) => {
+  res.json(await autonomos.reconcilePayments());
+});
+
 app.post('/api/admin/autonomos/treasury/refresh', requireAdmin, requireSameSiteMutation, async (_req, res) => {
   res.json(await autonomos.refreshTreasury());
 });

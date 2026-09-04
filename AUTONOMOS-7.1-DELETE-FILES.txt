@@ -1,0 +1,5 @@
+No repository files need to be deleted for AutonomOS 7.1.
+
+Do not manually delete runtime state files from persistent storage. Use the new
+"Archive Legacy History / Start Clean V7 History" maintenance action after deployment
+if you want the live dashboard to stop showing old pre-7.1 outcomes.

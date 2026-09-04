@@ -1,0 +1,22 @@
+AutonomOS 7.1 Production Closure — changed/new files
+
+package.json
+public/admin.css
+public/admin.html
+public/admin.js
+scripts/autonomos-audit.mjs
+scripts/autonomos2-flow-test.mjs
+scripts/autonomos71-regression-test.mjs   [NEW]
+scripts/job-registry-test.mjs
+server.js
+src/autonomos/acceptance-engine.js
+src/autonomos/job-registry.js
+src/autonomos/orchestration.js
+src/autonomos/policy-engine.js
+src/autonomos/runtime.js
+
+Documentation included in this update package:
+AUTONOMOS-7.1-CHANGED-FILES.txt
+AUTONOMOS-7.1-REBUILD-REPORT.md
+AUTONOMOS-7.1-DEPLOY.md
+AUTONOMOS-7.1-DELETE-FILES.txt

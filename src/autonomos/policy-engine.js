@@ -21,8 +21,9 @@ export const DEFAULT_AUTONOMOS_CONFIG = Object.freeze({
   maxApiCostPercentOfPayout: 25,
   maxJobsPerCycle: 6,
   maxConcurrentJobs: 4,
-  platformGeneration: 4,
+  platformGeneration: 5,
   autoClaimJobs: true,
+  autoCompetitiveSubmissions: false,
   requireEscrowForAutoClaim: true,
   rejectDemoAndTestJobs: true,
   minJobPayoutUsd: 25,
@@ -51,12 +52,12 @@ export function normalizeConfig(raw = {}) {
   const cfg = { ...DEFAULT_AUTONOMOS_CONFIG, ...mergedRaw };
   if (legacy && Number(raw.maxJobsPerCycle) === 2) cfg.maxJobsPerCycle = 6;
   // Generation 4 raises the legacy penny-job defaults while preserving any owner-customized floors.
-  if (previousGeneration < 4) {
-    if (raw.minJobPayoutUsd === undefined || Number(raw.minJobPayoutUsd) === 5) cfg.minJobPayoutUsd = 25;
+  if (previousGeneration < 5) {
+    if (raw.minJobPayoutUsd === undefined || [5,10].includes(Number(raw.minJobPayoutUsd))) cfg.minJobPayoutUsd = 25;
     if (raw.clawlancerMinJobPayoutUsd === undefined || Number(raw.clawlancerMinJobPayoutUsd) === 5) cfg.clawlancerMinJobPayoutUsd = 25;
     if (raw.dealworkMinJobPayoutUsd === undefined || Number(raw.dealworkMinJobPayoutUsd) === 10) cfg.dealworkMinJobPayoutUsd = 25;
   }
-  cfg.platformGeneration = 4;
+  cfg.platformGeneration = 5;
   cfg.enabled = Boolean(cfg.enabled);
   cfg.killSwitch = Boolean(cfg.killSwitch);
   cfg.zeroSpendMode = cfg.zeroSpendMode !== false;
@@ -81,6 +82,7 @@ export function normalizeConfig(raw = {}) {
   cfg.maxJobsPerCycle = Math.round(clampNumber(cfg.maxJobsPerCycle, 1, 50, 6));
   cfg.maxConcurrentJobs = Math.round(clampNumber(cfg.maxConcurrentJobs, 1, 20, 4));
   cfg.autoClaimJobs = cfg.autoClaimJobs !== false;
+  cfg.autoCompetitiveSubmissions = Boolean(cfg.autoCompetitiveSubmissions);
   cfg.rejectDemoAndTestJobs = cfg.rejectDemoAndTestJobs !== false;
   cfg.requireEscrowForAutoClaim = cfg.requireEscrowForAutoClaim !== false;
   cfg.minJobPayoutUsd = clampNumber(cfg.minJobPayoutUsd, 0, 100000, 25);

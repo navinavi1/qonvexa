@@ -100,7 +100,7 @@
       <section class="admin-view" data-panel="autonomos">
         <div class="autonomos-hero autonomos-v7-hero">
           <div>
-            <small>AUTONOMOS 7.0 · LIVE OPERATIONS</small>
+            <small>AUTONOMOS 7.1 · PRODUCTION CLOSURE</small>
             <h1>Mission Control</h1>
             <p>Discover → qualify → claim/bid → execute → QA → deliver → settle. Permanent failures never return to agents.</p>
           </div>
@@ -110,6 +110,9 @@
             <button id="autonomos-stop" class="admin-secondary" type="button">Ⅱ Pause</button>
             <button id="autonomos-cycle" class="admin-secondary" type="button">↻ Scan new jobs</button>
             <button id="autonomos-retry-transient" class="admin-secondary" type="button" title="Retry only temporary network/market failures. Permanent Graveyard entries remain blocked.">Retry transient</button>
+            <button id="autonomos-inspect-blockers" class="admin-secondary" type="button">Inspect Blockers</button>
+            <button id="autonomos-live-self-test" class="admin-secondary" type="button">Run Live Self-Test</button>
+            <button id="autonomos-reconcile-payments" class="admin-secondary" type="button">Reconcile Payments</button>
             <button id="autonomos-emergency" class="admin-secondary autonomos-danger" type="button">Emergency stop</button>
           </div>
         </div>
@@ -120,26 +123,31 @@
           <article class="autonomos-stat"><small>ACTIVE</small><strong id="auto-agents">0</strong><span>task agents working now</span></article>
           <article class="autonomos-stat"><small>24H REVENUE</small><strong id="auto-revenue24">$0.00</strong><span>settled revenue</span></article>
           <article class="autonomos-stat"><small>24H COST</small><strong id="auto-cost24">$0.00</strong><span>model + tools</span></article>
-          <article class="autonomos-stat"><small>NET PROFIT</small><strong id="auto-net">$0.00</strong><span id="auto-net-diag">lifetime</span></article>
+          <article class="autonomos-stat"><small>NET 24H</small><strong id="auto-net24">$0.00</strong><span>revenue − cost</span></article>
+          <article class="autonomos-stat"><small>NET 7D</small><strong id="auto-net7">$0.00</strong><span>7 day result</span></article>
+          <article class="autonomos-stat"><small>LIFETIME NET</small><strong id="auto-net">$0.00</strong><span id="auto-net-diag">all time</span></article>
           <article class="autonomos-stat"><small>DELIVERED</small><strong id="auto-delivered">0</strong><span>submitted work</span></article>
           <article class="autonomos-stat"><small>PAID</small><strong id="auto-paid">0</strong><span>settled payouts</span></article>
           <article class="autonomos-stat"><small>RETRY</small><strong id="auto-retry">0</strong><span>temporary failures only</span></article>
+          <article class="autonomos-stat"><small>SYSTEM BLOCKED</small><strong id="auto-system-blocked">0</strong><span>our capability / execution holds</span></article>
           <article class="autonomos-stat"><small>GRAVEYARD</small><strong id="auto-graveyard">0</strong><span>permanently hidden from agents</span></article>
           <span id="auto-treasury" hidden>—</span><span id="auto-children" hidden>0</span><span id="auto-opportunities" hidden>0</span><span id="auto-claimed" hidden>0</span><span id="auto-jobs" hidden>0</span><span id="auto-cycles" hidden>0</span>
         </div>
 
         <section class="admin-panel autonomos-panel autonomos-command-panel">
-          <div class="admin-panel-head"><div><small>JOB COMMAND CENTER</small><h2>Work pipeline</h2><p class="settings-note">Only the selected operational lane is shown. Graveyard is permanent for the same job fingerprint and is never sent back to agents.</p></div><div id="autonomos-funnel" class="autonomos-funnel"></div></div>
+          <div class="admin-panel-head"><div><small>JOB COMMAND CENTER</small><h2>Work pipeline</h2><p class="settings-note">Only the selected operational lane is shown. Graveyard is permanent by marketplace + external job ID and is never sent back to agents.</p></div><div id="autonomos-funnel" class="autonomos-funnel"></div></div>
           <div class="autonomos-queue-tabs" role="tablist" aria-label="Job pipeline">
             <button class="autonomos-queue-tab active" data-job-tab="ready" type="button">Ready</button>
             <button class="autonomos-queue-tab" data-job-tab="new" type="button">New</button>
             <button class="autonomos-queue-tab" data-job-tab="proposal" type="button">Bid / Competitive</button>
             <button class="autonomos-queue-tab" data-job-tab="working" type="button">Working</button>
             <button class="autonomos-queue-tab" data-job-tab="retry" type="button">Retry</button>
+            <button class="autonomos-queue-tab" data-job-tab="systemBlocked" type="button">System Blocked</button>
             <button class="autonomos-queue-tab" data-job-tab="delivered" type="button">Delivered</button>
             <button class="autonomos-queue-tab" data-job-tab="paid" type="button">Paid</button>
             <button class="autonomos-queue-tab" data-job-tab="graveyard" type="button">Graveyard</button>
           </div>
+          <div class="autonomos-job-toolbar"><input id="autonomos-job-search" type="search" placeholder="Search job, market, ID, reason…" aria-label="Search jobs"></div>
           <div class="autonomos-job-table-wrap"><table class="autonomos-job-table"><thead><tr><th>Job</th><th>Market</th><th>Payout</th><th>Mode</th><th>Status</th><th>Seen / deadline</th><th>Reason</th></tr></thead><tbody id="autonomos-job-queue"></tbody></table></div>
         </section>
 
@@ -178,6 +186,7 @@
           </section>
           <section class="admin-panel autonomos-panel">
             <div class="admin-panel-head"><div><small>ACTION CENTER</small><h2>Needs attention</h2></div></div>
+            <div id="autonomos-incidents" class="autonomos-event-list"></div>
             <div id="autonomos-pending-claims" class="autonomos-event-list"></div>
             <div id="autonomos-missing" class="autonomos-event-list"></div>
           </section>
@@ -198,10 +207,20 @@
             </div>
             <div class="autonomos-form-grid autonomos-policy-checks">
               <label class="autonomos-check"><input name="zeroSpendMode" type="checkbox"><span>Zero-spend mode</span></label><label class="autonomos-check"><input name="earnedFundsOnly" type="checkbox"><span>Earned-funds-only</span></label><label class="autonomos-check"><input name="allowExternalSpending" type="checkbox"><span>Allow external spending</span></label>
-              <label class="autonomos-check"><input name="autoClaimJobs" type="checkbox"><span>Auto-claim qualified jobs</span></label><label class="autonomos-check"><input name="requireEscrowForAutoClaim" type="checkbox"><span>Require escrow for instant claims</span></label><label class="autonomos-check"><input name="rejectDemoAndTestJobs" type="checkbox"><span>Reject demo/test jobs</span></label><label class="autonomos-check"><input name="autoReplication" type="checkbox"><span>Spawn task specialists</span></label>
+              <label class="autonomos-check"><input name="autoClaimJobs" type="checkbox"><span>Auto-claim qualified jobs</span></label><label class="autonomos-check"><input name="autoCompetitiveSubmissions" type="checkbox"><span>Auto-submit competitive bounties</span></label><label class="autonomos-check"><input name="requireEscrowForAutoClaim" type="checkbox"><span>Require escrow for instant claims</span></label><label class="autonomos-check"><input name="rejectDemoAndTestJobs" type="checkbox"><span>Reject demo/test jobs</span></label><label class="autonomos-check"><input name="autoReplication" type="checkbox"><span>Spawn task specialists</span></label>
             </div>
             <button class="button" type="submit">Save policies</button><p id="autonomos-config-status" class="admin-status" role="status"></p>
           </form>
+        </details>
+
+
+        <details class="admin-panel autonomos-panel autonomos-disclosure">
+          <summary><span><small>MAINTENANCE</small><b>Safe history & recovery tools</b></span><span>Inspect →</span></summary>
+          <div class="autonomos-maintenance">
+            <p class="settings-note">Archive old live/history rows without deleting permanent job tombstones, ledger, payments, credentials or configuration.</p>
+            <button id="autonomos-archive-legacy" class="admin-secondary" type="button">Archive Legacy History / Start Clean V7 History</button>
+            <p id="autonomos-maintenance-status" class="admin-status" role="status"></p>
+          </div>
         </details>
 
         <div class="autonomos-two-col">
@@ -273,6 +292,12 @@
       <button class="button" type="submit">Save changes</button>
       <p id="edit-status" class="admin-status" role="status"></p>
     </form>
+  </dialog>
+
+  <dialog id="autonomos-job-dialog" class="admin-dialog autonomos-job-dialog">
+    <button id="autonomos-job-dialog-close" class="dialog-x" aria-label="Close">×</button>
+    <small>JOB / RUN DETAIL</small><h2 id="autonomos-job-dialog-title">Job detail</h2>
+    <div id="autonomos-job-dialog-body" class="autonomos-job-detail"></div>
   </dialog>
 
   <script src="admin.js" defer></script>
