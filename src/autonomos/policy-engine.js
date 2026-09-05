@@ -14,16 +14,21 @@ export const DEFAULT_AUTONOMOS_CONFIG = Object.freeze({
   experimentPercent: 5,
   heartbeatSeconds: 60,
   fastClaimPollSeconds: 15,
-  maxChildren: 12,
+  maxChildren: 20,
   childSpawnConcurrencyThreshold: 3,
   childTtlMinutes: 180,
   maxPaidProcurementUsd: 3,
   maxApiCostPercentOfPayout: 35,
   maxJobsPerCycle: 6,
   maxConcurrentJobs: 4,
-  platformGeneration: 6,
+  platformGeneration: 7,
   autoClaimJobs: true,
   autoCompetitiveSubmissions: false,
+  // Commissioning lane: prove the autonomous execution path on small, fully-escrowed
+  // crypto jobs before scaling up. This is intentionally limited to crypto-native sources.
+  commissioningMode: true,
+  commissioningMinPayoutUsd: 0.5,
+  cryptoOnlyEarnings: true,
   requireEscrowForAutoClaim: true,
   rejectDemoAndTestJobs: true,
   minJobPayoutUsd: 10,
@@ -51,7 +56,9 @@ export function normalizeConfig(raw = {}) {
   const previousGeneration = Number(mergedRaw.platformGeneration || (legacy ? 0 : 3));
   const cfg = { ...DEFAULT_AUTONOMOS_CONFIG, ...mergedRaw };
   if (legacy && Number(raw.maxJobsPerCycle) === 2) cfg.maxJobsPerCycle = 6;
-  // Generation 6 deliberately relaxes the v5 $25 discovery floor to $10.
+  // Generation 7 keeps the normal $10 floor but adds a bounded $0.50 commissioning lane
+  // for crypto-native escrow jobs so we can prove the end-to-end worker path safely.
+  // Generation 6 deliberately relaxed the v5 $25 discovery floor to $10.
   // The previous floor was hiding viable $10-$24 work before the agents could rank it.
   // Explicit custom values other than the v5 defaults are preserved.
   if (previousGeneration < 6) {
@@ -65,7 +72,13 @@ export function normalizeConfig(raw = {}) {
     if (raw.minMarginPercent === undefined || Number(raw.minMarginPercent) === 35) cfg.minMarginPercent = 20;
     if (raw.maxApiCostPercentOfPayout === undefined || Number(raw.maxApiCostPercentOfPayout) === 25) cfg.maxApiCostPercentOfPayout = 35;
   }
-  cfg.platformGeneration = 6;
+  if (previousGeneration < 7) {
+    if (raw.maxChildren === undefined || Number(raw.maxChildren) === 12) cfg.maxChildren = 20;
+    if (raw.commissioningMode === undefined) cfg.commissioningMode = true;
+    if (raw.commissioningMinPayoutUsd === undefined) cfg.commissioningMinPayoutUsd = 0.5;
+    if (raw.cryptoOnlyEarnings === undefined) cfg.cryptoOnlyEarnings = true;
+  }
+  cfg.platformGeneration = 7;
   cfg.enabled = Boolean(cfg.enabled);
   cfg.killSwitch = Boolean(cfg.killSwitch);
   cfg.zeroSpendMode = cfg.zeroSpendMode !== false;
@@ -82,7 +95,7 @@ export function normalizeConfig(raw = {}) {
   }
   cfg.heartbeatSeconds = Math.round(clampNumber(cfg.heartbeatSeconds, 30, 3600, 60));
   cfg.fastClaimPollSeconds = Math.round(clampNumber(cfg.fastClaimPollSeconds, 10, cfg.heartbeatSeconds, 15));
-  cfg.maxChildren = Math.round(clampNumber(cfg.maxChildren, 0, 100, 12));
+  cfg.maxChildren = Math.round(clampNumber(cfg.maxChildren, 0, 100, 20));
   cfg.childSpawnConcurrencyThreshold = Math.round(clampNumber(cfg.childSpawnConcurrencyThreshold, 2, 50, 3));
   cfg.childTtlMinutes = Math.round(clampNumber(cfg.childTtlMinutes, 5, 1440, 180));
   cfg.maxPaidProcurementUsd = clampNumber(cfg.maxPaidProcurementUsd, 0, 100000, 0);
@@ -91,6 +104,9 @@ export function normalizeConfig(raw = {}) {
   cfg.maxConcurrentJobs = Math.round(clampNumber(cfg.maxConcurrentJobs, 1, 20, 4));
   cfg.autoClaimJobs = cfg.autoClaimJobs !== false;
   cfg.autoCompetitiveSubmissions = Boolean(cfg.autoCompetitiveSubmissions);
+  cfg.commissioningMode = cfg.commissioningMode !== false;
+  cfg.commissioningMinPayoutUsd = clampNumber(cfg.commissioningMinPayoutUsd, 0.01, 10, 0.5);
+  cfg.cryptoOnlyEarnings = cfg.cryptoOnlyEarnings !== false;
   cfg.rejectDemoAndTestJobs = cfg.rejectDemoAndTestJobs !== false;
   cfg.requireEscrowForAutoClaim = cfg.requireEscrowForAutoClaim !== false;
   cfg.minJobPayoutUsd = clampNumber(cfg.minJobPayoutUsd, 0, 100000, 10);

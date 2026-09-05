@@ -58,6 +58,31 @@ try{
   assert.equal(migrationRegistry.blockReason({source:'dealwork',externalId:'done-1'})?.status,'graveyard');
   assert.equal(migrationRegistry.blockReason({source:'superteam',externalId:'ours-1'})?.status,'system_blocked');
 
+  // v7.6 production repair removes old x402 discovery pollution and rescues Dealwork
+  // buyer-funding/configuration failures from permanent Graveyard into timed Market Hold.
+  const repairStore=new AutonomOSStore(path.join(root,'repair-v76'));
+  const repairRegistry=new JobRegistry({store:repairStore});
+  const x402={source:'x402-bazaar',externalId:'https://buyer.example/tool',title:'Buyer API',budgetUsd:0.001,currency:'USDC'};
+  repairRegistry.observe(x402);repairRegistry.markSystemBlocked(x402,{reasonCode:'unsupported_unrecognized',reason:'old pollution'});
+  const unfunded={source:'dealwork',externalId:'unfunded-1',title:'Open job',budgetUsd:25,currency:'USD'};
+  repairRegistry.observe(unfunded);repairRegistry.markPermanent(unfunded,{owner:'market',reasonCode:'old_claim_failure',reason:"http_422:INSUFFICIENT_BALANCE: Job poster's wallet has insufficient funds (available 0.00)"});
+  const repaired=repairRegistry.repairV76LegacyPollution();
+  assert.ok(repaired.removedSignals>=1);assert.equal(repaired.rescuedDealwork,1);
+  assert.equal(repairRegistry.get(x402),null);
+  assert.equal(repairRegistry.get(unfunded)?.status,'policy_hold');
+  assert.equal(repairRegistry.get(unfunded)?.reasonCode,'buyer_funding_unavailable');
+  assert.equal(repairRegistry.blockReason(unfunded)?.status,'policy_hold');
+
+  // Authoritative settlement must override stale tombstones: once the marketplace
+  // proves the job paid, the registry can never rediscover it as Graveyard.
+  const paid={source:'t2000',externalId:'paid-1',title:'Settled proof',budgetUsd:0.5,currency:'USDC'};
+  repairRegistry.observe(paid);repairRegistry.markPermanent(paid,{owner:'market',reasonCode:'stale_failure',reason:'legacy stale classification'});
+  repairRegistry.markPaid(paid,{transactionId:'tx-paid-1',amountUsd:0.5,currency:'USDC'});
+  assert.equal(repairRegistry.get(paid)?.status,'paid');
+  assert.equal(repairRegistry.blockReason(paid)?.status,'paid');
+  const paidRestarted=new JobRegistry({store:repairStore});
+  assert.equal(paidRestarted.get(paid)?.status,'paid','paid state must survive restart without a stale tombstone overriding it');
+
   assert.deepEqual(classifyFailure('http_409 already claimed',{phase:'claim'}),{owner:'market',permanent:true,reasonCode:'market_job_no_longer_available'});
   assert.equal(classifyFailure('llm_empty_response',{phase:'execution'}).owner,'our_system');
   assert.equal(classifyFailure('network timeout',{phase:'claim'}).permanent,false);

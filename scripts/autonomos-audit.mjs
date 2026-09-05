@@ -58,7 +58,7 @@ await ok('profit engine enforces unit economics', () => {
 });
 
 await ok('SSRF guard blocks localhost/private targets', async () => {
-  for (const url of ['http://127.1.0.1', 'http://10.0.0.1', 'http://localhost']) {
+  for (const url of ['http://127.6.0.1', 'http://10.0.0.1', 'http://localhost']) {
     let blocked = false;
     try { await validatePublicUrl(url); } catch (error) { blocked = error instanceof ProductError; }
     assert.equal(blocked, true, `Expected ${url} to be blocked`);
@@ -156,7 +156,7 @@ await ok('runtime boots without any paid API or private key', async () => {
     assert.equal(snap.config.zeroSpendMode, false);
     assert.equal(snap.config.maxPaidProcurementUsd, 3);
     assert.equal(snap.config.privateKeysStored, false);
-    assert.equal(snap.version, '7.1.0');
+    assert.equal(snap.version, '7.6.0');
     assert.ok('opportunitiesFound' in snap.metrics);
     assert.equal(snap.runtime.status, 'stopped');
   } finally {

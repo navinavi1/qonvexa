@@ -23,8 +23,8 @@ check('Tavily is wired into web_search',/tavilySearch/.test(tools)&&/TAVILY_API_
 check('GitHub direct token can be identity-pinned',/AUTONOMOS_GITHUB_EXPECTED_LOGIN/.test(tools)&&/github_identity_mismatch/.test(tools));
 
 const runtime=read('src/autonomos/runtime.js');
-check('Trigger.dev durable dispatch is wired into main cycle',/dispatchTriggerPaidOpportunity\(opportunity/.test(runtime));
-check('Trigger.dev durable dispatch is wired into fast cycle',/dispatchTriggerPaidOpportunity\(op,env\)/.test(runtime));
+check('Trigger.dev durable dispatch is wired into main cycle',/dispatchTriggerPaidOpportunity\((?:opportunity|durableOpportunity)/.test(runtime));
+check('Trigger.dev durable dispatch is wired into fast cycle',/dispatchTriggerPaidOpportunity\((?:op|durableOp),env\)/.test(runtime));
 const triggerClient=read('src/autonomos/trigger-client.js');
 check('Trigger.dev dispatch uses SDK task trigger API',/tasks\.trigger\(/.test(triggerClient));
 check('Trigger.dev dispatch has per-opportunity idempotency',/idempotencyKey/.test(triggerClient)&&/createHash\('sha256'\)/.test(triggerClient));

@@ -219,7 +219,7 @@ async function discoverOAuth({ mcpUrl, fetchFn }) {
   try {
     const probe = await fetchWithTimeout(fetchFn, mcpUrl, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream', 'user-agent': 'AutonomOS/2.0' },
+      headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream', 'user-agent': 'AutonomOS/7.6' },
       body: JSON.stringify({ jsonrpc:'2.0', id:1, method:'initialize', params:{ protocolVersion:'2025-06-18', capabilities:{}, clientInfo:{ name:'AutonomOS', version:'2.0.0' } } })
     });
     if (probe.status === 401 || probe.status === 403) challenge = parseWwwAuthenticate(probe.headers.get('www-authenticate') || '');
@@ -280,7 +280,7 @@ async function resolveClientRegistration({ discovery, storedClient, clientMetada
     const endpoint = normalizeHttpsUrl(as.registration_endpoint, 'registration_endpoint');
     const response = await fetchWithTimeout(fetchFn, endpoint, {
       method:'POST',
-      headers:{ 'content-type':'application/json', accept:'application/json', 'user-agent':'AutonomOS/2.0' },
+      headers:{ 'content-type':'application/json', accept:'application/json', 'user-agent':'AutonomOS/7.6' },
       body:JSON.stringify(Object.fromEntries(Object.entries(clientMetadata).filter(([key])=>key!=='client_id')))
     });
     const body = await readJsonResponse(response);
@@ -301,7 +301,7 @@ async function exchangeToken({ endpoint, params, clientSecret = '', authMethod =
   const url = normalizeHttpsUrl(endpoint, 'token_endpoint');
   const body = new URLSearchParams();
   for (const [key,value] of Object.entries(params || {})) if (value !== undefined && value !== null && String(value) !== '') body.set(key, String(value));
-  const headers = { 'content-type':'application/x-www-form-urlencoded', accept:'application/json', 'user-agent':'AutonomOS/2.0' };
+  const headers = { 'content-type':'application/x-www-form-urlencoded', accept:'application/json', 'user-agent':'AutonomOS/7.6' };
   if (clientSecret && authMethod === 'client_secret_basic') {
     headers.authorization = `Basic ${Buffer.from(`${params.client_id}:${clientSecret}`).toString('base64')}`;
   } else if (clientSecret && authMethod === 'client_secret_post') {
@@ -346,7 +346,7 @@ function matchParam(header, name) {
 }
 
 async function fetchJson(fetchFn, url) {
-  const response = await fetchWithTimeout(fetchFn, url, { headers:{ accept:'application/json', 'user-agent':'AutonomOS/2.0', 'mcp-protocol-version':'2025-06-18' } });
+  const response = await fetchWithTimeout(fetchFn, url, { headers:{ accept:'application/json', 'user-agent':'AutonomOS/7.6', 'mcp-protocol-version':'2025-06-18' } });
   const body = await readJsonResponse(response);
   if (!response.ok) throw new Error(`http_${response.status}`);
   return body;

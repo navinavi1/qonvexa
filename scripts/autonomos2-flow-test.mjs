@@ -33,13 +33,36 @@ try{
   assert.equal(cycle.claimed,1);
   assert.equal(cycle.delivered,1);
   const snap=await runtime.snapshot();
-  assert.equal(snap.version,'7.1.0');
+  assert.equal(snap.version,'7.6.0');
   assert.equal(snap.metrics.claimedJobs,1);
   assert.equal(snap.metrics.deliveredJobs,1);
   assert.equal(snap.metrics.paidJobs,1);
   assert.equal(snap.metrics.totalRevenueUsd,50);
   assert.equal(snap.connectors.find(x=>x.id==='clawlancer').configured,true);
-  console.log('AutonomOS 2.0 flow PASS: discover → register → claim → execute → deliver → settle → ledger');
+
+  const autonomosDir=path.join(root,'autonomos');
+  const ledgerRows=fs.readFileSync(path.join(autonomosDir,'ledger.ndjson'),'utf8').trim().split(/\n+/).filter(Boolean).map(JSON.parse);
+  const revenueRows=ledgerRows.filter(x=>x.type==='revenue'&&x.source==='clawlancer');
+  assert.equal(revenueRows.length,1,'settlement must create exactly one revenue row');
+  assert.equal(revenueRows[0].externalId,'bounty_1','revenue must carry the external marketplace job identity');
+  assert.ok(revenueRows[0].jobId,'revenue must be linked to the internal execution job id');
+  assert.equal(revenueRows[0].registryIdentity,'clawlancer:bounty_1','revenue must be linked to the JobRegistry identity');
+  const registry=JSON.parse(fs.readFileSync(path.join(autonomosDir,'job-registry.json'),'utf8'));
+  assert.equal(registry['clawlancer:bounty_1']?.status,'paid','the same registry job must become Paid after settlement');
+  assert.equal(fs.existsSync(path.join(autonomosDir,'unresolved-settlements.json'))?Object.keys(JSON.parse(fs.readFileSync(path.join(autonomosDir,'unresolved-settlements.json'),'utf8')||'{}')).length:0,0,'a correctly mapped settlement must not remain quarantined');
+
+  // Restart against the same persistent disk and see the same marketplace settlement again.
+  // Revenue must be idempotent and the paid job must not be reclaimed/re-executed.
+  const restarted=createAutonomOS({storageDir:root,siteUrl:'https://qonvexa.co',ownerWallet:wallet,env:{AUTONOMOS_ENABLED:'false',AUTONOMOS_X402_ENABLED:'false',AUTONOMOS_OWNER_WALLET:wallet},logger:{error(){}}});
+  const second=await restarted.runCycle();
+  assert.equal(second.ok,true);
+  assert.equal(second.claimed,0,'a paid external job must never be reclaimed after restart');
+  const ledgerAfterRestart=fs.readFileSync(path.join(autonomosDir,'ledger.ndjson'),'utf8').trim().split(/\n+/).filter(Boolean).map(JSON.parse).filter(x=>x.type==='revenue'&&x.source==='clawlancer');
+  assert.equal(ledgerAfterRestart.length,1,'replaying settlement after restart must not duplicate revenue');
+  const snap2=await restarted.snapshot();
+  assert.equal(snap2.metrics.totalRevenueUsd,50,'restart must preserve the exact settled revenue total');
+  assert.equal(snap2.jobRegistry.summary.paid,1,'restart must preserve the Paid registry identity');
+  console.log('AutonomOS 2.0 flow PASS: discover → register → claim → execute → deliver → settle → ledger → restart/idempotent recovery');
 } finally {
   globalThis.fetch=realFetch;
   fs.rmSync(root,{recursive:true,force:true});

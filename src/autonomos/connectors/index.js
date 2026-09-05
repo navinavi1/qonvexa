@@ -15,6 +15,8 @@ const CONNECTOR_DEFS = Object.freeze([
   { id:'superteam', name:'Superteam Earn', kind:'jobs', description:'Solana ecosystem bounties/projects, $500-$1500+ USDC/SOL. Competitive (not escrow-guaranteed); payout requires a human to claim with claimCode.', requiredEnv:[], optionalEnv:['SUPERTEAM_HUMAN_TELEGRAM'] },
   { id:'virtuals-acp', name:'Virtuals ACP', kind:'jobs+seller', description:'Agent Commerce Protocol jobs and USDC escrow.', requiredEnv:['VIRTUALS_ACP_WALLET_ID','VIRTUALS_ACP_SIGNER'], optionalEnv:['VIRTUALS_ACP_AGENT_ID'] },
   { id:'t2000', name:'t2000', kind:'jobs+seller', description:'Sui/USDC Open Jobs + your paid Service orders via Passport Connect OAuth.', requiredEnv:[], optionalEnv:['T2000_MCP_URL'] },
+  { id:'workprotocol', name:'WorkProtocol', kind:'jobs', description:'Verified work exchange with Base/USDC escrow: discover → claim → deliver → verified → payment released.', requiredEnv:['WORKPROTOCOL_API_KEY','WORKPROTOCOL_AGENT_ID'], optionalEnv:['WORKPROTOCOL_API_URL'] },
+  { id:'moltjobs', name:'MoltJobs', kind:'competitive-jobs', description:'Agent-native USDC marketplace on Base. Requires agent API key and passing certification before bidding.', requiredEnv:['MOLTJOBS_API_KEY'], optionalEnv:['MOLTJOBS_AGENT_ID','MOLTJOBS_API_URL'] },
   { id:'olas-mech', name:'Olas Mech Marketplace', kind:'seller+discovery', description:'Agent-to-agent paid Mech services.', requiredEnv:['OLAS_MECH_API_KEY'], optionalEnv:['OLAS_MECH_ENDPOINT'] },
   { id:'nevermined', name:'Nevermined', kind:'payments', description:'Fiat + crypto agent payment facilitator and metering.', requiredEnv:['NVM_API_KEY'], optionalEnv:['NVM_PLAN_ID'] },
   { id:'openserv', name:'OpenServ', kind:'discovery', description:'Agent/workflow ecosystem; optional authenticated connector.', requiredEnv:['OPENSERV_API_KEY'], optionalEnv:[] },
@@ -57,6 +59,16 @@ export function connectorStatuses(env = process.env, x402Status = {}, persistedC
       const connected=Boolean(String(persistedCredentials?.t2000?.accessToken||'').trim());
       return { ...def, status:connected?'ready':'connect_required', configured:connected, missing:connected?[]:['Connect t2000 in the AutonomOS dashboard (Google OAuth → existing Passport).'], mode:'passport_connect_oauth' };
     }
+    if (def.id === 'workprotocol') {
+      const hasKey=Boolean(String(env.WORKPROTOCOL_API_KEY||'').trim());
+      const hasAgent=Boolean(String(env.WORKPROTOCOL_AGENT_ID||'').trim());
+      const configured=hasKey&&hasAgent;
+      return { ...def, status:configured?'ready':'needs_credentials', configured, missing:[...(!hasKey?['WORKPROTOCOL_API_KEY']:[]),...(!hasAgent?['WORKPROTOCOL_AGENT_ID']:[])], mode:'instant_escrow_claim' };
+    }
+    if (def.id === 'moltjobs') {
+      const hasKey=Boolean(String(env.MOLTJOBS_API_KEY||'').trim());
+      return { ...def, status:hasKey?'certification_check_required':'needs_credentials', configured:hasKey, missing:hasKey?[]:['MOLTJOBS_API_KEY'], mode:'certified_bid_market' };
+    }
     if (def.id === 'clawjobs') {
       const hasKey=Boolean(String(env.CLAWJOBS_API_KEY||'').trim());
       return { ...def, status:hasKey?'discovery_ready_claim_gated':'discovery_ready', configured:true, missing:hasKey?[]:['API key + stake-capable wallet required before proposals can be automated safely'], mode:'proposal_stake_required' };
@@ -82,7 +94,7 @@ export async function bootstrapMarketCredentials({ env=process.env, credentials=
       // our own address here is their documented "Custom" option: USDC pays out directly
       // to the owner's wallet on every job, automatically, no withdraw step needed at all.
       if (isEvmAddressLike(ownerWallet)) registerBody.wallet_address = ownerWallet;
-      const response=await fetch('https://clawlancer.ai/api/agents/register',{method:'POST',headers:{'content-type':'application/json','accept':'application/json','user-agent':'AutonomOS/2.0'},body:JSON.stringify(registerBody),signal:AbortSignal.timeout(15000)});
+      const response=await fetch('https://clawlancer.ai/api/agents/register',{method:'POST',headers:{'content-type':'application/json','accept':'application/json','user-agent':'AutonomOS/7.6'},body:JSON.stringify(registerBody),signal:AbortSignal.timeout(15000)});
       const body=await safeJson(response);
       if (response.ok) {
         const apiKey=body?.api_key||body?.apiKey||body?.key||body?.agent?.api_key||'';
@@ -102,15 +114,27 @@ export async function bootstrapMarketCredentials({ env=process.env, credentials=
     // Clawlancer's custodial default wallet.
     const existing=credentials?.clawlancer||{};
     const key=String(env.CLAWLANCER_API_KEY||existing.apiKey||'');
-    if (key && String(existing.walletAddress||'').toLowerCase()!==ownerWallet.toLowerCase() && !existing.walletFixAttemptedAt) {
+    const agentId=String(env.CLAWLANCER_AGENT_ID||existing.agentId||'').trim();
+    const walletMatches=String(existing.walletAddress||'').toLowerCase()===ownerWallet.toLowerCase();
+    const lastFixAttempt=Date.parse(String(existing.walletFixLastAttemptAt||0));
+    const retryWalletFix=!Number.isFinite(lastFixAttempt)||Date.now()-lastFixAttempt>=60*60_000;
+    if (key && agentId && !walletMatches && retryWalletFix) {
       try {
-        const response=await fetch('https://clawlancer.ai/api/agents/me',{method:'PATCH',headers:{'content-type':'application/json',accept:'application/json',authorization:`Bearer ${key}`,'user-agent':'AutonomOS/2.0'},body:JSON.stringify({wallet_address:ownerWallet}),signal:AbortSignal.timeout(15000)});
+        // Clawlancer's published API exposes PATCH /api/agents/{id}; do not rely on an
+        // undocumented /agents/me alias for a payout-critical operation. Failed wallet
+        // repairs are retried after a one-hour cooldown instead of being suppressed forever.
+        const response=await fetch(`https://clawlancer.ai/api/agents/${encodeURIComponent(agentId)}`,{method:'PATCH',headers:{'content-type':'application/json',accept:'application/json',authorization:`Bearer ${key}`,'user-agent':'AutonomOS/7.6'},body:JSON.stringify({wallet_address:ownerWallet}),signal:AbortSignal.timeout(15000)});
         const body=await safeJson(response);
-        const updated={...existing,walletFixAttemptedAt:new Date().toISOString()};
-        if (response.ok) { updated.walletAddress=ownerWallet; }
+        const updated={...existing,agentId,walletFixLastAttemptAt:new Date().toISOString()};
+        if (response.ok) { updated.walletAddress=ownerWallet; updated.walletVerifiedAt=new Date().toISOString(); delete updated.walletFixLastError; }
+        else updated.walletFixLastError=String(body?.error||body?.message||`http_${response.status}`).slice(0,180);
         storeCredential('clawlancer',updated); credentials.clawlancer=updated;
         health.clawlancer={ok:response.ok,walletUpdated:response.ok,status:response.ok?undefined:response.status,detail:response.ok?undefined:(body?.error||body?.message||'')};
-      } catch(error){ health.clawlancer={ok:false,error:String(error?.message||error).slice(0,180)}; }
+      } catch(error){
+        const updated={...existing,agentId,walletFixLastAttemptAt:new Date().toISOString(),walletFixLastError:String(error?.message||error).slice(0,180)};
+        storeCredential('clawlancer',updated); credentials.clawlancer=updated;
+        health.clawlancer={ok:false,error:updated.walletFixLastError};
+      }
     }
   }
   if (!String(env.DEALWORK_API_KEY||credentials?.dealwork?.apiKey||'').trim()) {
@@ -119,7 +143,7 @@ export async function bootstrapMarketCredentials({ env=process.env, credentials=
       // without one creates a NEW duplicate agent account every time credentials are lost.
       // Base it on the owner wallet (stable, unique to this deployment) rather than a random value.
       const identityKey=`autonomos-${String(env.AUTONOMOS_OWNER_WALLET||env.AUTONOMOS_AGENT_NAME||'default').toLowerCase().replace(/[^a-z0-9]/g,'').slice(0,64)||'autonomos-default'}`;
-      const response=await fetch('https://dealwork.ai/api/v1/agents/onboard',{method:'POST',headers:{'content-type':'application/json','accept':'application/json','user-agent':'AutonomOS/2.0'},body:JSON.stringify({autonomous:true,agentName:String(env.AUTONOMOS_AGENT_NAME||'AutonomOS').slice(0,48),description:'Autonomous digital-services worker: public web research, data extraction, structured writing, translation and QA. Typical turnaround: minutes.',capabilityTags:['research','writing','data','translation','automation'],identityKey}),signal:AbortSignal.timeout(15000)});
+      const response=await fetch('https://dealwork.ai/api/v1/agents/onboard',{method:'POST',headers:{'content-type':'application/json','accept':'application/json','user-agent':'AutonomOS/7.6'},body:JSON.stringify({autonomous:true,agentName:String(env.AUTONOMOS_AGENT_NAME||'AutonomOS').slice(0,48),description:'Autonomous digital-services worker: public web research, data extraction, structured writing, translation and QA. Typical turnaround: minutes.',capabilityTags:['research','writing','data','translation','automation'],identityKey}),signal:AbortSignal.timeout(15000)});
       const body=await safeJson(response);
       const data=body?.data||body;
       if (response.ok && data?.apiKey) {
@@ -136,7 +160,7 @@ export async function bootstrapMarketCredentials({ env=process.env, credentials=
   // or KYC"). We store it so the dashboard can show the owner exactly which URL to visit.
   if (!credentials?.superteam?.apiKey) {
     try {
-      const response=await fetch('https://superteam.fun/api/agents',{method:'POST',headers:{'content-type':'application/json','accept':'application/json','user-agent':'AutonomOS/2.0'},body:JSON.stringify({name:String(env.AUTONOMOS_AGENT_NAME||'AutonomOS').slice(0,48)}),signal:AbortSignal.timeout(15000)});
+      const response=await fetch('https://superteam.fun/api/agents',{method:'POST',headers:{'content-type':'application/json','accept':'application/json','user-agent':'AutonomOS/7.6'},body:JSON.stringify({name:String(env.AUTONOMOS_AGENT_NAME||'AutonomOS').slice(0,48)}),signal:AbortSignal.timeout(15000)});
       const body=await safeJson(response);
       if (response.ok && body?.apiKey) {
         const value={ apiKey:String(body.apiKey), claimCode:String(body.claimCode||''), agentId:String(body.agentId||''), username:String(body.username||''), createdAt:new Date().toISOString(), source:'auto_registration' };
@@ -156,6 +180,8 @@ export async function discoverMarketOpportunities({ env=process.env, credentials
     ['clawlancer',()=>discoverClawlancer(env,credentials,limit)],
     ['dealwork',()=>discoverDealwork(env,credentials,limit)],
     ['t2000',()=>discoverT2000(env,credentials,limit)],
+    ['workprotocol',()=>discoverWorkProtocol(env,limit)],
+    ['moltjobs',()=>discoverMoltJobs(env,limit)],
     ['superteam',()=>discoverSuperteam(credentials,limit)],
     ['clawjobs',()=>discoverClawJobs(env,limit)],
     ['laborx',()=>discoverConfiguredFeed('laborx',env.LABORX_AGENT_FEED_URL,env.LABORX_API_KEY,limit,{currency:'USDC',network:'crypto',escrowed:false,claimMode:'watchlist_only'})],
@@ -176,6 +202,7 @@ export async function claimMarketplaceJob(opportunity,{env=process.env,credentia
   if (opportunity.source==='clawlancer') return clawlancerAction('claim',opportunity,{env,credentials});
   if (opportunity.source==='dealwork') return dealworkAction('claim',opportunity,{env,credentials});
   if (opportunity.source==='t2000') return t2000Action('claim',opportunity,{env,credentials});
+  if (opportunity.source==='workprotocol') return workProtocolAction('claim',opportunity,{env});
   if (opportunity.source==='superteam') return superteamAction('claim',opportunity,{credentials});
   return {ok:false,reason:'connector_claim_not_available'};
 }
@@ -184,6 +211,7 @@ export async function deliverMarketplaceJob(opportunity,claim,deliverable,{env=p
   if (opportunity.source==='clawlancer') return clawlancerAction('deliver',opportunity,{env,credentials,claim,deliverable});
   if (opportunity.source==='dealwork') return dealworkAction('deliver',opportunity,{env,credentials,claim,deliverable});
   if (opportunity.source==='t2000') return t2000Action('deliver',opportunity,{env,credentials,claim,deliverable});
+  if (opportunity.source==='workprotocol') return workProtocolAction('deliver',opportunity,{env,claim,deliverable});
   if (opportunity.source==='superteam') return superteamAction('deliver',opportunity,{env,credentials,deliverable,recordPendingClaim});
   return {ok:false,reason:'connector_delivery_not_available'};
 }
@@ -201,6 +229,23 @@ export async function readMarketplaceWallets({env=process.env,credentials={}}={}
     try { const r=await fetch('https://dealwork.ai/api/v1/wallet/balance',{headers:auth(dwKey),signal:AbortSignal.timeout(12000)}); const body=await safeJson(r); out.dealwork={ok:r.ok,...(body?.data||body)}; }
     catch(error){ out.dealwork={ok:false,error:String(error?.message||error)}; }
   }
+  const wpKey=String(env.WORKPROTOCOL_API_KEY||'').trim();
+  const wpAgentId=String(env.WORKPROTOCOL_AGENT_ID||'').trim();
+  if(wpKey&&wpAgentId){
+    try{
+      const base=String(env.WORKPROTOCOL_API_URL||'https://workprotocol.ai').replace(/\/$/,'');
+      const r=await fetch(`${base}/api/agents/${encodeURIComponent(wpAgentId)}`,{headers:auth(wpKey),signal:AbortSignal.timeout(12000)});
+      const body=await safeJson(r);
+      const agent=body?.agent||body?.data?.agent||body?.data||body;
+      out.workprotocol={
+        ok:r.ok,
+        network:'Base',
+        address:String(agent?.walletAddress||agent?.wallet_address||agent?.payment?.walletAddress||agent?.payment?.wallet_address||''),
+        agentId:wpAgentId,
+        ...(r.ok?{}:{error:String(body?.error||body?.message||`http_${r.status}`).slice(0,180)})
+      };
+    }catch(error){out.workprotocol={ok:false,error:String(error?.message||error).slice(0,180),agentId:wpAgentId}}
+  }
   const tToken=t2000Token(env,credentials);
   if(tToken){
     try{
@@ -214,9 +259,91 @@ export async function readMarketplaceWallets({env=process.env,credentials={}}={}
   return out;
 }
 
+async function discoverWorkProtocol(env,limit){
+  const key=String(env.WORKPROTOCOL_API_KEY||'').trim();
+  const agentId=String(env.WORKPROTOCOL_AGENT_ID||'').trim();
+  const base=String(env.WORKPROTOCOL_API_URL||'https://workprotocol.ai').replace(/\/$/,'');
+  try{
+    const url=`${base}/api/jobs?status=open&min_pay=0.5&sort=newest&limit=${Math.min(100,limit)}&offset=0`;
+    const r=await fetch(url,{headers:auth(key),signal:AbortSignal.timeout(15000)});
+    const body=await safeJson(r);
+    if(!r.ok)return{signals:[],health:{ok:false,status:r.status,error:body?.error||body?.message||'workprotocol_discovery_failed'}};
+    const rows=Array.isArray(body?.jobs)?body.jobs:Array.isArray(body?.data?.jobs)?body.data.jobs:Array.isArray(body?.data)?body.data:[];
+    const signals=rows.map(raw=>normalizeOpportunity('workprotocol',{
+      ...raw,
+      id:raw.id||raw.jobId,
+      title:raw.title||raw.name,
+      description:raw.description||raw.instructions||raw.title,
+      category:raw.category||'general',
+      budgetUsd:Number(raw.paymentAmount??raw.amount??raw.reward??0),
+      currency:String(raw.paymentCurrency||raw.currency||'USDC').toUpperCase(),
+      network:String(raw.paymentRail||raw.network||'base'),
+      escrowed:true,
+      claimMode:'automatic',
+      status:raw.status||'open',
+      deadline:raw.deadline||'',
+      url:raw.jobUrl||raw.url||`${base}/jobs/${raw.id||raw.jobId||''}`,
+      acceptanceCriteria:raw.acceptanceCriteria||raw.acceptance_criteria||[],
+      requirements:raw.requirements||{},
+      workProtocolAgentId:agentId,
+      claimMode:key&&agentId?'automatic':'credentials_required'
+    },{feePercent:0,currency:'USDC',network:'base',escrowed:true,claimMode:key&&agentId?'automatic':'credentials_required',status:'open'}));
+    return{signals,health:{ok:true,configured:Boolean(key&&agentId),count:signals.length,claimReady:Boolean(key&&agentId),deliveryReady:Boolean(key&&agentId),paymentRail:'base_usdc_escrow',mode:key&&agentId?'instant_escrow_claim':'discovery_only_needs_credentials'}};
+  }catch(error){return{signals:[],health:{ok:false,error:String(error?.message||error).slice(0,180),mode:'instant_escrow_claim'}}}
+}
+
+async function discoverMoltJobs(env,limit){
+  const key=String(env.MOLTJOBS_API_KEY||'').trim();
+  const base=String(env.MOLTJOBS_API_URL||'https://api.moltjobs.io/v1').replace(/\/$/,'');
+  try{
+    const r=await fetch(`${base}/jobs?status=OPEN&limit=${Math.min(50,limit)}`,{headers:{accept:'application/json','user-agent':'AutonomOS/7.6',...(key?{authorization:`Bearer ${key}`}:{})},signal:AbortSignal.timeout(15000)});
+    const body=await safeJson(r);
+    if(!r.ok)return{signals:[],health:{ok:false,status:r.status,error:body?.error?.message||body?.message||'moltjobs_discovery_failed',mode:'certified_bid_market'}};
+    const data=body?.data??body;
+    const rows=Array.isArray(data)?data:Array.isArray(data?.jobs)?data.jobs:Array.isArray(data?.items)?data.items:[];
+    const signals=rows.map(raw=>normalizeOpportunity('moltjobs',{
+      ...raw,
+      id:raw.id||raw.jobId,
+      title:raw.title||raw.name,
+      description:raw.description||raw.brief||raw.title,
+      category:raw.vertical||raw.category||'general',
+      budgetUsd:Number(raw.budgetUsdc??raw.budgetUSDC??raw.budget??raw.amountUsdc??0),
+      currency:'USDC',network:'base',escrowed:true,claimMode:'certified_bid',status:String(raw.status||'OPEN').toLowerCase(),deadline:raw.deadline||raw.expiresAt||'',url:raw.url||`https://app.moltjobs.io/jobs/${raw.id||raw.jobId||''}`,
+      requiredCertifications:raw.requiredCertifications||raw.certifications||[]
+    },{feePercent:5,currency:'USDC',network:'base',escrowed:true,claimMode:'certified_bid',status:'open'}));
+    return{signals,health:{ok:true,configured:Boolean(key),count:signals.length,bidReady:false,claimReady:false,deliveryReady:false,settlementReady:false,certificationRequired:true,mode:'certified_bid_market',disabledForAutoBid:true,lifecycle:'discovery_only_until_full_certified_bid_assignment_submission_settlement_is_implemented'}};
+  }catch(error){return{signals:[],health:{ok:false,error:String(error?.message||error).slice(0,180),mode:'certified_bid_market'}}}
+}
+
+async function workProtocolAction(kind,opportunity,{env=process.env,claim,deliverable}={}){
+  const key=String(env.WORKPROTOCOL_API_KEY||'').trim();
+  const agentId=String(env.WORKPROTOCOL_AGENT_ID||opportunity?.raw?.workProtocolAgentId||'').trim();
+  const base=String(env.WORKPROTOCOL_API_URL||'https://workprotocol.ai').replace(/\/$/,'');
+  if(!key||!agentId)return{ok:false,reason:'workprotocol_credentials_missing'};
+  try{
+    if(kind==='claim'){
+      const r=await fetch(`${base}/api/jobs/${encodeURIComponent(opportunity.externalId)}/claim`,{method:'POST',headers:{...auth(key),'content-type':'application/json'},body:JSON.stringify({agentId}),signal:AbortSignal.timeout(20000)});
+      const body=await safeJson(r);
+      if(!r.ok)return{ok:false,reason:`http_${r.status}:${String(body?.error||body?.message||'').slice(0,140)}`,body};
+      const c=body?.claim||body?.data?.claim||body?.data||body;
+      const claimId=String(c?.id||c?.claimId||'');
+      if(!claimId)return{ok:false,reason:'workprotocol_claim_missing_id',body};
+      return{ok:true,jobId:String(opportunity.externalId),transactionId:claimId,claimId,body};
+    }
+    const claimId=String(claim?.claimId||claim?.transactionId||claim?.body?.claim?.id||'');
+    if(!claimId)return{ok:false,reason:'workprotocol_claim_id_missing'};
+    const artifactUrl=String(deliverable?.evidence?.artifactUrl||deliverable?.artifactUrl||deliverable?.evidence?.pullRequestUrl||'').trim();
+    if(!/^https:\/\//i.test(artifactUrl))return{ok:false,reason:'workprotocol_artifact_url_missing'};
+    const type=deliverable?.evidence?.pullRequestUrl?'url':'url';
+    const r=await fetch(`${base}/api/jobs/${encodeURIComponent(opportunity.externalId)}/deliver`,{method:'POST',headers:{...auth(key),'content-type':'application/json'},body:JSON.stringify({claimId,deliverable:{type,url:artifactUrl}}),signal:AbortSignal.timeout(20000)});
+    const body=await safeJson(r);
+    return r.ok?{ok:true,transactionId:claimId,claimId,body,pendingVerification:true}:{ok:false,reason:`http_${r.status}:${String(body?.error||body?.message||'').slice(0,140)}`,body};
+  }catch(error){return{ok:false,reason:String(error?.message||error).slice(0,220)}}
+}
+
 async function discoverX402(env,limit){
   const url=String(env.AUTONOMOS_BAZAAR_URL||'https://api.cdp.coinbase.com/platform/v2/x402/discovery/resources?limit=50');
-  const response=await fetch(url,{headers:{accept:'application/json','user-agent':'AutonomOS/2.0'},signal:AbortSignal.timeout(12000)});
+  const response=await fetch(url,{headers:{accept:'application/json','user-agent':'AutonomOS/7.6'},signal:AbortSignal.timeout(12000)});
   if(!response.ok) return {signals:[],health:{ok:false,status:response.status,url}};
   const body=await safeJson(response); const resources=Array.isArray(body)?body:Array.isArray(body?.items)?body.items:Array.isArray(body?.resources)?body.resources:[];
   const signals=[];
@@ -231,7 +358,7 @@ async function discoverX402(env,limit){
 async function discoverDealwork(env,credentials,limit){
   const key=String(env.DEALWORK_API_KEY||credentials?.dealwork?.apiKey||'');
   if(!key) return {signals:[],health:{ok:false,error:'dealwork_api_key_missing'}};
-  const headers={accept:'application/json','user-agent':'AutonomOS/3.0',authorization:`Bearer ${key}`};
+  const headers={accept:'application/json','user-agent':'AutonomOS/7.6',authorization:`Bearer ${key}`};
   const response=await fetch(`https://dealwork.ai/api/v1/jobs?per_page=${Math.min(50,limit)}&sort=newest`,{headers,signal:AbortSignal.timeout(12000)});
   const body=await safeJson(response); if(!response.ok) return {signals:[],health:{ok:false,status:response.status,error:body?.error?.message||body?.error||''}};
   const publicRows=Array.isArray(body?.data)?body.data:[];
@@ -256,7 +383,15 @@ async function discoverDealwork(env,credentials,limit){
   // / pollDealworkBids in runtime.js) instead of being discarded.
   const openRows=rows.filter(row=>!row.jobMode||row.jobMode==='open');
   const bidRows=rows.filter(row=>row.jobMode==='bid'&&row.biddingDeadline&&new Date(row.biddingDeadline).getTime()>Date.now());
-  const openSignals=openRows.map(row=>normalizeOpportunity('dealwork',{...row,budgetUsd:Number(row.fixedPrice??row.budget_max??row.budgetMax??row.budget_min??0)},{feePercent:10,currency:'USD',network:'stripe',escrowed:true,claimMode:'automatic',status:row.status||'open'}));
+  const openSignals=openRows.map(row=>{
+    const fixedPrice=Number(row.fixedPrice??row.fixed_price??row.budget_min??row.budgetMin??row.budget_max??row.budgetMax??0);
+    const budgetMax=Number((row.budgetMax??row.budget_max??fixedPrice)||0);
+    const maxConcurrent=Math.max(1,Number(row.maxConcurrent??row.max_concurrent??1));
+    const requiredOpenBudget=fixedPrice*maxConcurrent;
+    const invalid=Boolean(fixedPrice>0&&budgetMax>0&&requiredOpenBudget>budgetMax+1e-9);
+    const op=normalizeOpportunity('dealwork',{...row,budgetUsd:fixedPrice},{feePercent:10,currency:'USD',network:'stripe',escrowed:false,claimMode:'automatic',status:row.status||'open'});
+    return {...op,escrowOnAccept:true,marketConfiguration:{fixedPrice,budgetMax,maxConcurrent,requiredOpenBudget,invalid,reason:invalid?`budgetMax_${budgetMax}_below_fixedPrice_x_maxConcurrent_${requiredOpenBudget}`:''}};
+  });
   const bidSignals=bidRows.map(row=>normalizeOpportunity('dealwork',{...row,budgetUsd:Number(row.budgetMax??row.budget_max??row.budgetMin??row.budget_min??0)},{feePercent:10,currency:'USD',network:'stripe',escrowed:false,claimMode:'bid',status:row.status||'open'}));
   const signals=[...openSignals,...bidSignals];
   return {signals,health:{ok:true,count:signals.length,totalOpenJobs:rows.length,matchedJobs:matchedRows.length,matchingFeed:matchingOk,openMode:openSignals.length,bidMode:bidSignals.length}};
@@ -264,7 +399,7 @@ async function discoverDealwork(env,credentials,limit){
 
 async function discoverClawlancer(env,credentials,limit){
   const key=String(env.CLAWLANCER_API_KEY||credentials?.clawlancer?.apiKey||'');
-  const response=await fetch(`https://clawlancer.ai/api/listings?listing_type=BOUNTY&limit=${Math.min(100,limit)}`,{headers:{accept:'application/json','user-agent':'AutonomOS/2.0',...(key?{authorization:`Bearer ${key}`}:{})},signal:AbortSignal.timeout(12000)});
+  const response=await fetch(`https://clawlancer.ai/api/listings?listing_type=BOUNTY&limit=${Math.min(100,limit)}`,{headers:{accept:'application/json','user-agent':'AutonomOS/7.6',...(key?{authorization:`Bearer ${key}`}:{})},signal:AbortSignal.timeout(12000)});
   const body=await safeJson(response); if(!response.ok) return {signals:[],health:{ok:false,status:response.status,error:body?.error||body?.message||''}};
   const rows=Array.isArray(body)?body:Array.isArray(body?.listings)?body.listings:Array.isArray(body?.data)?body.data:[];
   const signals=rows.map(raw=>normalizeOpportunity('clawlancer',{...raw,url:raw.url||`https://clawlancer.ai/listings/${raw.id||raw.listing_id||''}`},{feePercent:2.5,currency:'USDC',network:'eip155:8453',escrowed:true,claimMode:key?'automatic':'credentials_required'})).filter(x=>x.status==='open'||x.status==='active'||x.status==='available'||!x.status);
@@ -275,7 +410,7 @@ async function discoverSuperteam(credentials,limit){
   const key=String(credentials?.superteam?.apiKey||'');
   if(!key) return {signals:[],health:{ok:false,error:'superteam_not_registered_yet'}};
   try{
-    const response=await fetch(`https://superteam.fun/api/agents/listings/live?take=${Math.min(limit,50)}`,{headers:{accept:'application/json','user-agent':'AutonomOS/2.0',authorization:`Bearer ${key}`},signal:AbortSignal.timeout(15000)});
+    const response=await fetch(`https://superteam.fun/api/agents/listings/live?take=${Math.min(limit,50)}`,{headers:{accept:'application/json','user-agent':'AutonomOS/7.6',authorization:`Bearer ${key}`},signal:AbortSignal.timeout(15000)});
     const body=await safeJson(response);
     if(!response.ok) return {signals:[],health:{ok:false,status:response.status,error:body?.error||body?.message||''}};
     const rows=findArrayByKey(body,['listings','data','items','results']);
@@ -295,7 +430,7 @@ async function discoverSuperteam(credentials,limit){
 async function discoverClawJobs(env,limit){
   try{
     const key=String(env.CLAWJOBS_API_KEY||'').trim();
-    const response=await fetch(`https://clawjobs.com/api/v1/jobs?status=open&limit=${Math.min(100,limit)}`,{headers:{accept:'application/json','user-agent':'AutonomOS/7.0',...(key?{authorization:`Bearer ${key}`}:{})},signal:AbortSignal.timeout(15000)});
+    const response=await fetch(`https://clawjobs.com/api/v1/jobs?status=open&limit=${Math.min(100,limit)}`,{headers:{accept:'application/json','user-agent':'AutonomOS/7.6',...(key?{authorization:`Bearer ${key}`}:{})},signal:AbortSignal.timeout(15000)});
     const body=await safeJson(response);
     if(!response.ok)return{signals:[],health:{ok:false,status:response.status,error:body?.error||body?.message||''}};
     const rows=Array.isArray(body)?body:findArrayByKey(body,['jobs','data','items','results']);
@@ -319,7 +454,7 @@ async function discoverConfiguredFeed(source,url,apiKey,limit,defaults={}){
   if(!/^https:\/\//i.test(endpoint))return{signals:[],health:{ok:false,error:'feed_url_must_use_https'}};
   try{
     const key=String(apiKey||'').trim();
-    const response=await fetch(endpoint,{headers:{accept:'application/json','user-agent':'AutonomOS/7.0',...(key?{authorization:`Bearer ${key}`}:{})},signal:AbortSignal.timeout(15000)});
+    const response=await fetch(endpoint,{headers:{accept:'application/json','user-agent':'AutonomOS/7.6',...(key?{authorization:`Bearer ${key}`}:{})},signal:AbortSignal.timeout(15000)});
     const body=await safeJson(response);
     if(!response.ok)return{signals:[],health:{ok:false,status:response.status,error:body?.error||body?.message||''}};
     const rows=Array.isArray(body)?body:findArrayByKey(body,['jobs','bounties','grants','listings','data','items','results']);
@@ -363,7 +498,7 @@ async function superteamAction(kind,opportunity,{env=process.env,credentials,del
     // for non-project listings, so no listing-type branch is needed here.
     const telegram=String(env.SUPERTEAM_HUMAN_TELEGRAM||'').trim();
     const payload={listingId:opportunity.externalId,link:extractDeliverableLink(deliverable),tweet:'',otherInfo:String(deliverable.content||'').slice(0,3000),eligibilityAnswers:[],ask:null,...(telegram?{telegram}:{})};
-    const response=await fetch('https://superteam.fun/api/agents/submissions/create',{method:'POST',headers:{'content-type':'application/json',accept:'application/json',authorization:`Bearer ${key}`,'user-agent':'AutonomOS/2.0'},body:JSON.stringify(payload),signal:AbortSignal.timeout(20000)});
+    const response=await fetch('https://superteam.fun/api/agents/submissions/create',{method:'POST',headers:{'content-type':'application/json',accept:'application/json',authorization:`Bearer ${key}`,'user-agent':'AutonomOS/7.6'},body:JSON.stringify(payload),signal:AbortSignal.timeout(20000)});
     const body=await safeJson(response);
     if(!response.ok)return{ok:false,reason:`http_${response.status}:${body?.error||body?.message||''}`.slice(0,200)};
     // This is the one marketplace where "delivered" genuinely does NOT mean "will be
@@ -599,7 +734,7 @@ async function dealworkAction(kind,opportunity,{env,credentials,claim,deliverabl
   }catch(error){return{ok:false,reason:String(error?.message||error).slice(0,220)}}
 }
 
-function auth(key){return{accept:'application/json','user-agent':'AutonomOS/2.0',authorization:`Bearer ${key}`}}
+function auth(key){return{accept:'application/json','user-agent':'AutonomOS/7.6',authorization:`Bearer ${key}`}}
 async function safeJson(response){try{return await response.json()}catch{return{}}}
 
 // P1 fix: submit-then-wait implementation of dealwork.ai's documented bid flow (see
@@ -657,7 +792,7 @@ function dedupe(rows){const seen=new Set();return rows.filter(row=>{const key=`$
 export function connectorDefinitions(){return CONNECTOR_DEFS.map(x=>({...x}));}
 export async function discoverPublicSignals(args){return discoverMarketOpportunities(args);}
 
-export async function syncMarketplaceTransactions({env=process.env,credentials={}}={}) {
+export async function syncMarketplaceTransactions({env=process.env,credentials={},knownJobs=[]}={}) {
   const rows=[]; const health={};
   const key=String(env.CLAWLANCER_API_KEY||credentials?.clawlancer?.apiKey||'');
   if(key){
@@ -691,6 +826,36 @@ export async function syncMarketplaceTransactions({env=process.env,credentials={
       } else health.dealwork={ok:false,status:r.status,error:body?.error?.message||body?.error||''};
     }catch(error){health.dealwork={ok:false,error:String(error?.message||error).slice(0,180)}}
   }
+  const wpKey=String(env.WORKPROTOCOL_API_KEY||'').trim();
+  const wpAgentId=String(env.WORKPROTOCOL_AGENT_ID||'').trim();
+  if(wpKey&&wpAgentId){
+    const base=String(env.WORKPROTOCOL_API_URL||'https://workprotocol.ai').replace(/\/$/,'');
+    const relevant=[];const seenJobs=new Set();
+    for(const row of [...(knownJobs||[])].reverse()){
+      if(row?.source!=='workprotocol')continue;
+      const id=String(row.externalId||'');if(!id||seenJobs.has(id))continue;
+      seenJobs.add(id);relevant.push(id);if(relevant.length>=25)break;
+    }
+    let mapped=0,checked=0;
+    for(const jobId of relevant){
+      try{
+        const r=await fetch(`${base}/api/jobs/${encodeURIComponent(jobId)}`,{headers:auth(wpKey),signal:AbortSignal.timeout(12000)});
+        const body=await safeJson(r);if(!r.ok)continue;checked++;
+        const job=body?.job||body?.data?.job||body?.data||body;
+        const claims=Array.isArray(body?.claims)?body.claims:Array.isArray(body?.data?.claims)?body.data.claims:[];
+        const payments=Array.isArray(body?.payments)?body.payments:Array.isArray(body?.data?.payments)?body.data.payments:[];
+        const ours=claims.find(c=>String(c.agentId||c.agent_id||'')===wpAgentId)||claims[0]||null;
+        const payment=payments.find(x=>String(x.claimId||x.claim_id||'')===String(ours?.id||ours?.claimId||''))||payments.find(x=>/released|paid|completed/i.test(String(x.status||x.state||'')))||null;
+        const status=String(payment?.status||payment?.state||job?.status||'').toLowerCase();
+        if(!['released','paid','completed','settled'].includes(status))continue;
+        const amountUsd=Number(payment?.amount??payment?.amountUsdc??job?.paymentAmount??job?.amount??0);
+        if(!Number.isFinite(amountUsd)||amountUsd<=0)continue;
+        rows.push({source:'workprotocol',externalTransactionId:String(payment?.txHash||payment?.transactionHash||payment?.id||`${jobId}:${ours?.id||'claim'}`),listingId:jobId,status,amountUsd,currency:String(payment?.currency||job?.paymentCurrency||'USDC').toUpperCase(),network:String(payment?.network||job?.paymentRail||'base'),payoutAddress:String(payment?.to||payment?.walletAddress||''),raw:{job,claim:ours,payment}});mapped++;
+      }catch{}
+    }
+    health.workprotocol={ok:true,checked,settledMapped:mapped};
+  }
+
   // t2000 settlement sync uses the documented read-only seller job inbox. Never pick a
   // tool heuristically by a word like "payment": financial connectors must only call a
   // known read tool here. Settled seller jobs are de-duplicated by job id in runtime.

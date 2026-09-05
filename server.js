@@ -169,7 +169,8 @@ app.post('/api/internal/autonomos/trigger/execute', async (req,res)=>{
   const supplied=String(req.body?.signature||'');
   const age=Date.now()-issuedAt;
   const expected=secret&&issuedAt?crypto.createHmac('sha256',secret).update(`${issuedAt}.${stableJsonForSignature(req.body?.opportunity)}`).digest('hex'):'';
-  const validTime=Number.isFinite(age)&&age>=-60_000&&age<=15*60_000;
+  const maxTriggerCallbackAgeMs=Math.max(15*60_000,Math.min(48*60*60_000,Number(process.env.AUTONOMOS_TRIGGER_CALLBACK_MAX_AGE_MS||24*60*60_000)));
+  const validTime=Number.isFinite(age)&&age>=-60_000&&age<=maxTriggerCallbackAgeMs;
   const validSig=Boolean(expected&&supplied&&expected.length===supplied.length&&crypto.timingSafeEqual(Buffer.from(expected),Buffer.from(supplied)));
   if(!validTime||!validSig)return res.status(401).json({ok:false,error:'unauthorized_trigger_callback'});
   try{return res.json(await autonomos.processDurableOpportunity(req.body?.opportunity));}

@@ -1,5 +1,6 @@
 const CRYPTO_CODES=new Set(['USDC','USDT','ETH','BTC','SOL','DAI']);
 const MANAGED_METHOD=/escrow|platform(?:_balance)?|marketplace|seller_balance|internal_balance/;
+const DIRECT_CRYPTO_METHOD=/direct_crypto|direct_wallet|owner_wallet/;
 
 export function paymentDestinations(env=process.env){
   const cryptoWallet=String(env.AUTONOMOS_OWNER_WALLET||'').trim();
@@ -23,6 +24,12 @@ export function selectPayoutRoute({currency='USD',marketplace='',supportedMethod
   const methods=[...(Array.isArray(supportedMethods)?supportedMethods:[]),...marketplacePayoutMethods(marketplace,env)].map(x=>String(x).toLowerCase());
   const unique=[...new Set(methods)];
 
+  // Direct-to-owner crypto is stronger than an internal marketplace balance. If a
+  // connector explicitly proves that payout rail, prefer it even if the marketplace also
+  // exposes a custodial balance elsewhere. Generic `crypto` is intentionally not enough.
+  if(CRYPTO_CODES.has(code)&&unique.some(x=>DIRECT_CRYPTO_METHOD.test(x))&&dest.crypto.configured&&dest.crypto.currencies.includes(code)){
+    return{ok:true,rail:'crypto',currency:code,destination:dest.crypto.wallet,marketplace,amountUsd,direct:true};
+  }
   if(unique.some(x=>MANAGED_METHOD.test(x))){
     return{ok:true,rail:'marketplace_managed',currency:code,marketplace,amountUsd,requiresPayoutSetup:true,reason:'marketplace_holds_or_releases_funds; downstream withdrawal must be configured separately'};
   }

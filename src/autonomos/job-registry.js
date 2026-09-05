@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 
 const TERMINAL_STATUSES=new Set(['graveyard','delivered','paid','settled','completed','expired','cancelled','rejected']);
-const OWNED_STATUSES=new Set(['bid_submitted','claimed','executing','qa','delivered','paid','settled','completed']);
+const OWNED_STATUSES=new Set(['dispatch_pending','bid_submitted','claimed','executing','qa','delivered','paid','settled','completed']);
 const SYSTEM_BLOCKED_STATUSES=new Set(['system_blocked','capability_hold','manual_attention']);
 const POLICY_HOLD_STATUSES=new Set(['policy_hold','not_eligible']);
 
@@ -58,6 +58,14 @@ export class JobRegistry {
     if(tombstone)return {blocked:true,status:'graveyard',reasonCode:tombstone.reasonCode||'permanent_tombstone',reason:tombstone.reason||'',failureOwner:tombstone.failureOwner||'market'};
     const row=this.get(identity);if(!row)return null;
     if(SYSTEM_BLOCKED_STATUSES.has(String(row.status||'')))return {blocked:true,status:'system_blocked',reasonCode:row.reasonCode||'system_blocked',reason:row.reason||'',failureOwner:'our_system'};
+    // Policy Hold is normally re-evaluated from live marketplace/policy facts every scan.
+    // A timed hold (e.g. buyer has $0 balance) is different: do not hammer the same claim
+    // endpoint every 15 seconds; wait until retryAfter, then allow a fresh preflight.
+    if(POLICY_HOLD_STATUSES.has(String(row.status||''))&&row.retryAfter&&Date.parse(row.retryAfter)>Date.now())return {blocked:true,status:'policy_hold',reasonCode:row.reasonCode||'policy_hold',reason:row.reason||'',failureOwner:row.failureOwner||'policy'};
+    if(row.status==='dispatch_pending'){
+      if(row.retryAfter&&Date.parse(row.retryAfter)<=Date.now())return null;
+      return {blocked:true,status:'dispatch_pending',reasonCode:row.reasonCode||'durable_dispatch_pending',reason:row.reason||'',failureOwner:'our_system'};
+    }
     if(row.terminal||OWNED_STATUSES.has(String(row.status||'')))return {blocked:true,status:row.status,reasonCode:row.reasonCode||`job_registry_${row.status}`,reason:row.reason||'',failureOwner:row.failureOwner||''};
     if(row.status==='retry'&&row.retryPhase==='execution')return {blocked:true,status:'retry_execution_owned',reasonCode:row.reasonCode||'execution_retry_owned',reason:row.reason||'',failureOwner:row.failureOwner||'our_system'};
     if(row.retryAfter&&Date.parse(row.retryAfter)>Date.now())return {blocked:true,status:'retry_wait',reasonCode:'retry_backoff',reason:`Retry after ${row.retryAfter}`,failureOwner:row.failureOwner||'transient'};
@@ -72,6 +80,17 @@ export class JobRegistry {
     this.records[identity]=row;this.persist();return {...row};
   }
 
+  markPaid(opportunity,{transactionId='',amountUsd=0,currency='',paidAt=''}={}){
+    const identity=typeof opportunity==='string'?opportunity:jobIdentity(opportunity);const now=String(paidAt||new Date().toISOString());
+    // An authoritative marketplace settlement wins over any stale local tombstone. A paid
+    // job must never be rediscovered as Graveyard on the next scan merely because an old
+    // failure classification survived from a prior runtime generation.
+    if(this.tombstones[identity]){delete this.tombstones[identity];this.store.writeJson('job-tombstones.json',this.tombstones);}
+    const existing=this.records[identity]||(typeof opportunity==='string'?{identity,source:identity.split(':')[0],externalId:identity.slice(identity.indexOf(':')+1),firstSeenAt:now,lastSeenAt:now,seenCount:1}:this.observe(opportunity));
+    this.records[identity]={...existing,status:'paid',terminal:true,failureOwner:'',reasonCode:'marketplace_payment_settled',reason:'',retryAfter:'',transactionId:String(transactionId||''),amountUsd:Number(amountUsd||0),currency:String(currency||existing.currency||''),paidAt:now,lastStateAt:now};
+    this.persist();return {...this.records[identity]};
+  }
+
   markPermanent(opportunity,{owner='market',reasonCode='permanent_rejection',reason=''}={}){
     const identity=typeof opportunity==='string'?opportunity:jobIdentity(opportunity);const now=new Date().toISOString();
     const existing=this.records[identity]||(typeof opportunity==='string'?{identity,source:identity.split(':')[0],externalId:identity.slice(identity.indexOf(':')+1),firstSeenAt:now,lastSeenAt:now,seenCount:1}:this.observe(opportunity));
@@ -82,10 +101,41 @@ export class JobRegistry {
   }
 
 
-  markPolicyHold(opportunity,{reasonCode='policy_hold',reason='',owner='policy'}={}){
+  markPolicyHold(opportunity,{reasonCode='policy_hold',reason='',owner='policy',retryAfter=''}={}){
     const identity=jobIdentity(opportunity);const row=this.records[identity]||this.observe(opportunity);const now=new Date().toISOString();
-    this.records[identity]={...row,status:'policy_hold',terminal:false,failureOwner:String(owner||'policy'),reasonCode:String(reasonCode).slice(0,120),reason:String(reason).slice(0,500),retryAfter:'',lastStateAt:now};
+    this.records[identity]={...row,status:'policy_hold',terminal:false,failureOwner:String(owner||'policy'),reasonCode:String(reasonCode).slice(0,120),reason:String(reason).slice(0,500),retryAfter:String(retryAfter||''),lastStateAt:now};
     this.persist();return {...this.records[identity]};
+  }
+
+  repairV76LegacyPollution(){
+    let removedSignals=0,rescuedDealwork=0;const now=new Date().toISOString();
+    // x402 Bazaar rows are buyer-side machine API discovery signals, not earning jobs.
+    // Older builds registered them as jobs and inflated System Blocked/Graveyard. Remove
+    // only those operational records/tombstones; x402 seller revenue remains in ledger.
+    for(const identity of Object.keys(this.records)){
+      if(identity.startsWith('x402-bazaar:')){delete this.records[identity];removedSignals++;}
+    }
+    for(const identity of Object.keys(this.tombstones)){
+      if(identity.startsWith('x402-bazaar:')){delete this.tombstones[identity];removedSignals++;}
+    }
+    // Dealwork buyer funding and malformed open-mode budget are reversible marketplace
+    // conditions. Old builds tombstoned them permanently after claim. Rescue them into a
+    // timed market hold so they can be revalidated later without hammering the API.
+    for(const [identity,tomb] of Object.entries({...this.tombstones})){
+      if(!identity.startsWith('dealwork:'))continue;
+      const text=`${tomb?.reasonCode||''} ${tomb?.reason||''}`;
+      const buyerFunding=/insufficient[_ -]?balance|poster(?:'s)? wallet.*insufficient|available\s*0(?:\.0+)?|http_402|http_422/i.test(text);
+      const badBudget=/budgetmax|fixedprice|maxconcurrent|under-funded|underfunded/i.test(text);
+      if(!buyerFunding&&!badBudget)continue;
+      delete this.tombstones[identity];
+      const old=this.records[identity]||{identity,source:'dealwork',externalId:identity.slice(identity.indexOf(':')+1),firstSeenAt:now,lastSeenAt:now,seenCount:1};
+      const reasonCode=buyerFunding?'buyer_funding_unavailable':'market_job_configuration_invalid';
+      const waitMs=buyerFunding?6*60*60_000:24*60*60_000;
+      this.records[identity]={...old,status:'policy_hold',terminal:false,failureOwner:'market',reasonCode,reason:`Rescued by v7.6 market-state migration: ${String(tomb?.reason||reasonCode)}`.slice(0,500),closedAt:'',retryAfter:new Date(Date.now()+waitMs).toISOString(),lastStateAt:now};
+      rescuedDealwork++;
+    }
+    if(removedSignals||rescuedDealwork){this.store.writeJson('job-tombstones.json',this.tombstones);this.persist();}
+    return{ok:true,removedSignals,rescuedDealwork};
   }
 
   rescueOverbroadPolicyTombstones(){
@@ -120,6 +170,21 @@ export class JobRegistry {
     this.persist();return {ok:true,released:true};
   }
 
+  markDispatchPending(opportunity,{provider='durable',runId='',leaseId='',retryAfter=''}={}){
+    const identity=jobIdentity(opportunity);const row=this.records[identity]||this.observe(opportunity);const now=new Date().toISOString();
+    this.records[identity]={...row,status:'dispatch_pending',terminal:false,failureOwner:'our_system',reasonCode:'durable_dispatch_pending',reason:`Dispatched to ${String(provider||'durable')}; awaiting worker callback.`,dispatchProvider:String(provider||'durable'),dispatchRunId:String(runId||''),dispatchLeaseId:String(leaseId||''),retryAfter:String(retryAfter||new Date(Date.now()+6*60*60_000).toISOString()),lastStateAt:now};
+    this.persist();return {...this.records[identity]};
+  }
+
+  releaseDispatchPending(opportunity,{leaseId=''}={}){
+    const identity=jobIdentity(opportunity);const row=this.records[identity];
+    if(!row||row.status!=='dispatch_pending')return {ok:true,released:false};
+    const expected=String(row.dispatchLeaseId||'');const supplied=String(leaseId||'');
+    if(expected&&expected!==supplied)return {ok:true,released:false,stale:true,expectedLeaseId:expected};
+    this.records[identity]={...row,status:'new',failureOwner:'',reasonCode:'durable_worker_callback_received',reason:'Durable worker callback received; performing fresh pre-claim validation.',retryAfter:'',dispatchLeaseId:'',lastStateAt:new Date().toISOString()};
+    this.persist();return {ok:true,released:true};
+  }
+
   markRetry(opportunity,{owner='transient',reasonCode='retry_pending',reason='',attempts=1,retryAfter='',phase='claim'}={}){
     const row=this.records[jobIdentity(opportunity)]||this.observe(opportunity);
     this.records[row.identity]={...row,status:'retry',terminal:false,failureOwner:String(owner),reasonCode:String(reasonCode).slice(0,120),reason:String(reason).slice(0,500),attempts:Number(attempts||1),retryAfter:String(retryAfter||''),retryPhase:String(phase||'claim'),lastStateAt:new Date().toISOString()};
@@ -137,13 +202,13 @@ export class JobRegistry {
 
   summary(){
     const rows=Object.values(this.records),count=pred=>rows.filter(pred).length;
-    return {total:rows.length,new:count(x=>x.status==='new'),ready:count(x=>x.status==='ready'),proposal:count(x=>x.status==='proposal'),working:count(x=>['bid_submitted','claimed','executing','qa'].includes(x.status)),retry:count(x=>x.status==='retry'),policyHold:count(x=>POLICY_HOLD_STATUSES.has(x.status)),systemBlocked:count(x=>SYSTEM_BLOCKED_STATUSES.has(x.status)),graveyard:Object.keys(this.tombstones).length,delivered:count(x=>x.status==='delivered'),paid:count(x=>['paid','settled','completed'].includes(x.status)),updatedAt:new Date().toISOString()};
+    return {total:rows.length,new:count(x=>x.status==='new'),ready:count(x=>x.status==='ready'),proposal:count(x=>x.status==='proposal'),working:count(x=>['dispatch_pending','bid_submitted','claimed','executing','qa'].includes(x.status)),retry:count(x=>x.status==='retry'),policyHold:count(x=>POLICY_HOLD_STATUSES.has(x.status)),systemBlocked:count(x=>SYSTEM_BLOCKED_STATUSES.has(x.status)),graveyard:Object.keys(this.tombstones).length,delivered:count(x=>x.status==='delivered'),paid:count(x=>['paid','settled','completed'].includes(x.status)),updatedAt:new Date().toISOString()};
   }
 
   queues({limit=80}={}){
     const rows=Object.values(this.records).sort((a,b)=>Date.parse(b.lastStateAt||b.lastSeenAt||0)-Date.parse(a.lastStateAt||a.lastSeenAt||0));
     const take=statuses=>rows.filter(x=>statuses.includes(x.status)).slice(0,limit).map(x=>({...x}));
-    return {new:take(['new','ready']),proposal:take(['proposal']),working:take(['bid_submitted','claimed','executing','qa']),retry:take(['retry']),policyHold:take(['policy_hold','not_eligible']),systemBlocked:take(['system_blocked','capability_hold','manual_attention']),delivered:take(['delivered']),paid:take(['paid','settled','completed']),graveyard:take(['graveyard'])};
+    return {new:take(['new','ready']),proposal:take(['proposal']),working:take(['dispatch_pending','bid_submitted','claimed','executing','qa']),retry:take(['retry']),policyHold:take(['policy_hold','not_eligible']),systemBlocked:take(['system_blocked','capability_hold','manual_attention']),delivered:take(['delivered']),paid:take(['paid','settled','completed']),graveyard:take(['graveyard'])};
   }
 
   migrateLegacy({handledKeys=[],jobs=[]}={}){
@@ -186,6 +251,8 @@ export function classifyFailure(errorLike,{phase='execution'}={}){
   const text=String(errorLike?.message||errorLike||'').toLowerCase();
   if(/already[_ -]?claimed|already[_ -]?assigned|job[_ -]?taken|no longer available|not[_ -]?available|expired|closed|cancelled|listing[_ -]?removed|not[_ -]?found|http_404|http_410|http_409/.test(text))return {owner:'market',permanent:true,reasonCode:'market_job_no_longer_available'};
   if(/api[_ -]?key[_ -]?missing|unauthorized|forbidden|http_401|http_403/.test(text))return {owner:'our_system',permanent:false,reasonCode:'connector_credentials_or_auth_failure'};
+  if(/http_402.*insufficient_balance|insufficient[_ -]?balance|poster(?:'s)? wallet.*insufficient|available\s*0(?:\.0+)?/.test(text))return {owner:'market',permanent:false,reasonCode:'buyer_funding_unavailable'};
+  if(/http_400.*(?:budgetmax|fixedprice|maxconcurrent|under-funded|underfunded)|budgetmax.*less than.*fixedprice|job is under-funded/.test(text))return {owner:'market',permanent:false,reasonCode:'market_job_configuration_invalid'};
   if(/demo_or_test/.test(text))return {owner:'policy',permanent:true,reasonCode:'demo_or_test_listing'};
   if(/budget_below_|job_below_floor|economics_blocked:|not_escrowed_and_escrow_required/.test(text))return {owner:'policy',permanent:false,reasonCode:'policy_hold'};
   if(/delivery_failed:http_(404|409|410)/.test(text))return {owner:'market',permanent:true,reasonCode:'market_delivery_target_closed'};

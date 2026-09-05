@@ -8,7 +8,7 @@ import { classifyOpportunity } from '../src/autonomos/capabilities.js';
 import { McpHttpClient } from '../src/autonomos/mcp-client.js';
 import { estimateOutcomeProbability } from '../src/autonomos/outcome-model.js';
 import { buildProofLog } from '../src/autonomos/qa-engine.js';
-import { shouldReportSuccessToDurableDispatcher, latestStatuses, selectBudgetAwareCandidates } from '../src/autonomos/runtime.js';
+import { shouldReportSuccessToDurableDispatcher, latestStatuses, selectBudgetAwareCandidates, applyCommissioningCandidateGate, resolveSettlementJobIdentity, settlementLedgerId, settlementPayoutTruth } from '../src/autonomos/runtime.js';
 
 // Same class of bug as the capabilities.js fix below, in the dashboard worker-role
 // fallback: the alternation regex had no word boundaries, so 'rust' matched inside
@@ -117,10 +117,23 @@ assert.equal(exceedsJobSpendCeiling(5,0),false,'a zero/unknown ceiling must not 
 // reported as a failure so the dispatcher's own retry kicks in; a job that already
 // claimed/bid/delivered must be reported as ok so the dispatcher never re-invokes the
 // whole opportunity from scratch and risks a double claim/bid.
-assert.equal(shouldReportSuccessToDurableDispatcher({claimed:false,delivered:false}),false,'nothing committed must be retryable');
+assert.equal(shouldReportSuccessToDurableDispatcher({claimed:false,delivered:false}),false,'an unclassified transport-level failure may be retried by the dispatcher');
+assert.equal(shouldReportSuccessToDurableDispatcher({claimed:false,delivered:false,preclaimRejected:true}),true,'deterministic business rejection is already handled and must not trigger durable retries');
+assert.equal(shouldReportSuccessToDurableDispatcher({claimed:false,delivered:false,handledByRuntime:true,retryScheduled:true}),true,'registry-owned claim retry must not compete with Trigger retries');
 assert.equal(shouldReportSuccessToDurableDispatcher({claimed:false,delivered:false,bidSubmitted:true}),true,'a submitted bid must not be re-attempted');
 assert.equal(shouldReportSuccessToDurableDispatcher({claimed:true,delivered:false,retryScheduled:true}),true,'an already-claimed job must recover via recoverInFlightJobs, not a fresh re-claim');
 assert.equal(shouldReportSuccessToDurableDispatcher({claimed:true,delivered:true}),true,'full success');
+
+const commissioningRows=[
+  {source:'t2000',externalId:'hard',budgetUsd:10,capability:{skill:'code-analysis',estimatedModelCostUsd:0.3},economics:{outOfPocketCostUsd:0.3},outcome:{probability:.9}},
+  {source:'clawlancer',externalId:'simple',budgetUsd:.5,capability:{skill:'translation',estimatedModelCostUsd:0.01},economics:{outOfPocketCostUsd:0.01},outcome:{probability:.75}},
+  {source:'dealwork',externalId:'usd',budgetUsd:50,capability:{skill:'translation',estimatedModelCostUsd:0.01},economics:{outOfPocketCostUsd:0.01},outcome:{probability:.95}}
+];
+const commissioningPicked=applyCommissioningCandidateGate(commissioningRows,{commissioningMode:true},{ledger:[],activeCount:0});
+assert.equal(commissioningPicked.length,1,'before first crypto payment commissioning must run one job at a time');
+assert.equal(commissioningPicked[0].externalId,'simple','commissioning must prefer the simplest low-cost crypto-native proof job, not the largest payout');
+assert.equal(applyCommissioningCandidateGate(commissioningRows,{commissioningMode:true},{ledger:[],activeCount:1}).length,0,'a commissioning job already in flight must block a second claim');
+assert.equal(applyCommissioningCandidateGate(commissioningRows,{commissioningMode:true},{ledger:[{type:'revenue',source:'t2000',amountUsd:.5,status:'settled'}],activeCount:0}).length,3,'after a real crypto settlement normal concurrency may resume');
 
 const events=[];
 const workforce=new TaskAgentRuntime({env:{AUTONOMOS_MAX_TASK_AGENTS_PER_JOB:'4'},onEvent:(type,detail)=>events.push({type,detail})});
@@ -192,6 +205,45 @@ assert.deepEqual(distinctExecutionRoles({steps:[{role:'code-worker'},{role:'rese
   assert.equal(calls.length,3,'one call per role in a 3-way handoff');
   assert.ok(calls[2].includes('app_tool_search')&&!calls[2].includes('web_search'),'the automation phase must not inherit the research phase'+String.fromCharCode(39)+'s tools');
   assert.equal(result3.evidence.toolCalls.length,3,'all three phases'+String.fromCharCode(39)+' tool calls must be combined for QA');
+}
+
+// Settlement identity must be tied back to the SAME external marketplace job and
+// deterministic ledger id so a crash between ledger/registry/idempotency writes can replay
+// safely without creating detached or duplicate revenue.
+{
+  const registryRows={'t2000:job-77':{identity:'t2000:job-77',source:'t2000',externalId:'job-77',status:'delivered'}};
+  const jobs=[{id:'local-77',source:'t2000',externalId:'job-77',status:'delivered',at:'2026-09-05T10:00:00Z'}];
+  const resolved=resolveSettlementJobIdentity({source:'t2000',externalTransactionId:'chain-abc',listingId:'job-77'},{registryRows,jobs,inFlight:{}});
+  assert.equal(resolved.ok,true,'a settled marketplace transaction must resolve to a registry identity');
+  assert.equal(resolved.identity,'t2000:job-77');
+  assert.equal(resolved.jobId,'local-77','settlement must link to the existing internal job, not create detached revenue');
+  assert.equal(resolveSettlementJobIdentity({source:'t2000',externalTransactionId:'chain-no-ref'},{registryRows,jobs,inFlight:{}}).ok,false,'a settlement without a marketplace job reference must be quarantined');
+  assert.equal(settlementLedgerId('t2000','chain-abc'),settlementLedgerId('t2000','chain-abc'),'settlement ledger identity must be deterministic across crash/retry');
+  assert.notEqual(settlementLedgerId('t2000','chain-abc'),settlementLedgerId('t2000','chain-def'),'different chain transactions must never collide');
+}
+
+// Marketplace 'paid' is not the same as 'money reached the owner wallet'. Keep custody
+// truth explicit so the commissioning proof can distinguish direct payout from a balance
+// that still requires withdrawal.
+{
+  const owner='0x1111111111111111111111111111111111111111';
+  const direct=settlementPayoutTruth({source:'clawlancer',payoutAddress:owner},{ownerWallet:owner,credentials:{clawlancer:{walletAddress:owner}}});
+  assert.equal(direct.ownerWalletReached,true,'Clawlancer direct payout to the configured owner address must be recognized as owner-wallet paid');
+  assert.equal(direct.withdrawalRequired,false);
+  const passport=settlementPayoutTruth({source:'t2000',payoutAddress:'0xsui-passport'},{ownerWallet:owner,marketplaceWallets:{t2000:{address:'0xsui-passport'}}});
+  assert.equal(passport.ownerWalletReached,false,'t2000 Passport balance must not be mislabeled as the owner EVM wallet');
+  assert.equal(passport.withdrawalRequired,true,'t2000 settlement should remain withdrawal-pending until funds reach the owner destination');
+  const wp=settlementPayoutTruth({source:'workprotocol',payoutAddress:''},{ownerWallet:owner});
+  assert.equal(wp.fundsLocation,'workprotocol_registered_wallet');
+  assert.equal(wp.verified,false,'without an authoritative registered wallet address WorkProtocol payout location must stay explicitly unverified');
+  const wpDirect=settlementPayoutTruth({source:'workprotocol',payoutAddress:owner},{ownerWallet:owner});
+  assert.equal(wpDirect.fundsLocation,'owner_wallet','WorkProtocol pays the agent registered Base wallet directly; matching the owner address proves owner-wallet payout');
+  assert.equal(wpDirect.ownerWalletReached,true);
+  assert.equal(wpDirect.withdrawalRequired,false);
+  const t2000SameHex=settlementPayoutTruth({source:'t2000',payoutAddress:owner},{ownerWallet:owner,marketplaceWallets:{t2000:{address:owner}}});
+  assert.equal(t2000SameHex.ownerWalletReached,false,'a Sui Passport address must never be equated with an EVM owner wallet by string equality alone');
+  assert.equal(t2000SameHex.destinationCompatible,false,'t2000 Sui settlement requires a Sui-compatible owner destination or separate bridge/transfer action');
+  assert.equal(t2000SameHex.humanWalletActionRequired,true);
 }
 
 // Reproduce the production symptom: an OpenAI-compatible endpoint returns HTTP 200 but

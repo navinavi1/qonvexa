@@ -15,6 +15,8 @@ const env={AUTONOMOS_OWNER_WALLET:'0x1111111111111111111111111111111111111111',B
 assert.equal(paymentDestinations(env).fop.configured,true);
 assert.equal(selectPayoutRoute({currency:'USD',supportedMethods:['swift'],amountUsd:100},env).rail,'fop_swift');
 assert.equal(selectPayoutRoute({currency:'USDC',supportedMethods:['crypto'],amountUsd:100},env).rail,'crypto');
+assert.equal(selectPayoutRoute({currency:'USDC',marketplace:'clawlancer',supportedMethods:['direct_crypto','marketplace'],amountUsd:5},env).rail,'crypto','explicit direct crypto must beat marketplace-managed balance');
+assert.equal(selectPayoutRoute({currency:'USDC',marketplace:'t2000',supportedMethods:['marketplace'],amountUsd:5},env).rail,'marketplace_managed','marketplace wallet must not be mislabeled as direct owner payout');
 
 const multiEnv={AUTONOMOS_FOP_ACCOUNTS_JSON:JSON.stringify([
   {beneficiary:'FOP TEST',bank:'Bank',iban:'UA111',swift:'TESTUA22',currency:'USD'},

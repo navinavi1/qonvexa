@@ -208,7 +208,7 @@ export async function githubOpenPullRequest({ repoUrl, baseBranch = 'main', newB
   const cleanFiles = files.slice(0, 15).map(f => ({ path: String(f?.path || '').replace(/^\/+/, ''), content: String(f?.content ?? '') }))
     .filter(f => f.path && !f.path.includes('..') && f.content.length <= 200000);
   if (!cleanFiles.length) return { ok: false, error: 'no_valid_files_after_path_safety_filter' };
-  const headers = { authorization: `Bearer ${token}`, accept: 'application/vnd.github+json', 'content-type': 'application/json', 'user-agent': 'AutonomOS/2.0' };
+  const headers = { authorization: `Bearer ${token}`, accept: 'application/vnd.github+json', 'content-type': 'application/json', 'user-agent': 'AutonomOS/7.6' };
   const upstreamApi = `https://api.github.com/repos/${upstreamOwner}/${repo}`;
   try {
     const expectedLogin = String(env.AUTONOMOS_GITHUB_EXPECTED_LOGIN || '').trim();

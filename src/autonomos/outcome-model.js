@@ -71,7 +71,12 @@ function historicalSourceRate(source, rows=[]) {
     // days later. Counting it as a success here would inflate the estimated win
     // probability for a source whose submissions might mostly get rejected.
     if (/paid|settled|completed/.test(status)) successes++;
-    else if (/failed|rejected|expired|cancelled/.test(status)) failures++;
+    // Claim/bid failures are marketplace availability/funding signals, not evidence that
+    // our worker cannot complete or that a delivered result would be rejected. Counting
+    // them as acceptance failures poisoned the entire source prior (especially Dealwork),
+    // eventually making every otherwise-profitable job look uneconomic after a burst of
+    // buyer-side 402/400 errors. Only post-acceptance worker outcomes belong here.
+    else if (/execution_failed|delivery_failed|qa_failed|rejected/.test(status)) failures++;
     else if (status==='delivered') pending++;
   }
   const samples=successes+failures;

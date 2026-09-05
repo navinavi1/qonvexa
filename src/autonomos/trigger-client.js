@@ -26,11 +26,18 @@ export async function dispatchTriggerPaidOpportunity(opportunity, env = process.
   // duplicate paid claims/deliveries for the same external job.
   const idempotencyKey=`autonomos_${crypto.createHash('sha256').update(`${source}\0${externalId}`).digest('hex')}`;
   try {
-    const { tasks, configure } = await import('@trigger.dev/sdk');
+    const { tasks, configure, idempotencyKeys } = await import('@trigger.dev/sdk');
     configure({ accessToken:String(env.TRIGGER_SECRET_KEY), ...(env.TRIGGER_API_URL?{baseURL:String(env.TRIGGER_API_URL)}:{}) });
+    // Trigger.dev raw string keys default to run scope in current SDKs. We need cross-cycle
+    // dedupe, so explicitly create a global key. Keep its TTL aligned with the registry's
+    // dispatch lease: after the lease expires a genuinely lost run may be dispatched again.
+    const scopedIdempotencyKey=typeof idempotencyKeys?.create==='function'
+      ? await idempotencyKeys.create(idempotencyKey,{scope:'global'})
+      : idempotencyKey;
+    const idempotencyKeyTTL=String(env.AUTONOMOS_TRIGGER_IDEMPOTENCY_TTL||'6h');
     const handle = await tasks.trigger(taskId,
       { opportunity, callbackUrl, issuedAt, signature },
-      { idempotencyKey, tags:[`source:${source}`.slice(0,128),`job:${externalId}`.slice(0,128)] }
+      { idempotencyKey:scopedIdempotencyKey, idempotencyKeyTTL, tags:[`source:${source}`.slice(0,128),`job:${externalId}`.slice(0,128)] }
     );
     return { ok:true, runId:String(handle?.id||''), taskId, idempotencyKey };
   } catch (error) {
