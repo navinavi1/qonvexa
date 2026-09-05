@@ -12,7 +12,7 @@ export const autonomosPaidJob = task({
       method:'POST',
       headers:{'content-type':'application/json'},
       body:JSON.stringify({opportunity:payload?.opportunity,issuedAt:payload.issuedAt,signature:payload.signature}),
-      signal:AbortSignal.timeout(20*60_000)
+      signal:AbortSignal.timeout(28*60_000)
     });
     const body=await response.json().catch(()=>({}));
     if(!response.ok||body?.ok===false)throw new Error(`autonomos_trigger_worker_http_${response.status}:${String(body?.error||body?.reason||'').slice(0,240)}`);

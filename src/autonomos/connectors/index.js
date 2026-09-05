@@ -94,7 +94,7 @@ export async function bootstrapMarketCredentials({ env=process.env, credentials=
       // our own address here is their documented "Custom" option: USDC pays out directly
       // to the owner's wallet on every job, automatically, no withdraw step needed at all.
       if (isEvmAddressLike(ownerWallet)) registerBody.wallet_address = ownerWallet;
-      const response=await fetch('https://clawlancer.ai/api/agents/register',{method:'POST',headers:{'content-type':'application/json','accept':'application/json','user-agent':'AutonomOS/7.6'},body:JSON.stringify(registerBody),signal:AbortSignal.timeout(15000)});
+      const response=await fetch('https://clawlancer.ai/api/agents/register',{method:'POST',headers:{'content-type':'application/json','accept':'application/json','user-agent':'AutonomOS/7.7'},body:JSON.stringify(registerBody),signal:AbortSignal.timeout(15000)});
       const body=await safeJson(response);
       if (response.ok) {
         const apiKey=body?.api_key||body?.apiKey||body?.key||body?.agent?.api_key||'';
@@ -123,7 +123,7 @@ export async function bootstrapMarketCredentials({ env=process.env, credentials=
         // Clawlancer's published API exposes PATCH /api/agents/{id}; do not rely on an
         // undocumented /agents/me alias for a payout-critical operation. Failed wallet
         // repairs are retried after a one-hour cooldown instead of being suppressed forever.
-        const response=await fetch(`https://clawlancer.ai/api/agents/${encodeURIComponent(agentId)}`,{method:'PATCH',headers:{'content-type':'application/json',accept:'application/json',authorization:`Bearer ${key}`,'user-agent':'AutonomOS/7.6'},body:JSON.stringify({wallet_address:ownerWallet}),signal:AbortSignal.timeout(15000)});
+        const response=await fetch(`https://clawlancer.ai/api/agents/${encodeURIComponent(agentId)}`,{method:'PATCH',headers:{'content-type':'application/json',accept:'application/json',authorization:`Bearer ${key}`,'user-agent':'AutonomOS/7.7'},body:JSON.stringify({wallet_address:ownerWallet}),signal:AbortSignal.timeout(15000)});
         const body=await safeJson(response);
         const updated={...existing,agentId,walletFixLastAttemptAt:new Date().toISOString()};
         if (response.ok) { updated.walletAddress=ownerWallet; updated.walletVerifiedAt=new Date().toISOString(); delete updated.walletFixLastError; }
@@ -143,7 +143,7 @@ export async function bootstrapMarketCredentials({ env=process.env, credentials=
       // without one creates a NEW duplicate agent account every time credentials are lost.
       // Base it on the owner wallet (stable, unique to this deployment) rather than a random value.
       const identityKey=`autonomos-${String(env.AUTONOMOS_OWNER_WALLET||env.AUTONOMOS_AGENT_NAME||'default').toLowerCase().replace(/[^a-z0-9]/g,'').slice(0,64)||'autonomos-default'}`;
-      const response=await fetch('https://dealwork.ai/api/v1/agents/onboard',{method:'POST',headers:{'content-type':'application/json','accept':'application/json','user-agent':'AutonomOS/7.6'},body:JSON.stringify({autonomous:true,agentName:String(env.AUTONOMOS_AGENT_NAME||'AutonomOS').slice(0,48),description:'Autonomous digital-services worker: public web research, data extraction, structured writing, translation and QA. Typical turnaround: minutes.',capabilityTags:['research','writing','data','translation','automation'],identityKey}),signal:AbortSignal.timeout(15000)});
+      const response=await fetch('https://dealwork.ai/api/v1/agents/onboard',{method:'POST',headers:{'content-type':'application/json','accept':'application/json','user-agent':'AutonomOS/7.7'},body:JSON.stringify({autonomous:true,agentName:String(env.AUTONOMOS_AGENT_NAME||'AutonomOS').slice(0,48),description:'Autonomous digital-services worker: public web research, data extraction, structured writing, translation and QA. Typical turnaround: minutes.',capabilityTags:['research','writing','data','translation','automation'],identityKey}),signal:AbortSignal.timeout(15000)});
       const body=await safeJson(response);
       const data=body?.data||body;
       if (response.ok && data?.apiKey) {
@@ -160,7 +160,7 @@ export async function bootstrapMarketCredentials({ env=process.env, credentials=
   // or KYC"). We store it so the dashboard can show the owner exactly which URL to visit.
   if (!credentials?.superteam?.apiKey) {
     try {
-      const response=await fetch('https://superteam.fun/api/agents',{method:'POST',headers:{'content-type':'application/json','accept':'application/json','user-agent':'AutonomOS/7.6'},body:JSON.stringify({name:String(env.AUTONOMOS_AGENT_NAME||'AutonomOS').slice(0,48)}),signal:AbortSignal.timeout(15000)});
+      const response=await fetch('https://superteam.fun/api/agents',{method:'POST',headers:{'content-type':'application/json','accept':'application/json','user-agent':'AutonomOS/7.7'},body:JSON.stringify({name:String(env.AUTONOMOS_AGENT_NAME||'AutonomOS').slice(0,48)}),signal:AbortSignal.timeout(15000)});
       const body=await safeJson(response);
       if (response.ok && body?.apiKey) {
         const value={ apiKey:String(body.apiKey), claimCode:String(body.claimCode||''), agentId:String(body.agentId||''), username:String(body.username||''), createdAt:new Date().toISOString(), source:'auto_registration' };
@@ -296,7 +296,7 @@ async function discoverMoltJobs(env,limit){
   const key=String(env.MOLTJOBS_API_KEY||'').trim();
   const base=String(env.MOLTJOBS_API_URL||'https://api.moltjobs.io/v1').replace(/\/$/,'');
   try{
-    const r=await fetch(`${base}/jobs?status=OPEN&limit=${Math.min(50,limit)}`,{headers:{accept:'application/json','user-agent':'AutonomOS/7.6',...(key?{authorization:`Bearer ${key}`}:{})},signal:AbortSignal.timeout(15000)});
+    const r=await fetch(`${base}/jobs?status=OPEN&limit=${Math.min(50,limit)}`,{headers:{accept:'application/json','user-agent':'AutonomOS/7.7',...(key?{authorization:`Bearer ${key}`}:{})},signal:AbortSignal.timeout(15000)});
     const body=await safeJson(r);
     if(!r.ok)return{signals:[],health:{ok:false,status:r.status,error:body?.error?.message||body?.message||'moltjobs_discovery_failed',mode:'certified_bid_market'}};
     const data=body?.data??body;
@@ -343,7 +343,7 @@ async function workProtocolAction(kind,opportunity,{env=process.env,claim,delive
 
 async function discoverX402(env,limit){
   const url=String(env.AUTONOMOS_BAZAAR_URL||'https://api.cdp.coinbase.com/platform/v2/x402/discovery/resources?limit=50');
-  const response=await fetch(url,{headers:{accept:'application/json','user-agent':'AutonomOS/7.6'},signal:AbortSignal.timeout(12000)});
+  const response=await fetch(url,{headers:{accept:'application/json','user-agent':'AutonomOS/7.7'},signal:AbortSignal.timeout(12000)});
   if(!response.ok) return {signals:[],health:{ok:false,status:response.status,url}};
   const body=await safeJson(response); const resources=Array.isArray(body)?body:Array.isArray(body?.items)?body.items:Array.isArray(body?.resources)?body.resources:[];
   const signals=[];
@@ -358,7 +358,7 @@ async function discoverX402(env,limit){
 async function discoverDealwork(env,credentials,limit){
   const key=String(env.DEALWORK_API_KEY||credentials?.dealwork?.apiKey||'');
   if(!key) return {signals:[],health:{ok:false,error:'dealwork_api_key_missing'}};
-  const headers={accept:'application/json','user-agent':'AutonomOS/7.6',authorization:`Bearer ${key}`};
+  const headers={accept:'application/json','user-agent':'AutonomOS/7.7',authorization:`Bearer ${key}`};
   const response=await fetch(`https://dealwork.ai/api/v1/jobs?per_page=${Math.min(50,limit)}&sort=newest`,{headers,signal:AbortSignal.timeout(12000)});
   const body=await safeJson(response); if(!response.ok) return {signals:[],health:{ok:false,status:response.status,error:body?.error?.message||body?.error||''}};
   const publicRows=Array.isArray(body?.data)?body.data:[];
@@ -399,7 +399,7 @@ async function discoverDealwork(env,credentials,limit){
 
 async function discoverClawlancer(env,credentials,limit){
   const key=String(env.CLAWLANCER_API_KEY||credentials?.clawlancer?.apiKey||'');
-  const response=await fetch(`https://clawlancer.ai/api/listings?listing_type=BOUNTY&limit=${Math.min(100,limit)}`,{headers:{accept:'application/json','user-agent':'AutonomOS/7.6',...(key?{authorization:`Bearer ${key}`}:{})},signal:AbortSignal.timeout(12000)});
+  const response=await fetch(`https://clawlancer.ai/api/listings?listing_type=BOUNTY&limit=${Math.min(100,limit)}`,{headers:{accept:'application/json','user-agent':'AutonomOS/7.7',...(key?{authorization:`Bearer ${key}`}:{})},signal:AbortSignal.timeout(12000)});
   const body=await safeJson(response); if(!response.ok) return {signals:[],health:{ok:false,status:response.status,error:body?.error||body?.message||''}};
   const rows=Array.isArray(body)?body:Array.isArray(body?.listings)?body.listings:Array.isArray(body?.data)?body.data:[];
   const signals=rows.map(raw=>normalizeOpportunity('clawlancer',{...raw,url:raw.url||`https://clawlancer.ai/listings/${raw.id||raw.listing_id||''}`},{feePercent:2.5,currency:'USDC',network:'eip155:8453',escrowed:true,claimMode:key?'automatic':'credentials_required'})).filter(x=>x.status==='open'||x.status==='active'||x.status==='available'||!x.status);
@@ -410,7 +410,7 @@ async function discoverSuperteam(credentials,limit){
   const key=String(credentials?.superteam?.apiKey||'');
   if(!key) return {signals:[],health:{ok:false,error:'superteam_not_registered_yet'}};
   try{
-    const response=await fetch(`https://superteam.fun/api/agents/listings/live?take=${Math.min(limit,50)}`,{headers:{accept:'application/json','user-agent':'AutonomOS/7.6',authorization:`Bearer ${key}`},signal:AbortSignal.timeout(15000)});
+    const response=await fetch(`https://superteam.fun/api/agents/listings/live?take=${Math.min(limit,50)}`,{headers:{accept:'application/json','user-agent':'AutonomOS/7.7',authorization:`Bearer ${key}`},signal:AbortSignal.timeout(15000)});
     const body=await safeJson(response);
     if(!response.ok) return {signals:[],health:{ok:false,status:response.status,error:body?.error||body?.message||''}};
     const rows=findArrayByKey(body,['listings','data','items','results']);
@@ -430,7 +430,7 @@ async function discoverSuperteam(credentials,limit){
 async function discoverClawJobs(env,limit){
   try{
     const key=String(env.CLAWJOBS_API_KEY||'').trim();
-    const response=await fetch(`https://clawjobs.com/api/v1/jobs?status=open&limit=${Math.min(100,limit)}`,{headers:{accept:'application/json','user-agent':'AutonomOS/7.6',...(key?{authorization:`Bearer ${key}`}:{})},signal:AbortSignal.timeout(15000)});
+    const response=await fetch(`https://clawjobs.com/api/v1/jobs?status=open&limit=${Math.min(100,limit)}`,{headers:{accept:'application/json','user-agent':'AutonomOS/7.7',...(key?{authorization:`Bearer ${key}`}:{})},signal:AbortSignal.timeout(15000)});
     const body=await safeJson(response);
     if(!response.ok)return{signals:[],health:{ok:false,status:response.status,error:body?.error||body?.message||''}};
     const rows=Array.isArray(body)?body:findArrayByKey(body,['jobs','data','items','results']);
@@ -454,7 +454,7 @@ async function discoverConfiguredFeed(source,url,apiKey,limit,defaults={}){
   if(!/^https:\/\//i.test(endpoint))return{signals:[],health:{ok:false,error:'feed_url_must_use_https'}};
   try{
     const key=String(apiKey||'').trim();
-    const response=await fetch(endpoint,{headers:{accept:'application/json','user-agent':'AutonomOS/7.6',...(key?{authorization:`Bearer ${key}`}:{})},signal:AbortSignal.timeout(15000)});
+    const response=await fetch(endpoint,{headers:{accept:'application/json','user-agent':'AutonomOS/7.7',...(key?{authorization:`Bearer ${key}`}:{})},signal:AbortSignal.timeout(15000)});
     const body=await safeJson(response);
     if(!response.ok)return{signals:[],health:{ok:false,status:response.status,error:body?.error||body?.message||''}};
     const rows=Array.isArray(body)?body:findArrayByKey(body,['jobs','bounties','grants','listings','data','items','results']);
@@ -498,7 +498,7 @@ async function superteamAction(kind,opportunity,{env=process.env,credentials,del
     // for non-project listings, so no listing-type branch is needed here.
     const telegram=String(env.SUPERTEAM_HUMAN_TELEGRAM||'').trim();
     const payload={listingId:opportunity.externalId,link:extractDeliverableLink(deliverable),tweet:'',otherInfo:String(deliverable.content||'').slice(0,3000),eligibilityAnswers:[],ask:null,...(telegram?{telegram}:{})};
-    const response=await fetch('https://superteam.fun/api/agents/submissions/create',{method:'POST',headers:{'content-type':'application/json',accept:'application/json',authorization:`Bearer ${key}`,'user-agent':'AutonomOS/7.6'},body:JSON.stringify(payload),signal:AbortSignal.timeout(20000)});
+    const response=await fetch('https://superteam.fun/api/agents/submissions/create',{method:'POST',headers:{'content-type':'application/json',accept:'application/json',authorization:`Bearer ${key}`,'user-agent':'AutonomOS/7.7'},body:JSON.stringify(payload),signal:AbortSignal.timeout(20000)});
     const body=await safeJson(response);
     if(!response.ok)return{ok:false,reason:`http_${response.status}:${body?.error||body?.message||''}`.slice(0,200)};
     // This is the one marketplace where "delivered" genuinely does NOT mean "will be
@@ -734,7 +734,7 @@ async function dealworkAction(kind,opportunity,{env,credentials,claim,deliverabl
   }catch(error){return{ok:false,reason:String(error?.message||error).slice(0,220)}}
 }
 
-function auth(key){return{accept:'application/json','user-agent':'AutonomOS/7.6',authorization:`Bearer ${key}`}}
+function auth(key){return{accept:'application/json','user-agent':'AutonomOS/7.7',authorization:`Bearer ${key}`}}
 async function safeJson(response){try{return await response.json()}catch{return{}}}
 
 // P1 fix: submit-then-wait implementation of dealwork.ai's documented bid flow (see

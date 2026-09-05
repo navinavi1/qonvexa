@@ -21,7 +21,7 @@ export const DEFAULT_AUTONOMOS_CONFIG = Object.freeze({
   maxApiCostPercentOfPayout: 35,
   maxJobsPerCycle: 6,
   maxConcurrentJobs: 4,
-  platformGeneration: 7,
+  platformGeneration: 8,
   autoClaimJobs: true,
   autoCompetitiveSubmissions: false,
   // Commissioning lane: prove the autonomous execution path on small, fully-escrowed
@@ -31,11 +31,11 @@ export const DEFAULT_AUTONOMOS_CONFIG = Object.freeze({
   cryptoOnlyEarnings: true,
   requireEscrowForAutoClaim: true,
   rejectDemoAndTestJobs: true,
-  minJobPayoutUsd: 10,
-  clawlancerMinJobPayoutUsd: 10,
-  dealworkMinJobPayoutUsd: 10,
-  superteamMinJobPayoutUsd: 10,
-  t2000MinOpenJobPayoutUsd: 10,
+  minJobPayoutUsd: 0.5,
+  clawlancerMinJobPayoutUsd: 0.5,
+  dealworkMinJobPayoutUsd: 0.5,
+  superteamMinJobPayoutUsd: 0.5,
+  t2000MinOpenJobPayoutUsd: 0.5,
   t2000PriorityOpenJobPayoutUsd: 25,
   t2000PremiumOpenJobPayoutUsd: 50,
   autoReplication: true,
@@ -56,11 +56,10 @@ export function normalizeConfig(raw = {}) {
   const previousGeneration = Number(mergedRaw.platformGeneration || (legacy ? 0 : 3));
   const cfg = { ...DEFAULT_AUTONOMOS_CONFIG, ...mergedRaw };
   if (legacy && Number(raw.maxJobsPerCycle) === 2) cfg.maxJobsPerCycle = 6;
-  // Generation 7 keeps the normal $10 floor but adds a bounded $0.50 commissioning lane
-  // for crypto-native escrow jobs so we can prove the end-to-end worker path safely.
-  // Generation 6 deliberately relaxed the v5 $25 discovery floor to $10.
-  // The previous floor was hiding viable $10-$24 work before the agents could rank it.
-  // Explicit custom values other than the v5 defaults are preserved.
+  // Generation 8 implements the owner's explicit '$0.50 and above' earning floor.
+  // $0.50 is a minimum, never a target or preferred price. Higher-value work is ranked
+  // by expected value/success probability and is preferred when it is equally executable.
+  // Generation 6 previously relaxed the old $25 discovery floor to $10.
   if (previousGeneration < 6) {
     if (raw.minJobPayoutUsd === undefined || Number(raw.minJobPayoutUsd) === 25) cfg.minJobPayoutUsd = 10;
     if (raw.clawlancerMinJobPayoutUsd === undefined || Number(raw.clawlancerMinJobPayoutUsd) === 25) cfg.clawlancerMinJobPayoutUsd = 10;
@@ -78,7 +77,18 @@ export function normalizeConfig(raw = {}) {
     if (raw.commissioningMinPayoutUsd === undefined) cfg.commissioningMinPayoutUsd = 0.5;
     if (raw.cryptoOnlyEarnings === undefined) cfg.cryptoOnlyEarnings = true;
   }
-  cfg.platformGeneration = 7;
+
+  if (previousGeneration < 8) {
+    // v7 shipped with $10 normal floors and a separate $0.50 commissioning lane. The
+    // production owner explicitly wants all legitimate executable work from $0.50 up.
+    // Migrate the known v7 defaults only; preserve any genuinely custom floor.
+    if (raw.minJobPayoutUsd === undefined || Number(cfg.minJobPayoutUsd) === 10) cfg.minJobPayoutUsd = 0.5;
+    if (raw.clawlancerMinJobPayoutUsd === undefined || Number(cfg.clawlancerMinJobPayoutUsd) === 10) cfg.clawlancerMinJobPayoutUsd = 0.5;
+    if (raw.dealworkMinJobPayoutUsd === undefined || Number(cfg.dealworkMinJobPayoutUsd) === 10) cfg.dealworkMinJobPayoutUsd = 0.5;
+    if (raw.superteamMinJobPayoutUsd === undefined || Number(cfg.superteamMinJobPayoutUsd) === 10) cfg.superteamMinJobPayoutUsd = 0.5;
+    if (raw.t2000MinOpenJobPayoutUsd === undefined || Number(cfg.t2000MinOpenJobPayoutUsd) === 10) cfg.t2000MinOpenJobPayoutUsd = 0.5;
+  }
+  cfg.platformGeneration = 8;
   cfg.enabled = Boolean(cfg.enabled);
   cfg.killSwitch = Boolean(cfg.killSwitch);
   cfg.zeroSpendMode = cfg.zeroSpendMode !== false;
@@ -109,11 +119,11 @@ export function normalizeConfig(raw = {}) {
   cfg.cryptoOnlyEarnings = cfg.cryptoOnlyEarnings !== false;
   cfg.rejectDemoAndTestJobs = cfg.rejectDemoAndTestJobs !== false;
   cfg.requireEscrowForAutoClaim = cfg.requireEscrowForAutoClaim !== false;
-  cfg.minJobPayoutUsd = clampNumber(cfg.minJobPayoutUsd, 0, 100000, 10);
-  cfg.clawlancerMinJobPayoutUsd = clampNumber(cfg.clawlancerMinJobPayoutUsd, cfg.minJobPayoutUsd, 100000, Math.max(10,cfg.minJobPayoutUsd));
-  cfg.dealworkMinJobPayoutUsd = clampNumber(cfg.dealworkMinJobPayoutUsd, cfg.minJobPayoutUsd, 100000, Math.max(10,cfg.minJobPayoutUsd));
-  cfg.superteamMinJobPayoutUsd = clampNumber(cfg.superteamMinJobPayoutUsd, cfg.minJobPayoutUsd, 100000, Math.max(10,cfg.minJobPayoutUsd));
-  cfg.t2000MinOpenJobPayoutUsd = clampNumber(cfg.t2000MinOpenJobPayoutUsd, 0, 100000, 10);
+  cfg.minJobPayoutUsd = clampNumber(cfg.minJobPayoutUsd, 0, 100000, 0.5);
+  cfg.clawlancerMinJobPayoutUsd = clampNumber(cfg.clawlancerMinJobPayoutUsd, cfg.minJobPayoutUsd, 100000, Math.max(0.5,cfg.minJobPayoutUsd));
+  cfg.dealworkMinJobPayoutUsd = clampNumber(cfg.dealworkMinJobPayoutUsd, cfg.minJobPayoutUsd, 100000, Math.max(0.5,cfg.minJobPayoutUsd));
+  cfg.superteamMinJobPayoutUsd = clampNumber(cfg.superteamMinJobPayoutUsd, cfg.minJobPayoutUsd, 100000, Math.max(0.5,cfg.minJobPayoutUsd));
+  cfg.t2000MinOpenJobPayoutUsd = clampNumber(cfg.t2000MinOpenJobPayoutUsd, 0, 100000, 0.5);
   cfg.t2000PriorityOpenJobPayoutUsd = clampNumber(cfg.t2000PriorityOpenJobPayoutUsd, cfg.t2000MinOpenJobPayoutUsd, 100000, Math.max(25, cfg.t2000MinOpenJobPayoutUsd));
   cfg.t2000PremiumOpenJobPayoutUsd = clampNumber(cfg.t2000PremiumOpenJobPayoutUsd, cfg.t2000PriorityOpenJobPayoutUsd, 100000, Math.max(50, cfg.t2000PriorityOpenJobPayoutUsd));
   cfg.autoReplication = cfg.autoReplication !== false;

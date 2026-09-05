@@ -41,6 +41,12 @@ import { JobRegistry, classifyFailure } from './job-registry.js';
 // opportunity from scratch would re-attempt claimMarketplaceJob() and risk a double
 // claim/bid — recovery for an already-claimed job is recoverInFlightJobs()'s job, not
 // the durable dispatcher's transport-level retry.
+
+export function revalidateClaimedCapability(opportunity, context={}){
+  const capability=classifyOpportunity(opportunity,context);
+  return {ok:Boolean(capability.executable),capability,reason:capability.executable?'':`claimed_job_capability_no_longer_executable:${capability.mode||'unknown'}${capability.missingTools?.length?`:missing_${capability.missingTools.join('+')}`:''}`};
+}
+
 export function shouldReportSuccessToDurableDispatcher(result){
   return Boolean(result?.claimed)||Boolean(result?.bidSubmitted)||Boolean(result?.durable)||Boolean(result?.delivered)||Boolean(result?.preclaimRejected)||Boolean(result?.handledByRuntime);
 }
@@ -56,11 +62,17 @@ export function applyCommissioningCandidateGate(candidates,config,{ledger=[],act
   const pool=canaries.length?canaries:rows;
   if(!pool.length)return [];
   return [...pool].sort((a,b)=>{
+    // Commissioning means 'one safe proof at a time', not '$0.50 jobs only'. Prefer the
+    // strongest executable opportunity at/above the floor: success probability first,
+    // then expected profit/payout. Cost breaks ties last. This prevents the old behavior
+    // where sorting payout ascending kept selecting the cheapest $0.50 listing forever.
+    const pa=Number(a?.outcome?.probability||0),pb=Number(b?.outcome?.probability||0);if(pa!==pb)return pb-pa;
+    const ea=Number(a?.economics?.expectedProfitUsd||0),eb=Number(b?.economics?.expectedProfitUsd||0);if(ea!==eb)return eb-ea;
+    const ba=Number(a?.budgetUsd||0),bb=Number(b?.budgetUsd||0);if(ba!==bb)return bb-ba;
     const simple=x=>/deterministic|data-transform|translation|copywriting/i.test(String(x?.capability?.mode||x?.capability?.skill||''))?0:1;
     const sa=simple(a),sb=simple(b);if(sa!==sb)return sa-sb;
-    const ca=Number(a?.economics?.outOfPocketCostUsd??a?.capability?.estimatedModelCostUsd??0),cb=Number(b?.economics?.outOfPocketCostUsd??b?.capability?.estimatedModelCostUsd??0);if(ca!==cb)return ca-cb;
-    const pa=Number(a?.budgetUsd||0),pb=Number(b?.budgetUsd||0);if(pa!==pb)return pa-pb;
-    return Number(b?.outcome?.probability||0)-Number(a?.outcome?.probability||0);
+    const ca=Number(a?.economics?.outOfPocketCostUsd??a?.capability?.estimatedModelCostUsd??0),cb=Number(b?.economics?.outOfPocketCostUsd??b?.capability?.estimatedModelCostUsd??0);
+    return ca-cb;
   }).slice(0,1);
 }
 
@@ -335,7 +347,7 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
       taskAgents.retireOrphans([...activeJobs.keys()]);
       const metrics = calculateMetrics(ledger, jobs, opportunities, seen.size);
       return {
-        project:'AutonomOS', version:'7.6.0',
+        project:'AutonomOS', version:'7.7.0',
         runtime:{
           ...state,
           status:config.killSwitch ? 'emergency_stopped' : config.enabled ? (cycleRunning ? 'working' : 'running') : 'stopped',
@@ -528,7 +540,7 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
       return x402.protect({req,res,product,handler:async()=>executeTrackedProduct(product,Object.fromEntries(Object.entries(req.query||{}).map(([k,v])=>[k,String(v??'')])),{paid:true,source:'x402'})});
     },
     async previewProduct(productId,query){const product=currentProduct(productId);if(!product)throw Object.assign(new Error('Unknown product.'),{status:404});return executeTrackedProduct(product,query,{paid:false,source:'admin_preview'});},
-    catalog(){return{name:'AutonomOS Machine Services',version:'7.6.0',ownerWallet:wallet,payment:x402.status(),products:currentProducts().map(p=>({...p,url:new URL(p.path,siteUrl).toString()}))};}
+    catalog(){return{name:'AutonomOS Machine Services',version:'7.7.0',ownerWallet:wallet,payment:x402.status(),products:currentProducts().map(p=>({...p,url:new URL(p.path,siteUrl).toString()}))};}
   };
 
   async function cycle(trigger){
@@ -706,11 +718,11 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
 
   function effectiveJobFloor(op={}){
     if(config.commissioningMode&&['t2000','clawlancer','workprotocol'].includes(String(op.source||''))&&isCryptoNativeEarning(op))return Number(config.commissioningMinPayoutUsd||0.5);
-    if(op?.source==='t2000')return Number(config.t2000MinOpenJobPayoutUsd||10);
-    if(op?.source==='clawlancer')return Number(config.clawlancerMinJobPayoutUsd||10);
-    if(op?.source==='dealwork')return Number(config.dealworkMinJobPayoutUsd||10);
-    if(op?.source==='superteam')return Number(config.superteamMinJobPayoutUsd||10);
-    return Number(config.minJobPayoutUsd||10);
+    if(op?.source==='t2000')return Number(config.t2000MinOpenJobPayoutUsd??0.5);
+    if(op?.source==='clawlancer')return Number(config.clawlancerMinJobPayoutUsd??0.5);
+    if(op?.source==='dealwork')return Number(config.dealworkMinJobPayoutUsd??0.5);
+    if(op?.source==='superteam')return Number(config.superteamMinJobPayoutUsd??0.5);
+    return Number(config.minJobPayoutUsd??0.5);
   }
 
   // P1 fix (visibility): isAutoClaimCandidate used to just return true/false, so when
@@ -1134,6 +1146,21 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
         event('market_job_delivery_checkpoint_recovered',{jobId,source:op.source,externalId:op.externalId,transactionId:String(record.deliveryTransactionId||claim.transactionId||'')});
         continue;
       }
+      // Re-run capability preflight before spending another retry on an already-claimed
+      // job. New classifier rules may reveal that an old claim requires a wallet purchase,
+      // an unconnected social account, human identity, or another capability AutonomOS
+      // cannot truthfully perform. Keep the claim visible for manual resolution, but do not
+      // burn more model/tool budget retrying an impossible workflow.
+      const recoveryDescription=claim.workOrder?`${op.description||''}\n\n${typeof claim.workOrder==='string'?claim.workOrder:JSON.stringify(claim.workOrder).slice(0,4000)}`:op.description;
+      const recoveryCheck=revalidateClaimedCapability({...op,description:recoveryDescription},capabilityContext());
+      if(!recoveryCheck.ok){
+        const reason=recoveryCheck.reason||'claimed_job_capability_no_longer_executable';
+        jobRegistry.markSystemBlocked(op,{reasonCode:'claimed_job_requires_unsupported_capability',reason,capabilityVersion:capabilityVersion()});
+        writeInFlightJob(jobId,{...record,status:'manual_attention',manualAttentionAt:record.manualAttentionAt||new Date().toISOString(),lastError:reason});
+        appendJobStatus({id:jobId,source:op.source,externalId:op.externalId,title:op.title,budgetUsd:op.budgetUsd,currency:op.currency,status:'manual_attention',error:reason,at:new Date().toISOString(),recovered:true});
+        event('market_job_recovery_capability_blocked',{jobId,source:op.source,externalId:op.externalId,reason});
+        manualAttention++;continue;
+      }
       const key=opportunityKey(op);const attempt=executionAttempts[key]||{};
       if(Number(attempt.count||0)>=MAX_EXECUTION_ATTEMPTS){manualAttention++;writeInFlightJob(jobId,{...record,status:'manual_attention',manualAttentionAt:record.manualAttentionAt||new Date().toISOString()});continue;}
       if(attempt.lastAttemptAt&&Date.now()-Date.parse(attempt.lastAttemptAt)<retryDelayMs(EXECUTION_RETRY_BACKOFF_MS,Number(attempt.count||1),24*60*60_000))continue;
@@ -1532,7 +1559,7 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
   function connectedApps(){try{const raw=JSON.parse(String(env.AUTONOMOS_CONNECTED_APPS_JSON||'[]'));if(Array.isArray(raw))return raw.map(x=>String(x).toLowerCase().trim()).filter(Boolean);}catch{}return String(env.AUTONOMOS_CONNECTED_APPS||'').split(',').map(x=>x.toLowerCase().trim()).filter(Boolean);}
   function capabilityContext(){return{llmEnabled:Boolean(llm.available??llm.enabled),hasGithubPrTool:Boolean(env.GITHUB_TOKEN),hasShellTool:Boolean(env.E2B_API_KEY),hasBrowserTool:Boolean(env.BROWSERBASE_API_KEY&&env.BROWSERBASE_PROJECT_ID),hasDeployTool:Boolean(env.AUTONOMOS_DEPLOY_WEBHOOK_URL),hasArtifactTool:Boolean(env.S3_ENDPOINT&&env.S3_BUCKET&&env.S3_ACCESS_KEY_ID&&env.S3_SECRET_ACCESS_KEY),hasAppTool:Boolean(env.COMPOSIO_API_KEY),connectedApps:connectedApps(),hasWebSearchTool:Boolean(env.FIRECRAWL_API_KEY||env.TAVILY_API_KEY),hasDesignMediaTool:Boolean(env.CANVA_API_KEY||env.FIGMA_ACCESS_TOKEN||env.FIGMA_API_KEY)};}
   function capabilityVersion(){
-    return crypto.createHash('sha256').update(JSON.stringify({rules:'7.6',model:llm.model||'',firecrawl:Boolean(env.FIRECRAWL_API_KEY),tavily:Boolean(env.TAVILY_API_KEY),e2b:Boolean(env.E2B_API_KEY),browserbase:Boolean(env.BROWSERBASE_API_KEY&&env.BROWSERBASE_PROJECT_ID),composio:Boolean(env.COMPOSIO_API_KEY),connectedApps:connectedApps().sort(),github:Boolean(env.GITHUB_TOKEN),artifact:Boolean(env.S3_ENDPOINT&&env.S3_BUCKET),designMedia:Boolean(env.CANVA_API_KEY||env.FIGMA_ACCESS_TOKEN||env.FIGMA_API_KEY)})).digest('hex').slice(0,16);
+    return crypto.createHash('sha256').update(JSON.stringify({rules:'7.7',model:llm.model||'',firecrawl:Boolean(env.FIRECRAWL_API_KEY),tavily:Boolean(env.TAVILY_API_KEY),e2b:Boolean(env.E2B_API_KEY),browserbase:Boolean(env.BROWSERBASE_API_KEY&&env.BROWSERBASE_PROJECT_ID),composio:Boolean(env.COMPOSIO_API_KEY),connectedApps:connectedApps().sort(),github:Boolean(env.GITHUB_TOKEN),artifact:Boolean(env.S3_ENDPOINT&&env.S3_BUCKET),designMedia:Boolean(env.CANVA_API_KEY||env.FIGMA_ACCESS_TOKEN||env.FIGMA_API_KEY)})).digest('hex').slice(0,16);
   }
   function buildIncidents(){
     const out=[];const now=Date.now();const summary=jobRegistry.summary();

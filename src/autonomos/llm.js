@@ -25,7 +25,7 @@ export function createLlmClient(env = process.env) {
       const headers = { 'content-type':'application/json', ...(apiKey ? { authorization:`Bearer ${apiKey}` } : {}) };
 
       try {
-        const combinedSignal = signal ? AbortSignal.any([AbortSignal.timeout(Number(env.AUTONOMOS_LLM_TIMEOUT_MS||60000)), signal]) : AbortSignal.timeout(Number(env.AUTONOMOS_LLM_TIMEOUT_MS||60000));
+        const combinedSignal = signal ? AbortSignal.any([AbortSignal.timeout(Number(env.AUTONOMOS_LLM_TIMEOUT_MS||120000)), signal]) : AbortSignal.timeout(Number(env.AUTONOMOS_LLM_TIMEOUT_MS||120000));
         let requestBody = { ...body };
         let lastReason='';
         // GPT-5 class models can spend a small completion budget on reasoning and return

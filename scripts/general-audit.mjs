@@ -42,9 +42,9 @@ for(const key of ['OPENAI_API_KEY','DATABASE_URL','REDIS_URL','BROWSERBASE_API_K
 }
 
 const cfg=normalizeConfig({...DEFAULT_AUTONOMOS_CONFIG});
-check('Global minimum payout defaults to at least $10',Number(cfg.minJobPayoutUsd)>=10,`value=${cfg.minJobPayoutUsd}`);
-check('Clawlancer minimum defaults to at least $10',Number(cfg.clawlancerMinJobPayoutUsd)>=10,`value=${cfg.clawlancerMinJobPayoutUsd}`);
-check('Dealwork minimum defaults to at least $10',Number(cfg.dealworkMinJobPayoutUsd)>=10,`value=${cfg.dealworkMinJobPayoutUsd}`);
+check('Global minimum payout defaults to at least $0.50',Number(cfg.minJobPayoutUsd)>=0.5,`value=${cfg.minJobPayoutUsd}`);
+check('Clawlancer minimum defaults to at least $0.50',Number(cfg.clawlancerMinJobPayoutUsd)>=0.5,`value=${cfg.clawlancerMinJobPayoutUsd}`);
+check('Dealwork minimum defaults to at least $0.50',Number(cfg.dealworkMinJobPayoutUsd)>=0.5,`value=${cfg.dealworkMinJobPayoutUsd}`);
 check('Demo/test protection defaults ON',cfg.rejectDemoAndTestJobs===true);
 check('Explicit demo opportunity is rejected',isDemoOrTestOpportunity({title:'DEMO ONLY - no payment',environment:'sandbox'})===true);
 check('Legitimate software testing title is not rejected solely for word test',isDemoOrTestOpportunity({title:'QA engineer to test production web app',budgetUsd:500})===false);
@@ -58,7 +58,7 @@ check('Deferred Temporal is optional',infra.find(x=>x.id==='temporal')?.optional
 const html=read('public/admin.html'),js=read('public/admin.js');
 check('Admin exposes demo/test safety toggle',/name="rejectDemoAndTestJobs"/.test(html));
 check('Admin submits demo/test safety toggle',/rejectDemoAndTestJobs:f\.elements\.rejectDemoAndTestJobs\.checked/.test(js));
-check('Admin copy reflects $10 general floors',/global floor \$10/.test(html));
+check('Admin copy reflects $0.50 general floor',/global floor \$0\.50/.test(html));
 
 // public/ is served statically to the whole internet (express.static in server.js).
 // A stale copy of the project root — old server.js, package.json, render.yaml, Procfile,

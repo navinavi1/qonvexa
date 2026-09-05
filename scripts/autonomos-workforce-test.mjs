@@ -7,8 +7,8 @@ import { deliverMarketplaceJob } from '../src/autonomos/connectors/index.js';
 import { classifyOpportunity } from '../src/autonomos/capabilities.js';
 import { McpHttpClient } from '../src/autonomos/mcp-client.js';
 import { estimateOutcomeProbability } from '../src/autonomos/outcome-model.js';
-import { buildProofLog } from '../src/autonomos/qa-engine.js';
-import { shouldReportSuccessToDurableDispatcher, latestStatuses, selectBudgetAwareCandidates, applyCommissioningCandidateGate, resolveSettlementJobIdentity, settlementLedgerId, settlementPayoutTruth } from '../src/autonomos/runtime.js';
+import { buildProofLog, evaluateDeliverable } from '../src/autonomos/qa-engine.js';
+import { shouldReportSuccessToDurableDispatcher, latestStatuses, selectBudgetAwareCandidates, applyCommissioningCandidateGate, revalidateClaimedCapability, resolveSettlementJobIdentity, settlementLedgerId, settlementPayoutTruth } from '../src/autonomos/runtime.js';
 
 // Same class of bug as the capabilities.js fix below, in the dashboard worker-role
 // fallback: the alternation regex had no word boundaries, so 'rust' matched inside
@@ -26,6 +26,19 @@ assert.equal(classifyOpportunity({title:'Research current AI trends',description
 // document-generation; translation must win the tie since document-generation wrongly
 // requires shell/artifact-storage tooling that a plain translation task doesn't need.
 assert.equal(classifyOpportunity({title:'Translate this document to Spanish.',description:''},{llmEnabled:true}).skill,'translation','an explicit "translate" mention must win over a generic "document" tie');
+
+
+const claimedImpossible=revalidateClaimedCapability({title:'Buy MANIFEST via Passport Connect',description:'Swap USDC through Passport Connect and return proof.'},{llmEnabled:true});
+assert.equal(claimedImpossible.ok,false,'recovery must stop retrying already-claimed work that current capability rules prove impossible');
+
+// A failed optional tool attempt must not deterministically poison an otherwise valid
+// deliverable. The independent QA model still sees the failed evidence and decides whether
+// it matters to the paid acceptance contract.
+{
+  const qaLlm={enabled:true,complete:async()=>({ok:true,text:JSON.stringify({score:.94,pass:true,reasons:[]})})};
+  const qa=await evaluateDeliverable({title:'Research result',description:'Return a verified summary.'},{content:'Verified final summary with successful source evidence.',evidence:{toolCalls:[{tool:'browser',ok:false,error:'transient timeout'},{tool:'web_search',ok:true}] }},{llm:qaLlm,env:{}});
+  assert.equal(qa.ok,true,'an optional failed tool attempt must be evaluated contextually instead of causing automatic QA failure');
+}
 
 // The MCP 2025-06-18 spec requires the MCP-Protocol-Version header on every HTTP
 // request, not just initialize — without it a compliant server should silently fall
@@ -125,13 +138,13 @@ assert.equal(shouldReportSuccessToDurableDispatcher({claimed:true,delivered:fals
 assert.equal(shouldReportSuccessToDurableDispatcher({claimed:true,delivered:true}),true,'full success');
 
 const commissioningRows=[
-  {source:'t2000',externalId:'hard',budgetUsd:10,capability:{skill:'code-analysis',estimatedModelCostUsd:0.3},economics:{outOfPocketCostUsd:0.3},outcome:{probability:.9}},
-  {source:'clawlancer',externalId:'simple',budgetUsd:.5,capability:{skill:'translation',estimatedModelCostUsd:0.01},economics:{outOfPocketCostUsd:0.01},outcome:{probability:.75}},
-  {source:'dealwork',externalId:'usd',budgetUsd:50,capability:{skill:'translation',estimatedModelCostUsd:0.01},economics:{outOfPocketCostUsd:0.01},outcome:{probability:.95}}
+  {source:'t2000',externalId:'hard',budgetUsd:10,capability:{skill:'code-analysis',estimatedModelCostUsd:0.3},economics:{outOfPocketCostUsd:0.3,expectedProfitUsd:8.7},outcome:{probability:.9}},
+  {source:'clawlancer',externalId:'simple',budgetUsd:.5,capability:{skill:'translation',estimatedModelCostUsd:0.01},economics:{outOfPocketCostUsd:0.01,expectedProfitUsd:.36},outcome:{probability:.75}},
+  {source:'dealwork',externalId:'usd',budgetUsd:50,capability:{skill:'translation',estimatedModelCostUsd:0.01},economics:{outOfPocketCostUsd:0.01,expectedProfitUsd:45},outcome:{probability:.95}}
 ];
 const commissioningPicked=applyCommissioningCandidateGate(commissioningRows,{commissioningMode:true},{ledger:[],activeCount:0});
 assert.equal(commissioningPicked.length,1,'before first crypto payment commissioning must run one job at a time');
-assert.equal(commissioningPicked[0].externalId,'simple','commissioning must prefer the simplest low-cost crypto-native proof job, not the largest payout');
+assert.equal(commissioningPicked[0].externalId,'hard','commissioning must treat $0.50 as a floor, not a target, and prefer the stronger higher-value crypto candidate');
 assert.equal(applyCommissioningCandidateGate(commissioningRows,{commissioningMode:true},{ledger:[],activeCount:1}).length,0,'a commissioning job already in flight must block a second claim');
 assert.equal(applyCommissioningCandidateGate(commissioningRows,{commissioningMode:true},{ledger:[{type:'revenue',source:'t2000',amountUsd:.5,status:'settled'}],activeCount:0}).length,3,'after a real crypto settlement normal concurrency may resume');
 

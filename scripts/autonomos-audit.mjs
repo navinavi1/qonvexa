@@ -156,7 +156,7 @@ await ok('runtime boots without any paid API or private key', async () => {
     assert.equal(snap.config.zeroSpendMode, false);
     assert.equal(snap.config.maxPaidProcurementUsd, 3);
     assert.equal(snap.config.privateKeysStored, false);
-    assert.equal(snap.version, '7.6.0');
+    assert.equal(snap.version, '7.7.0');
     assert.ok('opportunitiesFound' in snap.metrics);
     assert.equal(snap.runtime.status, 'stopped');
   } finally {

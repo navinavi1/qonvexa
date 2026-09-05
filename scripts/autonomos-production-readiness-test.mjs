@@ -1,15 +1,17 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import assert from 'node:assert/strict';
+import { postgresSslConfig } from '../src/autonomos/memory.js';
 
 const root=process.cwd();
 const runtime=fs.readFileSync(path.join(root,'src/autonomos/runtime.js'),'utf8');
 const connectors=fs.readFileSync(path.join(root,'src/autonomos/connectors/index.js'),'utf8');
 const admin=fs.readFileSync(path.join(root,'public/admin.js'),'utf8');
 const pkg=JSON.parse(fs.readFileSync(path.join(root,'package.json'),'utf8'));
+const triggerTask=fs.readFileSync(path.join(root,'trigger/autonomos-paid-job.js'),'utf8');
 
-assert.match(runtime,/version:'7\.6\.0'/,'runtime snapshot must identify AutonomOS 7.6.0');
-assert.match(runtime,/rules:'7\.6'/,'capability fingerprint must use the current rules generation');
+assert.match(runtime,/version:'7\.7\.0'/,'runtime snapshot must identify AutonomOS 7.7.0');
+assert.match(runtime,/rules:'7\.7'/,'capability fingerprint must use the current rules generation');
 assert.ok(pkg.scripts['autonomos-regression-test'],'current regression script name must be version-neutral');
 assert.ok(!pkg.scripts['autonomos71-regression-test'],'stale 7.1 regression script alias must be removed');
 assert.match(pkg.scripts.verify,/autonomos-production-readiness-test/,'production readiness audit must run inside npm run verify');
@@ -25,3 +27,9 @@ assert.match(admin,/DISCOVERY ONLY/,'dashboard must expose discovery-only connec
 assert.doesNotMatch(connectors,/AutonomOS\/(?:1\.0|2\.0|3\.0|7\.0|7\.4)/,'connector HTTP user-agent strings must not advertise stale AutonomOS generations');
 
 console.log('AutonomOS production readiness audit PASS');
+
+assert.deepEqual(postgresSslConfig({DATABASE_URL:'postgresql://u:p@host.render.com/db',RENDER:'true'}),{rejectUnauthorized:false},'Render memory Postgres must use encrypted TLS without rejecting Render certificate chain');
+assert.deepEqual(postgresSslConfig({DATABASE_URL:'postgresql://u:p@example.com/db',AUTONOMOS_DB_SSL_REJECT_UNAUTHORIZED:'true'}),{rejectUnauthorized:true},'explicit strict certificate verification must remain available');
+
+assert.match(triggerTask,/maxDuration:1800/,'Trigger paid-job task keeps a bounded 30-minute run ceiling');
+assert.match(triggerTask,/28\*60_000/,'Trigger callback waits almost the full task window instead of aborting at the old 20-minute ceiling');

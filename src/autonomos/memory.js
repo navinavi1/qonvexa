@@ -9,7 +9,8 @@ export class AgentMemory {
     if(!this.env.DATABASE_URL)return{ok:false,reason:'database_url_missing'};
     try{
       const {Pool}=await import('pg');
-      this.pool=new Pool({connectionString:this.env.DATABASE_URL,ssl:/localhost|127\.0\.0\.1/.test(this.env.DATABASE_URL)?undefined:{rejectUnauthorized:true}});
+      const ssl=postgresSslConfig(this.env);
+      this.pool=new Pool({connectionString:this.env.DATABASE_URL,...(ssl?{ssl}:{})});
       await this.pool.query('CREATE EXTENSION IF NOT EXISTS vector');
       await this.pool.query(`CREATE TABLE IF NOT EXISTS autonomos_memory (
         id bigserial primary key,
@@ -112,3 +113,14 @@ function resolveEmbeddingEndpoint(env){
 }
 function vectorLiteral(v){return `[${v.map(x=>Number(x)||0).join(',')}]`;}
 function limitSafe(v){return Math.max(1,Math.min(50,Number(v||6)));}
+
+export function postgresSslConfig(env){
+  const url=String(env.DATABASE_URL||'');
+  if(/localhost|127\.0\.0\.1/.test(url))return undefined;
+  const explicit=String(env.AUTONOMOS_DB_SSL_REJECT_UNAUTHORIZED??'').trim().toLowerCase();
+  if(explicit)return{rejectUnauthorized:/^(1|true|yes|on)$/.test(explicit)};
+  // Render Postgres is TLS-encrypted but its certificate chain is not trusted by node-postgres
+  // unless a CA is supplied. Render's documented Node pattern is rejectUnauthorized:false.
+  if(env.RENDER||/render\.com|render\.internal/i.test(url))return{rejectUnauthorized:false};
+  return{rejectUnauthorized:true};
+}

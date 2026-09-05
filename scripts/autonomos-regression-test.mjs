@@ -67,11 +67,11 @@ assert.equal(registry.summary().policyHold,1);
 assert.equal(registry.summary().graveyard,1);
 
 const migrated=normalizeConfig({platformGeneration:5,minJobPayoutUsd:25,clawlancerMinJobPayoutUsd:25,dealworkMinJobPayoutUsd:25,superteamMinJobPayoutUsd:25,t2000MinOpenJobPayoutUsd:35,minMarginPercent:35,maxApiCostPercentOfPayout:25});
-assert.equal(migrated.platformGeneration,7,'v5 policy config must migrate to current generation');
-assert.equal(migrated.minJobPayoutUsd,10,'v5 $25 global floor must relax to the $10 production floor');
-assert.equal(migrated.clawlancerMinJobPayoutUsd,10);
-assert.equal(migrated.dealworkMinJobPayoutUsd,10);
-assert.equal(migrated.t2000MinOpenJobPayoutUsd,10);
+assert.equal(migrated.platformGeneration,8,'v5 policy config must migrate to current generation');
+assert.equal(migrated.minJobPayoutUsd,0.5,'legacy floors must migrate to the owner-requested $0.50 minimum');
+assert.equal(migrated.clawlancerMinJobPayoutUsd,0.5);
+assert.equal(migrated.dealworkMinJobPayoutUsd,0.5);
+assert.equal(migrated.t2000MinOpenJobPayoutUsd,0.5);
 assert.equal(migrated.minMarginPercent,20);
 assert.equal(migrated.maxApiCostPercentOfPayout,35);
 assert.equal(migrated.autoCompetitiveSubmissions,false,'competitive auto-submit must default off');
@@ -162,4 +162,14 @@ try{
   assert.match(adminSource,/FULL AUTO.*AUTO WORK · CASHOUT ACTION.*DISCOVERY ONLY/s,'connector UI must show lifecycle truth instead of a generic Ready badge');
 }
 
-console.log('AUTONOMOS 7.6 REGRESSION: PASS');
+
+const passportBuy=classifyOpportunity({title:'Buy MANIFEST via Passport Connect',description:'Use Passport Connect to buy MANIFEST and return proof.'},{llmEnabled:true,hasWebSearchTool:true});
+assert.equal(passportBuy.executable,false,'paid jobs that require buying/swapping through Passport must be rejected before claim');
+assert.ok(passportBuy.missingTools.includes('external_procurement'));
+const xPost=classifyOpportunity({title:'Hunter UA post — X → $0.50',description:'Publish the required post.'},{llmEnabled:true,hasAppTool:true,connectedApps:[]});
+assert.equal(xPost.executable,false,'X posting must require an actually connected X app, not only a generic Composio key');
+assert.ok(xPost.missingTools.includes('connected_app:x'));
+const inviteAgent=classifyOpportunity({title:'Invite new agent — first settlement → $0.50',description:'Invite a new agent and provide its identity.'},{llmEnabled:true});
+assert.equal(inviteAgent.executable,false,'external-agent referral/identity tasks must not be blindly claimed');
+
+console.log('AUTONOMOS 7.7 REGRESSION: PASS');

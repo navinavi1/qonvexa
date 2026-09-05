@@ -28,7 +28,7 @@
       <header class="admin-top">
         <div>
           <div class="admin-brand"><span class="brand-mark">Q</span><strong>QONVEXA</strong></div>
-          <p>Owner dashboard · QONVEXA · AutonomOS 7.0</p>
+          <p>Owner dashboard · QONVEXA · AutonomOS 7.7</p>
         </div>
         <div class="admin-top-actions">
           <span id="admin-user" class="admin-user"></span>
@@ -100,7 +100,7 @@
       <section class="admin-view" data-panel="autonomos">
         <div class="autonomos-hero autonomos-v7-hero">
           <div>
-            <small>AUTONOMOS 7.1 · PRODUCTION CLOSURE</small>
+            <small>AUTONOMOS 7.7 · PRODUCTION</small>
             <h1>Mission Control</h1>
             <p>Discover → qualify → claim/bid → execute → QA → deliver → settle. Permanent failures never return to agents.</p>
           </div>
@@ -197,19 +197,19 @@
         <details class="admin-panel autonomos-panel autonomos-disclosure">
           <summary><span><small>POLICIES</small><b>Autonomy & profitability rules</b></span><span>Configure →</span></summary>
           <form id="autonomos-config-form" class="admin-form autonomos-policy-form">
-            <p class="settings-note">Production defaults: global floor $10. Commissioning mode can temporarily admit fully-escrowed crypto-native jobs from $0.50 to prove the end-to-end worker path. Policy/economics/funding issues go to reversible Policy Hold; only externally final jobs go to Graveyard.</p>
+            <p class="settings-note">Production defaults: global floor $0.50 — this is a minimum, not a target. Commissioning mode limits the first unproven crypto run to one safe job at a time, while still preferring the strongest higher-value executable job. Policy/economics/funding issues go to reversible Policy Hold; only externally final jobs go to Graveyard.</p>
             <label>Genesis objective<textarea name="genesisObjective" rows="3" maxlength="1000"></textarea></label>
             <div class="autonomos-form-grid">
               <label>Heartbeat, sec<input name="heartbeatSeconds" type="number" min="30" max="3600"></label><label>Fast poll, sec<input name="fastClaimPollSeconds" type="number" min="10" max="3600"></label><label>Minimum margin, %<input name="minMarginPercent" type="number" min="0" max="95" step="1"></label>
-              <label>Global min payout, $<input name="minJobPayoutUsd" type="number" min="0" max="100000" step="0.01"></label><label>Clawlancer min, $<input name="clawlancerMinJobPayoutUsd" type="number" min="0" max="100000" step="1"></label><label>Dealwork min, $<input name="dealworkMinJobPayoutUsd" type="number" min="0" max="100000" step="1"></label>
-              <label>Superteam min, $<input name="superteamMinJobPayoutUsd" type="number" min="0" max="100000" step="1"></label><label>t2000 min, $<input name="t2000MinOpenJobPayoutUsd" type="number" min="0" max="100000" step="1"></label><label>Max API cost, % payout<input name="maxApiCostPercentOfPayout" type="number" min="0" max="80"></label>
+              <label>Global min payout, $<input name="minJobPayoutUsd" type="number" min="0" max="100000" step="0.01"></label><label>Clawlancer min, $<input name="clawlancerMinJobPayoutUsd" type="number" min="0" max="100000" step="0.01"></label><label>Dealwork min, $<input name="dealworkMinJobPayoutUsd" type="number" min="0" max="100000" step="0.01"></label>
+              <label>Superteam min, $<input name="superteamMinJobPayoutUsd" type="number" min="0" max="100000" step="0.01"></label><label>t2000 min, $<input name="t2000MinOpenJobPayoutUsd" type="number" min="0" max="100000" step="0.01"></label><label>Max API cost, % payout<input name="maxApiCostPercentOfPayout" type="number" min="0" max="80"></label>
               <label>Max workers<input name="maxChildren" type="number" min="1" max="32"></label><label>Jobs / cycle<input name="maxJobsPerCycle" type="number" min="0" max="20"></label><label>Max paid tool call, $<input name="maxPaidProcurementUsd" type="number" min="0" max="100000" step="0.01"></label>
               <label>Seed budget, $<input name="seedSpendBudgetUsd" type="number" min="0" max="50" step="0.5"></label><label>Reserve, %<input name="reservePercent" type="number" min="0" max="100"></label><label>Growth, %<input name="growthPercent" type="number" min="0" max="100"></label>
               <label>Experiments, %<input name="experimentPercent" type="number" min="0" max="100"></label><label>Commissioning min, $<input name="commissioningMinPayoutUsd" type="number" min="0.01" max="10" step="0.01"></label><label>t2000 priority, $<input name="t2000PriorityOpenJobPayoutUsd" type="number" min="0" max="100000" step="1"></label><label>t2000 premium, $<input name="t2000PremiumOpenJobPayoutUsd" type="number" min="0" max="100000" step="1"></label>
             </div>
             <div class="autonomos-form-grid autonomos-policy-checks">
               <label class="autonomos-check"><input name="zeroSpendMode" type="checkbox"><span>Zero-spend mode</span></label><label class="autonomos-check"><input name="earnedFundsOnly" type="checkbox"><span>Earned-funds-only</span></label><label class="autonomos-check"><input name="allowExternalSpending" type="checkbox"><span>Allow external spending</span></label>
-              <label class="autonomos-check"><input name="autoClaimJobs" type="checkbox"><span>Auto-claim qualified jobs</span></label><label class="autonomos-check"><input name="commissioningMode" type="checkbox"><span>Commissioning lane ($0.50+ crypto escrow)</span></label><label class="autonomos-check"><input name="cryptoOnlyEarnings" type="checkbox"><span>Crypto-native earnings only</span></label><label class="autonomos-check"><input name="autoCompetitiveSubmissions" type="checkbox"><span>Auto-submit competitive bounties</span></label><label class="autonomos-check"><input name="requireEscrowForAutoClaim" type="checkbox"><span>Require escrow for instant claims</span></label><label class="autonomos-check"><input name="rejectDemoAndTestJobs" type="checkbox"><span>Reject demo/test jobs</span></label><label class="autonomos-check"><input name="autoReplication" type="checkbox"><span>Spawn task specialists</span></label>
+              <label class="autonomos-check"><input name="autoClaimJobs" type="checkbox"><span>Auto-claim qualified jobs</span></label><label class="autonomos-check"><input name="commissioningMode" type="checkbox"><span>Commissioning lane (one safe proof at a time · $0.50+ minimum)</span></label><label class="autonomos-check"><input name="cryptoOnlyEarnings" type="checkbox"><span>Crypto-native earnings only</span></label><label class="autonomos-check"><input name="autoCompetitiveSubmissions" type="checkbox"><span>Auto-submit competitive bounties</span></label><label class="autonomos-check"><input name="requireEscrowForAutoClaim" type="checkbox"><span>Require escrow for instant claims</span></label><label class="autonomos-check"><input name="rejectDemoAndTestJobs" type="checkbox"><span>Reject demo/test jobs</span></label><label class="autonomos-check"><input name="autoReplication" type="checkbox"><span>Spawn task specialists</span></label>
             </div>
             <button class="button" type="submit">Save policies</button><p id="autonomos-config-status" class="admin-status" role="status"></p>
           </form>
