@@ -69,7 +69,9 @@ export async function firecrawlSearch(query, env = process.env, signal) {
     });
     const body = await response.json().catch(() => ({}));
     if (!response.ok || body?.success === false) return { ok: false, error: `http_${response.status}`, detail: body?.error || '' };
-    const results = (Array.isArray(body?.data) ? body.data : []).slice(0, 5).map(r => ({
+    const rows=Array.isArray(body?.data?.web)?body.data.web:Array.isArray(body?.data)?body.data:null;
+    if(!rows)return {ok:false,error:'firecrawl_search_schema_drift'};
+    const results = rows.slice(0, 5).map(r => ({
       title: String(r?.title || '').slice(0, 200),
       url: String(r?.url || ''),
       snippet: sanitizeUntrustedText(String(r?.description || r?.markdown || '').slice(0, 500))
@@ -370,7 +372,7 @@ export const TOOL_SCHEMAS = [
   {type:'function',function:{name:'open_pull_request',description:'Propose verified code changes to a public GitHub repo via a fork and Pull Request. Never merges automatically.',parameters:{type:'object',properties:{repoUrl:{type:'string'},baseBranch:{type:'string'},newBranch:{type:'string'},commitMessage:{type:'string'},files:{type:'array',items:{type:'object',properties:{path:{type:'string'},content:{type:'string'}},required:['path','content']}}},required:['repoUrl','newBranch','commitMessage','files']}}}
 ];
 
-export async function runTool(name, args, env = process.env, { config = null, validateAction = null, signal = null, remainingBudgetUsd = null, jobId = '' } = {}) {
+export async function runTool(name, args, env = process.env, { config = null, validateAction = null, signal = null, remainingBudgetUsd = null, jobId = '', budget = null } = {}) {
   if (signal?.aborted) return { ok:false, error:'aborted_by_emergency_stop', costUsd:0 };
   const costUsd = estimateToolCostUsd(name, args, env);
   if (remainingBudgetUsd !== null && remainingBudgetUsd !== undefined && Number.isFinite(Number(remainingBudgetUsd)) && costUsd > Number(remainingBudgetUsd) + 1e-9) return { ok:false, error:`job_budget_exceeded:need_${costUsd.toFixed(6)}_remaining_${Number(remainingBudgetUsd).toFixed(6)}`, costUsd:0 };
@@ -378,6 +380,7 @@ export async function runTool(name, args, env = process.env, { config = null, va
     const policy = validateAction({ kind:'spend', amountUsd:costUsd }, config);
     if (!policy.allowed) return { ok:false, error:`spend_not_authorized:${policy.reason}`, costUsd:0 };
   }
+  if(budget)budget.charge(costUsd);
   let result;
   if (name === 'web_search') {
     result = env.TAVILY_API_KEY ? await tavilySearch(args?.query, env, signal) : await firecrawlSearch(args?.query, env, signal);

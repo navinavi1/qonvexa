@@ -11,6 +11,11 @@ export class AutonomOSStore {
     try { return JSON.parse(fs.readFileSync(this.file(name), 'utf8')); } catch { return structuredCloneSafe(fallback); }
   }
 
+  readJsonStrict(name, fallback = {}) {
+    try { return JSON.parse(fs.readFileSync(this.file(name), 'utf8')); }
+    catch(error) { if(error?.code==='ENOENT')return structuredCloneSafe(fallback);throw error; }
+  }
+
   writeJson(name, value) {
     const target = this.file(name);
     return this.withLock(name, () => this.writeJsonUnlocked(target, value));

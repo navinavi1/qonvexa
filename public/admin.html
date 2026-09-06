@@ -8,6 +8,7 @@
   <link rel="stylesheet" href="styles.css">
   <link rel="stylesheet" href="admin.css">
   <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="marketplaces.css">
 </head>
 <body class="admin-body">
   <main class="admin-shell">
@@ -100,7 +101,7 @@
       <section class="admin-view" data-panel="autonomos">
         <div class="autonomos-hero autonomos-v7-hero">
           <div>
-            <small>AUTONOMOS 7.7 · PRODUCTION</small>
+            <small>AUTONOMOS 14 · OPERATIONS</small>
             <h1>Mission Control</h1>
             <p>Discover → qualify → claim/bid → execute → QA → deliver → settle. Permanent failures never return to agents.</p>
           </div>
@@ -117,6 +118,7 @@
           </div>
         </div>
 
+        <section aria-label="AgentHansa and TaskBounty"><h2>AgentHansa + TaskBounty</h2><div id="new-marketplaces"></div></section>
         <div class="autonomos-stat-grid autonomos-v7-metrics">
           <article class="autonomos-stat"><small>READY NOW</small><strong id="auto-ready">0</strong><span>qualified & executable</span></article>
           <article class="autonomos-stat"><small>NEW</small><strong id="auto-new">0</strong><span>first-seen job versions</span></article>
@@ -141,6 +143,8 @@
             <button class="autonomos-queue-tab active" data-job-tab="ready" type="button">Ready</button>
             <button class="autonomos-queue-tab" data-job-tab="new" type="button">New</button>
             <button class="autonomos-queue-tab" data-job-tab="proposal" type="button">Bid / Competitive</button>
+            <button class="autonomos-queue-tab" data-job-tab="stale" type="button">Awaiting live confirmation</button>
+            <button class="autonomos-queue-tab" data-job-tab="archived" type="button">Archived listings</button>
             <button class="autonomos-queue-tab" data-job-tab="working" type="button">Working</button>
             <button class="autonomos-queue-tab" data-job-tab="retry" type="button">Retry</button>
             <button class="autonomos-queue-tab" data-job-tab="policyHold" type="button">Policy Hold</button>
@@ -302,6 +306,7 @@
     <div id="autonomos-job-dialog-body" class="autonomos-job-detail"></div>
   </dialog>
 
+  <script src="marketplaces.js" defer></script>
   <script src="admin.js" defer></script>
 </body>
 </html>

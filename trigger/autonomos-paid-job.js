@@ -1,3 +1,4 @@
+import { readDurableResponse } from '../src/autonomos/durable-response.js';
 import { task } from '@trigger.dev/sdk';
 
 export const autonomosPaidJob = task({
@@ -14,8 +15,6 @@ export const autonomosPaidJob = task({
       body:JSON.stringify({opportunity:payload?.opportunity,issuedAt:payload.issuedAt,signature:payload.signature}),
       signal:AbortSignal.timeout(28*60_000)
     });
-    const body=await response.json().catch(()=>({}));
-    if(!response.ok||body?.ok===false)throw new Error(`autonomos_trigger_worker_http_${response.status}:${String(body?.error||body?.reason||'').slice(0,240)}`);
-    return body;
+  return readDurableResponse(response,'autonomos_trigger_worker');
   }
 });

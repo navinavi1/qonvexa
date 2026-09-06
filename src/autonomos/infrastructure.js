@@ -1,3 +1,4 @@
+import { ArtifactStore } from './artifact-store.js';
 const COMPONENTS = [
   {id:'openai_agents',name:'OpenAI Agents SDK',keys:['OPENAI_API_KEY']},
   {id:'langgraph',name:'LangGraph checkpointing',keys:['DATABASE_URL']},
@@ -24,6 +25,7 @@ const COMPONENTS = [
 ];
 
 export function infrastructureStatus(env=process.env){
+  env=new ArtifactStore({env}).env;
   return COMPONENTS.map(component=>{
     const missing=component.keys.filter(k=>!String(env[k]||'').trim());
     const configured=missing.length===0;

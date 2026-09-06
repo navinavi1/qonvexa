@@ -80,11 +80,14 @@ export class AgentMemory {
          FROM autonomos_memory
          WHERE kind=$2 AND tenant_scope=$3 AND (job_scope='' OR job_scope=$4) AND embedding IS NOT NULL
          ORDER BY embedding <=> $1::vector, utility DESC
-         LIMIT $3`,
+         LIMIT $5`,
         [vectorLiteral(vector),kind,String(tenantScope||'global'),String(jobScope||''),limitSafe(limit)]
       );
       return rows.filter(r=>Number(r.similarity||0)>=Number(minSimilarity||0));
-    }catch{return this.recent(kind,limit,{tenantScope,jobScope});}
+    }catch(error){
+      this.logger.warn?.('AutonomOS semantic recall failed; using recent memory',String(error?.message||error).slice(0,220));
+      return this.recent(kind,limit,{tenantScope,jobScope});
+    }
   }
 
   async contextForOpportunity(opportunity,{limit=5}={}){

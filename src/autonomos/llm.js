@@ -12,7 +12,7 @@ export function createLlmClient(env = process.env) {
     model: initial.model || 'none',
     get available(){return enabled&&Date.now()>=circuitOpenUntil;},
     status(){return{enabled,available:enabled&&Date.now()>=circuitOpenUntil,provider:client.provider,model:client.model,consecutiveFailures,circuitOpenUntil:circuitOpenUntil?new Date(circuitOpenUntil).toISOString():''};},
-    async complete({ system, user, messages, tools, maxTokens = 700, temperature, signal, task='general', model:requestedModel='' }) {
+    async complete({ system, user, messages, tools, maxTokens = 700, temperature, signal, task='general', model:requestedModel='', maxEmptyRetries=1 }) {
       const route=resolveLlmEndpoint(env,{task});
       const baseUrl=route.baseUrl; const apiKey=route.apiKey; const model=String(requestedModel||route.model||'');
       if (!baseUrl || !model) return { ok:false, reason:'llm_not_configured' };
@@ -27,7 +27,7 @@ export function createLlmClient(env = process.env) {
       try {
         const combinedSignal = signal ? AbortSignal.any([AbortSignal.timeout(Number(env.AUTONOMOS_LLM_TIMEOUT_MS||120000)), signal]) : AbortSignal.timeout(Number(env.AUTONOMOS_LLM_TIMEOUT_MS||120000));
         let requestBody = { ...body };
-        let lastReason='';
+        let lastReason='';let emptyRetries=0;let totalUsage={prompt_tokens:0,completion_tokens:0};
         // GPT-5 class models can spend a small completion budget on reasoning and return
         // no visible text. Retry empty completions once with a larger completion budget
         // and low reasoning effort instead of failing every paid job as llm_empty_response.
@@ -49,22 +49,25 @@ export function createLlmClient(env = process.env) {
           }
 
           const respBody=await response.json();
+          for(const key of Object.keys(totalUsage))totalUsage[key]+=Number(respBody.usage?.[key]||0);
           const message=respBody?.choices?.[0]?.message;
-          if(message?.tool_calls?.length){registerSuccess();return{ok:true,toolCalls:message.tool_calls,message,usage:respBody.usage||null,model,provider:route.gateway};}
+          if(message?.tool_calls?.length){registerSuccess();return{ok:true,toolCalls:message.tool_calls,message,usage:totalUsage,model,provider:route.gateway};}
           const text=extractText(message?.content);
-          if(text){registerSuccess();return{ok:true,text,message:{...message,content:text},usage:respBody.usage||null,model,provider:route.gateway};}
+          if(text){registerSuccess();return{ok:true,text,message:{...message,content:text},usage:totalUsage,model,provider:route.gateway};}
 
           lastReason='llm_empty_response';
-          if(attempt<3){
+          if(attempt<3&&emptyRetries<maxEmptyRetries){
+            emptyRetries++;
             const next=Math.min(12000,Math.max(Number(requestBody.max_completion_tokens||requestBody.max_tokens||maxTokens)*2,3200));
             requestBody={...requestBody,max_completion_tokens:next,reasoning_effort:'low'};
             delete requestBody.max_tokens;
             delete requestBody.temperature;
             continue;
           }
+          break;
         }
         registerFailure(true);
-        return{ok:false,reason:lastReason||'llm_empty_response',model,provider:route.gateway};
+        return{ok:false,reason:lastReason||'llm_empty_response',usage:totalUsage,model,provider:route.gateway};
       } catch (error) {
         const reason = signal?.aborted ? 'aborted_by_emergency_stop' : String(error?.message || error).slice(0,200);
         registerFailure(!signal?.aborted);

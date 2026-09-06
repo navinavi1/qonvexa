@@ -1,10 +1,10 @@
 import crypto from 'node:crypto';
 
 const URL_RE = /\bhttps?:\/\/[^\s<>]+/ig;
-const FILE_RE = /\b(?:pdf|docx|xlsx|csv|zip|json|md|markdown|html|png|jpg|jpeg|webp|pptx)\b/i;
+const FILE_RE = /\b(?:pdf|docx|xlsx|csv|zip|png|jpg|jpeg|webp|pptx)\b/i;
 const CODE_RE = /\b(?:code|repo(?:sitory)?|pull request|api|bug|javascript|typescript|python|sql|docker|mvp|prototype|smart contract|solidity|rust|test(?:s|ing)?)\b/i;
 const RESEARCH_RE = /\b(?:research|audit|analy[sz]e|compare|investigate|find|sources?|citations?|current|live data|web search)\b/i;
-const ARTIFACT_RE = /\b(?:deliverable|file|artifact|download|upload|attachment|repository|pull request|repo|prototype|mvp|spreadsheet|report|document)\b/i;
+const ARTIFACT_RE = /\b(?:deliverable|file|artifact|download|upload|attachment|repository|pull request|repo|prototype|mvp|spreadsheet)\b/i;
 
 export function buildAcceptanceContract(opportunity = {}) {
   const text = `${opportunity.title || ''}\n${opportunity.description || ''}\n${opportunity.__workOrderRaw ? JSON.stringify(opportunity.__workOrderRaw) : ''}`.slice(0, 18000);
@@ -35,7 +35,7 @@ export function buildAcceptanceContract(opportunity = {}) {
   if (URL_RE.test(text) || /url|link|website|endpoint/i.test(text)) {
     requirements.push({id:'links', description:'Provide the required stable URL(s) or endpoint(s) when explicitly requested.'});
   }
-  if (/test|tests|unit test|integration test|e2e/i.test(text)) {
+  if (/\b(?:tests?|unit test|integration test|e2e)\b/i.test(text)) {
     requirements.push({id:'tests', description:'Actually run the requested tests and preserve the observed result.'});
     evidence.push({id:'test-run', type:'successful_tool', tools:['run_shell','run_python']});
   }

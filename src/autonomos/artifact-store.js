@@ -2,9 +2,15 @@ import path from 'node:path';
 
 export class ArtifactStore {
   constructor({ env = process.env } = {}) {
-    this.env = env;
+    this.env = {...env,
+      S3_BUCKET:env.S3_BUCKET||env.R2_BUCKET,
+      S3_ENDPOINT:env.S3_ENDPOINT||env.R2_ENDPOINT,
+      S3_ACCESS_KEY_ID:env.S3_ACCESS_KEY_ID||env.R2_ACCESS_KEY_ID,
+      S3_SECRET_ACCESS_KEY:env.S3_SECRET_ACCESS_KEY||env.R2_SECRET_ACCESS_KEY,
+      S3_PUBLIC_BASE_URL:env.S3_PUBLIC_BASE_URL||env.R2_PUBLIC_BASE_URL
+    };
     this.client = null;
-    this.bucket = String(env.S3_BUCKET || '').trim();
+    this.bucket = String(this.env.S3_BUCKET || '').trim();
   }
 
   configured() {
@@ -55,6 +61,7 @@ export class ArtifactStore {
       const { PutObjectCommand } = await import('@aws-sdk/client-s3');
       await this.client.send(new PutObjectCommand({ Bucket:this.bucket, Key:cleanKey, Body:body, ContentType:String(contentType || 'application/octet-stream') }));
       const access = await this.getDownloadUrl(cleanKey);
+      if(!access.ok||!access.url)return {ok:false,reason:access.reason||'artifact_download_url_unavailable',bucket:this.bucket,key:cleanKey,uploaded:true};
       return { ok:true, bucket:this.bucket, key:cleanKey, bytes:body.length, contentType, url:access.url || '', urlExpiresInSeconds:access.expiresInSeconds || null };
     } catch (error) {
       return { ok:false, reason:String(error?.message || error).slice(0,300) };

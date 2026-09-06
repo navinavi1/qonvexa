@@ -5,6 +5,8 @@ import { isEvmAddress as isEvmAddressLike } from '../treasury.js';
 const T2000_DEFAULT_MCP_URL = 'https://mcp.t2000.ai/mcp';
 
 const CONNECTOR_DEFS = Object.freeze([
+  {id:'agenthansa',name:'AgentHansa',kind:'competitive-jobs',description:'Shared rewards and quests.',requiredEnv:['AGENTHANSA_API_KEY']},
+  {id:'taskbounty',name:'TaskBounty',kind:'competitive-jobs',description:'Verified coding bounties.',requiredEnv:['TASKBOUNTY_API_KEY','TASKBOUNTY_AGENT_ID']},
   { id:'x402-bazaar', name:'x402 / Bazaar', kind:'seller+discovery', description:'Machine-payable API discovery and seller rail.', requiredEnv:[] },
   { id:'clawlancer', name:'Clawlancer', kind:'jobs', description:'Pre-funded Base/USDC bounties: discover → claim → deliver → paid.', requiredEnv:[], optionalEnv:['CLAWLANCER_API_KEY','CLAWLANCER_AGENT_ID'] },
   { id:'dealwork', name:'dealwork.ai', kind:'jobs', description:'Human+AI hybrid marketplace, USD via Stripe escrow, open-task instant claim.', requiredEnv:[], optionalEnv:['DEALWORK_API_KEY','DEALWORK_AGENT_ID'] },
@@ -359,8 +361,8 @@ async function discoverDealwork(env,credentials,limit){
   const key=String(env.DEALWORK_API_KEY||credentials?.dealwork?.apiKey||'');
   if(!key) return {signals:[],health:{ok:false,error:'dealwork_api_key_missing'}};
   const headers={accept:'application/json','user-agent':'AutonomOS/7.7',authorization:`Bearer ${key}`};
-  const response=await fetch(`https://dealwork.ai/api/v1/jobs?per_page=${Math.min(50,limit)}&sort=newest`,{headers,signal:AbortSignal.timeout(12000)});
-  const body=await safeJson(response); if(!response.ok) return {signals:[],health:{ok:false,status:response.status,error:body?.error?.message||body?.error||''}};
+  let response={ok:false,status:0},body={};
+  try{response=await fetch(`https://dealwork.ai/api/v1/jobs?per_page=${Math.min(50,limit)}&sort=newest`,{headers,signal:AbortSignal.timeout(12000)});body=await safeJson(response);}catch{}
   const publicRows=Array.isArray(body?.data)?body.data:[];
   // dealwork exposes a dedicated authenticated matching feed. Merge it with the public
   // newest feed so AutonomOS prioritizes jobs the marketplace itself considers a fit
@@ -374,6 +376,52 @@ async function discoverDealwork(env,credentials,limit){
   const dedup=new Map();
   for(const row of [...matchedRows,...publicRows]){const id=String(row?.id||row?.jobId||row?._id||'');if(id&&!dedup.has(id))dedup.set(id,row);}
   const rows=[...dedup.values()];
+
+  // Crash-recovery lane: an open-job claim may commit on Dealwork while our HTTP response
+  // is lost and the newly assigned job disappears from the public/matching feed. The
+  // canonical source of truth is GET /contracts, so surface our own active contracts back
+  // into discovery as already_assigned work. Assigned contracts come FIRST so the global
+  // discovery cap cannot starve a real escrowed obligation behind fresh marketplace noise.
+  let assignedSignals=[]; let assignedContractsOk=false; let assignedContracts=0; let assignedJobReads=0;
+  try{
+    const listed=await listDealworkWorkerContracts({headers});
+    if(listed.ok){
+      assignedContractsOk=true;
+      const recoverableStates=new Set(['escrow_locked','in_progress']);
+      const active=listed.rows.filter(contract=>recoverableStates.has(dealworkContractState(contract)));
+      assignedContracts=active.length;
+      const maxAssigned=Math.max(1,Math.min(Number(limit||50),25));
+      for(const contract of active.slice(0,maxAssigned)){
+        const contractId=String(contract?.id||'').trim();
+        const jobId=String(contract?.jobId||contract?.job_id||contract?.job?.id||'').trim();
+        if(!contractId||!jobId)continue;
+        let job=dedup.get(jobId)||contract?.job||{};
+        // Contract list rows are intentionally compact on many APIs. Pull the authoritative
+        // job brief only when the row does not already contain enough execution context.
+        if(!String(job?.description||job?.brief||job?.instructions||'').trim()){
+          const detail=await readDealworkJob(jobId,{headers});
+          if(detail.ok){job=dealworkJobValue(detail.body);assignedJobReads++;}
+        }
+        if(!String(job?.description||job?.brief||job?.instructions||contract?.description||'').trim())continue;
+        const fixedPrice=Number(job?.fixedPrice??job?.fixed_price??job?.budgetUsd??job?.budgetMax??job?.budget_max??contract?.fixedPrice??contract?.fixed_price??contract?.amount??contract?.escrowAmount??contract?.escrow_amount??0);
+        const state=dealworkContractState(contract);
+        assignedSignals.push(normalizeOpportunity('dealwork',{
+          ...job,
+          id:jobId,
+          externalId:jobId,
+          title:job?.title||contract?.jobTitle||contract?.title||`Assigned Dealwork contract ${jobId}`,
+          description:job?.description||job?.brief||job?.instructions||contract?.description||`Authoritative assigned Dealwork contract ${contractId}`,
+          budgetUsd:fixedPrice,
+          status:'available',
+          contractId,
+          contractState:state,
+          escrowed:true,
+          claimMode:'already_assigned'
+        },{feePercent:10,currency:'USD',network:'stripe',escrowed:true,claimMode:'already_assigned',status:'available'}));
+      }
+    }
+  }catch{}
+
   // P1 fix: jobMode:'open' jobs support instant claim, but jobMode:'bid' jobs — per
   // dealwork.ai's own published skill.md — are a real, documented, two-step flow (submit
   // a bid, wait for the buyer to accept it, THEN execute) and are usually the
@@ -393,8 +441,9 @@ async function discoverDealwork(env,credentials,limit){
     return {...op,escrowOnAccept:true,marketConfiguration:{fixedPrice,budgetMax,maxConcurrent,requiredOpenBudget,invalid,reason:invalid?`budgetMax_${budgetMax}_below_fixedPrice_x_maxConcurrent_${requiredOpenBudget}`:''}};
   });
   const bidSignals=bidRows.map(row=>normalizeOpportunity('dealwork',{...row,budgetUsd:Number(row.budgetMax??row.budget_max??row.budgetMin??row.budget_min??0)},{feePercent:10,currency:'USD',network:'stripe',escrowed:false,claimMode:'bid',status:row.status||'open'}));
-  const signals=[...openSignals,...bidSignals];
-  return {signals,health:{ok:true,count:signals.length,totalOpenJobs:rows.length,matchedJobs:matchedRows.length,matchingFeed:matchingOk,openMode:openSignals.length,bidMode:bidSignals.length}};
+  const assignedIds=new Set(assignedSignals.map(x=>String(x.externalId||'')));
+  const signals=[...assignedSignals,...openSignals.filter(x=>!assignedIds.has(String(x.externalId||''))),...bidSignals.filter(x=>!assignedIds.has(String(x.externalId||'')))];
+  return {signals,health:{ok:true,count:signals.length,totalOpenJobs:rows.length,matchedJobs:matchedRows.length,matchingFeed:matchingOk,openMode:openSignals.length,bidMode:bidSignals.length,assignedMode:assignedSignals.length,assignedContracts,assignedContractsFeed:assignedContractsOk,assignedJobReads}};
 }
 
 async function discoverClawlancer(env,credentials,limit){
@@ -413,7 +462,8 @@ async function discoverSuperteam(credentials,limit){
     const response=await fetch(`https://superteam.fun/api/agents/listings/live?take=${Math.min(limit,50)}`,{headers:{accept:'application/json','user-agent':'AutonomOS/7.7',authorization:`Bearer ${key}`},signal:AbortSignal.timeout(15000)});
     const body=await safeJson(response);
     if(!response.ok) return {signals:[],health:{ok:false,status:response.status,error:body?.error||body?.message||''}};
-    const rows=findArrayByKey(body,['listings','data','items','results']);
+    const rows=Array.isArray(body)?body:(body?.listings??body?.data?.listings??body?.data?.items??body?.data??body?.items??body?.results);
+    if(!Array.isArray(rows))return {signals:[],health:{ok:false,error:'superteam_invalid_live_feed_shape',authoritativeLiveSnapshot:false}};
     const signals=rows.map(raw=>normalizeOpportunity('superteam',{
       id:raw.id||raw.slug||raw._id,
       title:raw.title||raw.name,
@@ -421,9 +471,13 @@ async function discoverSuperteam(credentials,limit){
       budgetUsd:raw.usdValue??raw.rewardInUsd??raw.reward??raw.rewardAmount??raw.compensationAmount??0,
       category:raw.type||raw.skills?.[0]||'research',
       url:raw.url||`https://superteam.fun/earn/listing/${raw.slug||raw.id||''}`,
-      status:'open'
+      status:raw.status||'open',
+      deadline:raw.deadline||raw.endsAt||raw.endDate||''
     },{feePercent:0,currency:'USDC',network:'Solana',escrowed:false,claimMode:'competitive_submission'}));
-    return {signals,health:{ok:true,count:signals.length}};
+    const live=signals.filter(x=>['open','published','active'].includes(String(x.status||'').toLowerCase())&&(!x.deadline||Date.parse(x.deadline)>Date.now()));
+    const total=Number(body?.total??body?.totalCount??body?.meta?.total??body?.pagination?.total);
+    const complete=(rows.length<Math.min(limit,50)||(Number.isFinite(total)&&total>=0&&rows.length>=total))&&body?.hasMore!==true&&!body?.nextCursor;
+    return {signals:live,health:{ok:true,count:live.length,authoritativeLive:true,liveIds:live.map(x=>String(x.externalId)),complete,authoritativeLiveSnapshot:complete,liveExternalIds:live.map(x=>String(x.externalId))}};
   }catch(error){return {signals:[],health:{ok:false,error:String(error?.message||error).slice(0,180)}}}
 }
 
@@ -680,6 +734,13 @@ export function t2000Amount(raw={}){
   return 0;
 }
 
+function containsArrayByKey(value,keys,depth=0){
+  if(depth>5||value==null)return false;if(Array.isArray(value))return true;if(typeof value!=='object')return false;
+  for(const key of keys)if(Array.isArray(value[key]))return true;
+  for(const child of Object.values(value))if(containsArrayByKey(child,keys,depth+1))return true;
+  return false;
+}
+
 function findArrayByKey(value,keys,depth=0){
   if(depth>5||value==null)return[]; if(Array.isArray(value))return value;
   if(typeof value!=='object')return[];
@@ -706,36 +767,153 @@ async function clawlancerAction(kind,opportunity,{env,credentials,claim,delivera
 async function dealworkAction(kind,opportunity,{env,credentials,claim,deliverable}={}){
   const key=String(env.DEALWORK_API_KEY||credentials?.dealwork?.apiKey||''); if(!key)return{ok:false,reason:'dealwork_api_key_missing'};
   const headers={...auth(key),'content-type':'application/json'};
-  try{
-    if(kind==='claim'){
-      const criteriaIds=Array.isArray(opportunity.raw?.acceptanceCriteria)?opportunity.raw.acceptanceCriteria.map(c=>c?.id).filter(Boolean):[];
-      const claimResp=await fetch(`https://dealwork.ai/api/v1/jobs/${encodeURIComponent(opportunity.externalId)}/claim`,{method:'POST',headers,body:JSON.stringify({acceptedCriteriaIds:criteriaIds}),signal:AbortSignal.timeout(20000)});
-      const claimBody=await safeJson(claimResp); if(!claimResp.ok)return{ok:false,reason:`http_${claimResp.status}:${claimBody?.error?.code||''}:${String(claimBody?.error?.message||'').slice(0,120)}`,body:claimBody};
-      const contract=claimBody?.data?.contract||claimBody?.contract||claimBody?.data;
-      const contractId=String(contract?.id||''); if(!contractId)return{ok:false,reason:'dealwork_claim_missing_contract_id',body:claimBody};
-      // Platform's own rule: "Never work before escrow locks. Verify contract state is
-      // escrow_locked before START_WORK." Claiming an open task locks escrow immediately,
-      // so this should always be safe, but we still check the returned state defensively.
-      if(contract?.state&&contract.state!=='escrow_locked')return{ok:false,reason:`dealwork_unexpected_state:${contract.state}`,body:claimBody};
-      const startResp=await fetch(`https://dealwork.ai/api/v1/contracts/${encodeURIComponent(contractId)}/events`,{method:'POST',headers,body:JSON.stringify({type:'START_WORK'}),signal:AbortSignal.timeout(15000)});
-      const startBody=await safeJson(startResp); if(!startResp.ok)return{ok:false,reason:`dealwork_start_work_http_${startResp.status}`,body:startBody};
-      return{ok:true,jobId:contractId,transactionId:'',body:startBody};
+  if(kind==='claim'){
+    // An assigned contract is already ours; never call /jobs/{id}/claim a second time.
+    // This also lets a future recovery feed safely rehydrate a contract after a process
+    // crash around the original claim response.
+    if(opportunity.claimMode==='already_assigned'){
+      const contractId=String(opportunity.raw?.contractId||opportunity.raw?.contract_id||'');
+      if(!contractId)return{ok:false,reason:'dealwork_assigned_contract_id_missing'};
+      const probe=await readDealworkContract(contractId,{headers});
+      if(!probe.ok)return {ok:false,reason:'dealwork_contract_read_failed'};
+      const state=dealworkContractState(probe.body);
+      if(dealworkDeliveryAlreadyAccepted(state))return {ok:false,reason:'dealwork_contract_already_delivered'};
+      if(state==='escrow_locked'){
+        const started=await startDealworkContract(contractId,{env,credentials});
+        if(!started.ok)return started;
+      }else if(!dealworkWorkAlreadyStarted(state))return{ok:false,reason:`dealwork_assigned_contract_unexpected_state:${state||'unknown'}`};
+      const workOrder=await readDealworkJob(opportunity.externalId,{headers});
+      return{ok:true,jobId:contractId,transactionId:contractId,recoveredAssigned:true,workOrder:workOrder.ok?workOrder.body:null,body:probe.body||opportunity.raw};
     }
-    const contractId=claim?.jobId; if(!contractId)return{ok:false,reason:'dealwork_missing_contract_id'};
-    const deliverableResp=await fetch(`https://dealwork.ai/api/v1/contracts/${encodeURIComponent(contractId)}/deliverables`,{method:'POST',headers,body:JSON.stringify({description:opportunity.title||'Completed task',outputData:{result:deliverable.content,format:deliverable.format||'text/markdown'}}),signal:AbortSignal.timeout(20000)});
-    const deliverableBody=await safeJson(deliverableResp); if(!deliverableResp.ok)return{ok:false,reason:`dealwork_deliverable_http_${deliverableResp.status}`,body:deliverableBody};
-    const deliverableId=String(deliverableBody?.data?.id||deliverableBody?.id||''); if(!deliverableId)return{ok:false,reason:'dealwork_deliverable_missing_id',body:deliverableBody};
-    const submitResp=await fetch(`https://dealwork.ai/api/v1/contracts/${encodeURIComponent(contractId)}/events`,{method:'POST',headers,body:JSON.stringify({type:'SUBMIT_WORK',deliverableId}),signal:AbortSignal.timeout(15000)});
-    const submitBody=await safeJson(submitResp); if(!submitResp.ok)return{ok:false,reason:`dealwork_submit_work_http_${submitResp.status}`,body:submitBody};
-    // NOTE: this moves the contract to in_review, not paid. The buyer (human or agent) must
-    // APPROVE — or it auto-approves after 24h. Real revenue is only recorded once
-    // syncMarketplaceTransactions sees the contract in a 'paid' state (see below).
-    return{ok:true,jobId:contractId,transactionId:contractId,body:submitBody,pendingReview:true};
-  }catch(error){return{ok:false,reason:String(error?.message||error).slice(0,220)}}
+
+    const criteriaIds=Array.isArray(opportunity.raw?.acceptanceCriteria)?opportunity.raw.acceptanceCriteria.map(c=>c?.id).filter(Boolean):[];
+    let claimResp,claimBody={};
+    try{
+      claimResp=await fetch(`https://dealwork.ai/api/v1/jobs/${encodeURIComponent(opportunity.externalId)}/claim`,{method:'POST',headers,body:JSON.stringify({acceptedCriteriaIds:criteriaIds}),signal:AbortSignal.timeout(20000)});
+      claimBody=await safeJson(claimResp);
+    }catch(error){
+      const recovered=await recoverDealworkClaimByJob(opportunity.externalId,{env,credentials,headers});
+      return recovered||{ok:false,reason:`dealwork_claim_transport_uncertain:${String(error?.message||error).slice(0,180)}`};
+    }
+    if(!claimResp.ok){
+      // A 409/timeout-style response can arrive after the server already committed the
+      // contract. Probe our worker contracts before deciding the claim failed.
+      const recovered=await recoverDealworkClaimByJob(opportunity.externalId,{env,credentials,headers});
+      if(recovered)return recovered;
+      return{ok:false,reason:`http_${claimResp.status}:${claimBody?.error?.code||''}:${String(claimBody?.error?.message||'').slice(0,120)}`,body:claimBody};
+    }
+    const contract=dealworkContractValue(claimBody);
+    const contractId=String(contract?.id||''); if(!contractId)return{ok:false,reason:'dealwork_claim_missing_contract_id',body:claimBody};
+    const state=dealworkContractState(contract);
+    if(state&&state!=='escrow_locked'&&!dealworkWorkAlreadyStarted(state))return{ok:false,reason:`dealwork_unexpected_state:${state}`,body:claimBody};
+    if(!dealworkWorkAlreadyStarted(state)){
+      const started=await startDealworkContract(contractId,{env,credentials});
+      if(!started.ok)return{ok:false,reason:`dealwork_start_work_failed:${started.reason||'unknown'}`,body:started.body||claimBody};
+    }
+    const workOrder=await readDealworkJob(opportunity.externalId,{headers});
+    return{ok:true,jobId:contractId,transactionId:contractId,body:claimBody,workOrder:workOrder.ok?workOrder.body:null};
+  }
+
+  const contractId=String(claim?.jobId||''); if(!contractId)return{ok:false,reason:'dealwork_missing_contract_id'};
+  // If a previous SUBMIT_WORK committed but the HTTP response was lost, do not create a
+  // duplicate deliverable on retry. Dealwork exposes the canonical contract state.
+  const before=await readDealworkContract(contractId,{headers});
+  if(!before.ok)return {ok:false,reason:'dealwork_contract_read_failed'};
+  const beforeState=dealworkContractState(before.body||{});
+  if(dealworkDeliveryAlreadyAccepted(beforeState))return{ok:true,jobId:contractId,transactionId:contractId,pendingReview:true,recoveredAfterUncertainWrite:true,state:beforeState,body:before.body};
+
+  if(!['in_progress','revision_requested'].includes(beforeState))return {ok:false,reason:'dealwork_contract_not_deliverable'};
+  const resultText=String(deliverable?.content||'');
+  const prior=await findMatchingDealworkDeliverable(contractId,resultText,{headers});
+  if(prior?.lookupFailed)return {ok:false,reason:'dealwork_deliverable_lookup_failed'};
+  let deliverableId=String(prior?.id||'');let deliverableBody={};let createFailure='';
+  if(!deliverableId)try{
+    const deliverableResp=await fetch(`https://dealwork.ai/api/v1/contracts/${encodeURIComponent(contractId)}/deliverables`,{method:'POST',headers,body:JSON.stringify({description:opportunity.title||'Completed task',outputData:{result:resultText,format:deliverable.format||'text/markdown'}}),signal:AbortSignal.timeout(20000)});
+    deliverableBody=await safeJson(deliverableResp);
+    if(deliverableResp.ok)deliverableId=String(deliverableBody?.data?.id||deliverableBody?.id||'');
+    else createFailure=`dealwork_deliverable_http_${deliverableResp.status}`;
+  }catch(error){createFailure=`dealwork_deliverable_transport_uncertain:${String(error?.message||error).slice(0,180)}`;}
+
+  if(!deliverableId){
+    const afterCreate=await readDealworkContract(contractId,{headers});
+    const afterCreateState=dealworkContractState(afterCreate.body||{});
+    if(dealworkDeliveryAlreadyAccepted(afterCreateState))return{ok:true,jobId:contractId,transactionId:contractId,pendingReview:true,recoveredAfterUncertainWrite:true,state:afterCreateState,body:afterCreate.body};
+    const existing=await findMatchingDealworkDeliverable(contractId,resultText,{headers});
+    if(existing?.id)deliverableId=String(existing.id);
+    else return{ok:false,reason:createFailure||'dealwork_deliverable_missing_id',body:deliverableBody};
+  }
+
+  let submitResp,submitBody={};
+  try{
+    submitResp=await fetch(`https://dealwork.ai/api/v1/contracts/${encodeURIComponent(contractId)}/events`,{method:'POST',headers,body:JSON.stringify({type:'SUBMIT_WORK',deliverableId}),signal:AbortSignal.timeout(15000)});
+    submitBody=await safeJson(submitResp);
+    if(!submitResp.ok){
+      const probe=await readDealworkContract(contractId,{headers});const state=dealworkContractState(probe.body||{});
+      if(dealworkDeliveryAlreadyAccepted(state))return{ok:true,jobId:contractId,transactionId:contractId,pendingReview:true,recoveredAfterUncertainWrite:true,state,body:probe.body};
+      return{ok:false,reason:`dealwork_submit_work_http_${submitResp.status}`,body:submitBody};
+    }
+  }catch(error){
+    const probe=await readDealworkContract(contractId,{headers});const state=dealworkContractState(probe.body||{});
+    if(dealworkDeliveryAlreadyAccepted(state))return{ok:true,jobId:contractId,transactionId:contractId,pendingReview:true,recoveredAfterUncertainWrite:true,state,body:probe.body};
+    return{ok:false,reason:`dealwork_submit_work_transport_uncertain:${String(error?.message||error).slice(0,180)}`};
+  }
+  // This moves the contract to in_review, not paid. Revenue is recorded only after the
+  // settlement synchronizer observes an authoritative paid/released state.
+  return{ok:true,jobId:contractId,transactionId:contractId,body:submitBody,pendingReview:true};
 }
 
 function auth(key){return{accept:'application/json','user-agent':'AutonomOS/7.7',authorization:`Bearer ${key}`}}
 async function safeJson(response){try{return await response.json()}catch{return{}}}
+
+function dealworkContractValue(body={}){
+  const data=body?.data;
+  return data?.contract||body?.contract||(data&&!Array.isArray(data)?data:body)||{};
+}
+function dealworkJobValue(body={}){
+  const data=body?.data;
+  return data?.job||body?.job||(data&&!Array.isArray(data)?data:body)||{};
+}
+function dealworkContractState(body={}){
+  const contract=dealworkContractValue(body);
+  return String(contract?.state||contract?.status||body?.state||body?.status||'').trim().toLowerCase();
+}
+function dealworkWorkAlreadyStarted(state){return ['in_progress','in_review','revision_requested','completed','paid'].includes(String(state||'').toLowerCase());}
+function dealworkDeliveryAlreadyAccepted(state){return ['in_review','completed','paid'].includes(String(state||'').toLowerCase());}
+async function readDealworkContract(contractId,{headers}={}){
+  if(!contractId)return{ok:false,reason:'contract_id_missing',body:null};
+  try{const r=await fetch(`https://dealwork.ai/api/v1/contracts/${encodeURIComponent(contractId)}`,{headers,signal:AbortSignal.timeout(12000)});const body=await safeJson(r);return r.ok?{ok:true,body,state:dealworkContractState(body)}:{ok:false,reason:`http_${r.status}`,body};}
+  catch(error){return{ok:false,reason:String(error?.message||error).slice(0,180),body:null};}
+}
+async function readDealworkJob(jobId,{headers}={}){
+  if(!jobId)return{ok:false,reason:'job_id_missing',body:null};
+  try{const r=await fetch(`https://dealwork.ai/api/v1/jobs/${encodeURIComponent(jobId)}`,{headers,signal:AbortSignal.timeout(12000)});const body=await safeJson(r);return r.ok?{ok:true,body}:{ok:false,reason:`http_${r.status}`,body};}
+  catch(error){return{ok:false,reason:String(error?.message||error).slice(0,180),body:null};}
+}
+async function listDealworkWorkerContracts({headers}={}){
+  try{const r=await fetch('https://dealwork.ai/api/v1/contracts?role=worker&per_page=100',{headers,signal:AbortSignal.timeout(12000)});const body=await safeJson(r);const rows=Array.isArray(body?.data)?body.data:Array.isArray(body?.data?.contracts)?body.data.contracts:[];return r.ok?{ok:true,rows}:{ok:false,reason:`http_${r.status}`,rows:[]};}
+  catch(error){return{ok:false,reason:String(error?.message||error).slice(0,180),rows:[]};}
+}
+async function recoverDealworkClaimByJob(jobId,{env,credentials,headers}={}){
+  const listed=await listDealworkWorkerContracts({headers});if(!listed.ok)return null;
+  const activeStates=new Set(['escrow_locked','in_progress','in_review','revision_requested','completed','paid']);
+  const contract=listed.rows.find(c=>String(c?.jobId||c?.job_id||c?.job?.id||'')===String(jobId)&&activeStates.has(dealworkContractState(c)));
+  if(!contract)return null;
+  const contractId=String(contract?.id||'');if(!contractId)return null;
+  const state=dealworkContractState(contract);
+  if(state==='escrow_locked'){
+    const started=await startDealworkContract(contractId,{env,credentials});if(!started.ok)return null;
+  }
+  const workOrder=await readDealworkJob(jobId,{headers});
+  return{ok:true,jobId:contractId,transactionId:contractId,recoveredClaim:true,workOrder:workOrder.ok?workOrder.body:null,body:contract};
+}
+async function findMatchingDealworkDeliverable(contractId,resultText,{headers}={}){
+  try{
+    const r=await fetch(`https://dealwork.ai/api/v1/contracts/${encodeURIComponent(contractId)}/deliverables`,{headers,signal:AbortSignal.timeout(12000)});const body=await safeJson(r);
+    if(!r.ok)return {lookupFailed:true};const rows=Array.isArray(body?.data)?body.data:Array.isArray(body?.data?.deliverables)?body.data.deliverables:null;
+    if(!rows)return {lookupFailed:true};
+    return rows.find(item=>String(item?.outputData?.result??item?.output_data?.result??'')===String(resultText||''))||null;
+  }catch{return {lookupFailed:true};}
+}
 
 // P1 fix: submit-then-wait implementation of dealwork.ai's documented bid flow (see
 // skill.md: POST /jobs/{id}/bids -> wait for buyer -> GET /bids/mine to see acceptance ->
@@ -781,11 +959,24 @@ export async function checkDealworkBidStatus(bidId,{env=process.env,credentials=
 export async function startDealworkContract(contractId,{env=process.env,credentials={}}={}){
   const key=String(env.DEALWORK_API_KEY||credentials?.dealwork?.apiKey||''); if(!key)return{ok:false,reason:'dealwork_api_key_missing'};
   const headers={...auth(key),'content-type':'application/json'};
+  const before=await readDealworkContract(contractId,{headers});
+  if(!before.ok)return {ok:false,reason:'dealwork_contract_read_failed'};
+  if(dealworkWorkAlreadyStarted(before.state))return{ok:true,body:before.body,state:before.state,alreadyStarted:true};
+  if(before.state!=='escrow_locked')return {ok:false,reason:'dealwork_contract_not_escrow_locked'};
   try{
     const response=await fetch(`https://dealwork.ai/api/v1/contracts/${encodeURIComponent(contractId)}/events`,{method:'POST',headers,body:JSON.stringify({type:'START_WORK'}),signal:AbortSignal.timeout(15000)});
-    const body=await safeJson(response); if(!response.ok)return{ok:false,reason:`http_${response.status}`};
-    return{ok:true,body};
-  }catch(error){return{ok:false,reason:String(error?.message||error).slice(0,200)}}
+    const body=await safeJson(response);
+    if(response.ok)return{ok:true,body,state:'in_progress'};
+    const after=await readDealworkContract(contractId,{headers});
+    if(after.ok&&dealworkWorkAlreadyStarted(after.state))return{ok:true,body:after.body,state:after.state,recoveredAfterUncertainWrite:true};
+    return{ok:false,reason:`http_${response.status}`,body};
+  }catch(error){
+    // A timeout can happen after Dealwork committed START_WORK. Read the canonical contract
+    // state before retrying the side effect.
+    const after=await readDealworkContract(contractId,{headers});
+    if(after.ok&&dealworkWorkAlreadyStarted(after.state))return{ok:true,body:after.body,state:after.state,recoveredAfterUncertainWrite:true};
+    return{ok:false,reason:String(error?.message||error).slice(0,200)};
+  }
 }
 
 function dedupe(rows){const seen=new Set();return rows.filter(row=>{const key=`${row.source}:${row.externalId}`;if(seen.has(key))return false;seen.add(key);return true})}
@@ -881,4 +1072,11 @@ export async function syncMarketplaceTransactions({env=process.env,credentials={
     }catch(error){health.t2000={ok:false,connected:false,error:String(error?.message||error).slice(0,180)}}
   }
   return {transactions:rows,health};
+}
+
+export async function reconcileMarketplaceDelivery(opportunity,claim,{env=process.env,credentials={}}={}){
+  if(opportunity.source!=='dealwork')return {ok:false,reason:'provider_reconciliation_unavailable'};
+  const key=env.DEALWORK_API_KEY||credentials?.dealwork?.apiKey;if(!key)return {ok:false};
+  const result=await readDealworkContract(claim?.jobId,{headers:auth(key)});
+  return result.ok&&dealworkDeliveryAlreadyAccepted(result.state)?{ok:true,jobId:claim.jobId,transactionId:claim.jobId,pendingReview:true,recoveredAfterUncertainWrite:true}: {ok:false,reason:'delivery_not_authoritatively_confirmed'};
 }

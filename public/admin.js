@@ -30,6 +30,7 @@ function switchView(name){
   location.hash = name === 'overview' ? '' : name;
 }
 els('.admin-tab').forEach(b=>b.addEventListener('click',()=>switchView(b.dataset.view)));
+window.addEventListener('hashchange',()=>{const view=location.hash.slice(1)||'overview';if(els('.admin-tab').some(b=>b.dataset.view===view))switchView(view);});
 els('[data-go]').forEach(b=>b.addEventListener('click',()=>switchView(b.dataset.go)));
 
 loginForm?.addEventListener('submit',async e=>{
@@ -136,6 +137,7 @@ function renderReadiness(){
 function renderAutonomOS(){
   if(!autonomosData)return;
   const a=autonomosData;
+  window.renderNewMarketplaces?.(a.newMarketplaces);
   const status=a.runtime?.status||'stopped';
   const badge=el('#autonomos-runtime-badge');
   if(badge){badge.textContent=pretty(status);badge.className=`autonomos-badge ${esc(status)}`}
@@ -291,7 +293,7 @@ function renderAutonomosJobQueue(a){
   else rows=queues[autonomosJobTab]||[];
   const query=String(el('#autonomos-job-search')?.value||'').trim().toLowerCase();
   if(query)rows=rows.filter(row=>[row.title,row.externalId,row.source,row.reason,row.reasonCode,row.status,row.claimMode].some(v=>String(v||'').toLowerCase().includes(query)));
-  body.innerHTML=rows.slice(0,50).map(row=>`<tr class="autonomos-job-row" data-job-identity="${esc(row.identity||`${row.source}:${row.externalId}`)}"><td><b>${esc(row.title||row.externalId||'Untitled')}</b><small>${esc(row.externalId||'')}</small></td><td>${esc(pretty(row.source||''))}</td><td>${usd(row.budgetUsd)} <small>${esc(row.currency||'')}</small></td><td><span class="autonomos-mode">${esc(pretty(row.claimMode||'unknown'))}</span></td><td><span class="status ${row.status==='graveyard'?'s-error':row.status==='policy_hold'||row.status==='not_eligible'||row.status==='system_blocked'||row.status==='capability_hold'||row.status==='manual_attention'?'s-warning':row.status==='retry'?'s-in_progress':'s-ready'}">${esc(pretty(row.status||'new'))}</span></td><td><small>${esc(formatDate(row.firstSeenAt||row.lastSeenAt))}${row.deadline?`<br>Due ${esc(formatDate(row.deadline))}`:''}</small></td><td><small class="${row.status==='graveyard'?'job-fail-reason':''}">${esc(row.reason||row.reasonCode||'—')}</small></td></tr>`).join('')||`<tr><td colspan="7" class="empty-state">No jobs in ${esc(pretty(autonomosJobTab))}.</td></tr>`;
+  body.innerHTML=rows.slice(0,50).map(row=>`<tr class="autonomos-job-row" data-job-identity="${esc(row.identity||`${row.source}:${row.externalId}`)}"><td><b>${esc(row.title||row.externalId||'Untitled')}</b><small>${esc(row.externalId||'')}</small></td><td>${esc(pretty(row.source||''))}</td><td>${usd(row.budgetUsd)} <small>${esc(row.currency||'')}</small></td><td><span class="autonomos-mode">${esc(pretty(row.claimMode||'unknown'))}</span></td><td><span class="status ${row.status==='graveyard'?'s-error':row.status==='stale_check'||row.status==='archived'||row.status==='policy_hold'||row.status==='not_eligible'||row.status==='system_blocked'||row.status==='capability_hold'||row.status==='manual_attention'?'s-warning':row.status==='retry'?'s-in_progress':'s-ready'}">${esc(pretty(row.status||'new'))}</span></td><td><small>${esc(formatDate(row.firstSeenAt||row.lastSeenAt))}${row.deadline?`<br>Due ${esc(formatDate(row.deadline))}`:''}</small></td><td><small class="${row.status==='graveyard'?'job-fail-reason':''}">${esc(row.reason||row.reasonCode||'—')}</small></td></tr>`).join('')||`<tr><td colspan="7" class="empty-state">No jobs in ${esc(pretty(autonomosJobTab))}.</td></tr>`;
 }
 function openAutonomosJobDetail(identity){
   const dialog=el('#autonomos-job-dialog'),body=el('#autonomos-job-dialog-body');if(!dialog||!body)return;
@@ -443,3 +445,5 @@ function emptyRow(cols,text){return `<tr class="empty-row"><td colspan="${cols}"
     }else showLogin();
   }catch{showLogin()}
 })();
+
+document.addEventListener('marketplace-updated',loadDashboard);

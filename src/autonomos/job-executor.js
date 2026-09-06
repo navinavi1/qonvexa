@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { ArtifactStore } from './artifact-store.js';
 import { executeProduct } from './products.js';
 import { TOOL_SCHEMAS, runTool } from './tools.js';
 import { validateAction } from './policy-engine.js';
@@ -14,7 +15,7 @@ const VERIFY_TOOLS_BY_SKILL = Object.freeze({
 // external is committed by a FAILED call to any of these. Deliberately EXCLUDED:
 // browser_task, app_action, deploy_webhook, open_pull_request — a call that reports
 // failure on these can still have taken effect externally before erroring on our side.
-const TOOL_RETRY_SAFE = new Set(['web_search','web_scrape','run_python','run_shell','app_tool_search','store_artifact','coderabbit_review']);
+const TOOL_RETRY_SAFE = new Set(['web_search','web_scrape','app_tool_search']);
 const TOOL_RETRY_DELAY_MS = 600;
 
 // A ceiling of 0/unknown means "no declared budget to derive a ceiling from" — treated as
@@ -24,7 +25,13 @@ export function exceedsJobSpendCeiling(toolCostUsd,ceilingUsd){
   return Number(ceilingUsd)>0 && Number(toolCostUsd)>Number(ceilingUsd);
 }
 
-export async function executeExternalOpportunity(opportunity, capability, { llm, siteUrl='', env=process.env, config=null, abortSignal=null, memoryContext='', toolFilter=null, briefing='' } = {}) {
+export async function executeExternalOpportunity(opportunity, capability, opts={}) {
+  const effectState={possible:false};
+  try { return await executeOpportunity(opportunity,capability,{...opts,effectState}); }
+  catch(error) { if(!effectState.possible)error.safeToRetry=true;throw error; }
+}
+
+async function executeOpportunity(opportunity, capability, { llm, siteUrl='', env=process.env, config=null, abortSignal=null, memoryContext='', toolFilter=null, briefing='', effectState, budget=null }  = {}) {
   if (capability.mode === 'deterministic') return deterministicExecute(opportunity);
   if (!llm?.enabled) throw new Error('llm_required_for_job');
 
@@ -51,7 +58,7 @@ export async function executeExternalOpportunity(opportunity, capability, { llm,
   if (spendAuthorized && env.E2B_API_KEY) { add('run_python'); add('run_shell'); }
   if (spendAuthorized && env.BROWSERBASE_API_KEY && env.BROWSERBASE_PROJECT_ID) add('browser_task');
   if (spendAuthorized && env.COMPOSIO_API_KEY) { add('app_tool_search'); add('app_action'); }
-  if (spendAuthorized && env.S3_ENDPOINT && env.S3_BUCKET && env.S3_ACCESS_KEY_ID && env.S3_SECRET_ACCESS_KEY) add('store_artifact');
+  if (spendAuthorized && new ArtifactStore({env}).configured()) add('store_artifact');
   if (spendAuthorized && env.E2B_API_KEY && env.CODERABBIT_API_KEY) add('coderabbit_review');
   if (env.AUTONOMOS_DEPLOY_WEBHOOK_URL) add('deploy_webhook');
   if (env.GITHUB_TOKEN) add('open_pull_request');
@@ -66,9 +73,9 @@ export async function executeExternalOpportunity(opportunity, capability, { llm,
     : allAvailableTools;
 
   const verificationTools = VERIFY_TOOLS_BY_SKILL[capability.skill] || new Set();
-  if (acceptanceContract.mustUseTool && allAvailableTools.length === 0) throw new Error('required_execution_tools_unavailable');
+  if (acceptanceContract.mustUseTool && availableTools.length === 0) throw new Error('required_execution_tools_unavailable');
   const requiresVerification = verificationTools.size > 0 && [...verificationTools].some(name=>availableTools.some(t=>t.function.name===name));
-  const requiresArtifact = Boolean(capability.requiresArtifact);
+  const requiresArtifact = Boolean(acceptanceContract.artifacts?.some(a=>a.required));
   const highValueCodeReview = capability.skill === 'code-analysis'
     && Boolean(env.CODERABBIT_API_KEY && env.E2B_API_KEY)
     && availableTools.some(t=>t.function.name==='coderabbit_review')
@@ -111,14 +118,16 @@ export async function executeExternalOpportunity(opportunity, capability, { llm,
     if(result.usage){usage.prompt_tokens+=Number(result.usage.prompt_tokens||0);usage.completion_tokens+=Number(result.usage.completion_tokens||0);}
     if(result.toolCalls?.length){
       messages.push(result.message);
-      for(const call of result.toolCalls.slice(0,4)){
+      for(const [callIndex,call] of result.toolCalls.entries()){
+        if(callIndex>=4){messages.push({role:'tool',tool_call_id:call.id,content:JSON.stringify({ok:false,reason:'round_tool_limit_retry_next_round'})});continue;}
         let args={};try{args=JSON.parse(call.function?.arguments||'{}');}catch{}
         const toolName=String(call.function?.name||'');
-        let toolResult=await runTool(toolName,args,env,{config,validateAction,signal:abortSignal,remainingBudgetUsd:effectiveJobCeiling<Number.POSITIVE_INFINITY?Math.max(0,effectiveJobCeiling-toolCostUsd):null,jobId:String(opportunity.jobId||'')});
+        if(availableTools.some(t=>t.function.name===toolName)&&!TOOL_RETRY_SAFE.has(toolName))effectState.possible=true;
+        let toolResult= !availableTools.some(t=>t.function.name===toolName) ? {ok:false,reason:'tool_not_allowed_for_phase'} : await runTool(toolName,args,env,{config,validateAction,signal:abortSignal,budget,remainingBudgetUsd:budget?budget.remaining:effectiveJobCeiling<Number.POSITIVE_INFINITY?Math.max(0,effectiveJobCeiling-toolCostUsd):null,jobId:String(opportunity.jobId||'')});
         toolCostUsd+=Number(toolResult.costUsd||0);
-        if(!toolResult.ok && TOOL_RETRY_SAFE.has(toolName) && !abortSignal?.aborted){
+        if(!toolResult.ok && toolResult.reason!=='tool_not_allowed_for_phase' && TOOL_RETRY_SAFE.has(toolName) && !abortSignal?.aborted){
           await new Promise(resolve=>setTimeout(resolve,TOOL_RETRY_DELAY_MS));
-          const retryResult=await runTool(toolName,args,env,{config,validateAction,signal:abortSignal,remainingBudgetUsd:effectiveJobCeiling<Number.POSITIVE_INFINITY?Math.max(0,effectiveJobCeiling-toolCostUsd):null,jobId:String(opportunity.jobId||'')});
+          const retryResult=await runTool(toolName,args,env,{config,validateAction,signal:abortSignal,budget,remainingBudgetUsd:budget?budget.remaining:effectiveJobCeiling<Number.POSITIVE_INFINITY?Math.max(0,effectiveJobCeiling-toolCostUsd):null,jobId:String(opportunity.jobId||'')});
           toolCostUsd+=Number(retryResult.costUsd||0);
           if(retryResult.ok)toolResult=retryResult;
           else toolResult={...toolResult,error:`${toolResult.error||toolResult.reason||''} (retry also failed: ${retryResult.error||retryResult.reason||''})`.trim()};
@@ -134,7 +143,7 @@ export async function executeExternalOpportunity(opportunity, capability, { llm,
     if(!content)throw new Error('empty_deliverable');
     const verificationOk=!requiresVerification||toolLog.some(row=>row.ok&&verificationTools.has(row.tool));
     const codeReviewOk=!highValueCodeReview||toolLog.some(row=>row.ok&&row.tool==='coderabbit_review');
-    const artifactOk=!requiresArtifact||toolLog.some(row=>row.ok&&(row.tool==='store_artifact'||(row.tool==='run_shell'&&row.artifacts?.some?.(a=>a.ok&&a.url))));
+    const artifactOk=!requiresArtifact||toolLog.some(row=>row.ok&&row.artifacts?.some?.(a=>a.ok&&a.url));
     const acceptance=validateAcceptanceContract(acceptanceContract,{content,evidence:{toolCalls:toolLog,artifactUrls:toolLog.flatMap(row=>row.artifacts||[]).filter(a=>a.ok&&a.url).map(a=>a.url)}});
 
     if(!acceptance.ok&&!verificationNudge&&round<MAX_TOOL_ROUNDS){verificationNudge=true;messages.push({role:'assistant',content});messages.push({role:'user',content:`Rejected before delivery: acceptance contract is not satisfied (${acceptance.reasons.join(', ')}). Produce the missing real evidence/artifact/result and finish.`});continue;}

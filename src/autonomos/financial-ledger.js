@@ -12,3 +12,12 @@ export function ledgerEntry({id='',type,jobId='',externalId='',externalTransacti
   };
 }
 function round6(value){return Math.round((Number(value||0)+Number.EPSILON)*1e6)/1e6;}
+
+// The outbox may replay after a crash between ledger append and outbox removal.
+// -1 explicitly reads the full journal; a limit of 0 means no rows in this store.
+export function appendUniqueLedgerEntry(store, record) {
+  if (!record?.id) throw new Error('ledger_id_required');
+  if (store.readNdjson('ledger.ndjson', -1).some(row => row.id === record.id)) return false;
+  store.append('ledger.ndjson', record);
+  return true;
+}

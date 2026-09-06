@@ -24,4 +24,6 @@ if (!server.includes("app.listen(port, '0.0.0.0'")) {
 if (!String(pkg.engines?.node || '').includes('<25')) {
   throw new Error('Node engine must have an upper bound to prevent unexpected major upgrades.');
 }
+const blueprint = fs.readFileSync(path.join(root,'render.yaml'),'utf8');
+if(!blueprint.includes('npm ci --include=dev && npm run verify && npm prune --omit=dev'))throw new Error('Build must install verification dependencies before testing, then remove dev dependencies.');
 console.log('Render route/deployment audit passed.');

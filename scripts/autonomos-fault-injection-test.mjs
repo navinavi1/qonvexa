@@ -53,7 +53,7 @@ async function testRestartAfterClaim(){
     const recoveredCycle=await restarted.runCycle();
     assert.equal(recoveredCycle.ok,true);
     assert.equal(claimCalls,1,'restart recovery must NEVER claim an already-owned job again');
-    assert.equal(deliveryCalls,2,'restart recovery should retry only the unfinished delivery path');
+    assert.equal(deliveryCalls,1,'ambiguous delivery failure must reconcile settlement without repeating a possibly committed delivery');
     assert.deepEqual(readJson(path.join(dir,'in-flight-jobs.json')),{},'successful recovery must clear the in-flight checkpoint');
     const registry=readJson(path.join(dir,'job-registry.json'));
     assert.equal(registry['clawlancer:fault_claim_1']?.status,'paid','recovered job must settle against the exact registry identity');

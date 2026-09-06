@@ -1,8 +1,8 @@
 const RULES = [
-  { skill:'translation', categories:['translation'], words:['translate','translation'] },
+  { skill:'translation', categories:['translation'], words:['translate','translation','localization','localisation'] },
   { skill:'code-analysis', categories:['coding','code','development','software'], words:['code','bug','javascript','typescript','node','python','api','script','review','test','build','repository','github'] },
   { skill:'data-transform', categories:['data','spreadsheet'], words:['csv','json','normalize','extract','transform','parse','structured','excel','xlsx','spreadsheet','dataset'] },
-  { skill:'document-generation', categories:['document','presentation','report'], words:['pdf','docx','pptx','presentation','slide deck','document','deliverable file','downloadable file'] },
+  { skill:'document-generation', categories:['document','presentation'], words:['pdf','docx','pptx','presentation','slide deck','document','deliverable file','downloadable file'] },
   { skill:'app-automation', categories:['automation','operations','crm'], words:['gmail','google sheets','google drive','notion','slack','calendar','crm','hubspot','airtable','linear','jira','connected app','workflow'] },
   { skill:'browser-ops', categories:['browser','qa','testing'], words:['browser automation','navigate','dashboard','fill form','screenshot','web app testing','click through'] },
   { skill:'web-research', categories:['research','analysis'], words:['research','analyze','analysis','compare','website','web','public','headers','endpoint','market','report','sources'] },
@@ -41,7 +41,7 @@ export function classifyOpportunity(opportunity, { llmEnabled=false, hasGithubPr
   const category=String(opportunity?.category||'').toLowerCase();
   const title=String(opportunity?.title||'');
   const description=String(opportunity?.description||'');
-  const hay=`${category} ${title} ${description}`.toLowerCase();
+  const hay=`${category} ${title} ${description} ${(Array.isArray(opportunity.skills)?opportunity.skills:[]).join(" ")}`.toLowerCase();
   const safety=safetyCheck(hay);
   const matched=RULES.map(rule=>({rule,score:(rule.categories.includes(category)?4:0)+rule.words.reduce((n,w)=>n+(containsWord(hay,w)?1:0),0)})).sort((a,b)=>b.score-a.score)[0];
   const skill=matched?.score>0?matched.rule.skill:'general-digital';
@@ -49,15 +49,15 @@ export function classifyOpportunity(opportunity, { llmEnabled=false, hasGithubPr
   const deterministic=canDoDeterministically(opportunity,skill);
   const needs={
     github:REQUIRES_GITHUB_PR.test(hay),
-    shell:REQUIRES_SHELL.test(hay)||skill==='document-generation',
+    shell:opportunity.source==='taskbounty'||REQUIRES_SHELL.test(hay)||skill==='document-generation',
     browser:REQUIRES_BROWSER.test(hay)||skill==='browser-ops',
     deploy:REQUIRES_DEPLOY.test(hay),
-    artifact:REQUIRES_ARTIFACT.test(hay)||skill==='document-generation',
+    artifact:opportunity.source==='agenthansa'||REQUIRES_ARTIFACT.test(hay)||skill==='document-generation',
     app:REQUIRES_APP.test(hay)||skill==='app-automation',
-    onchainTx:REQUIRES_ONCHAIN_TX.test(hay),
+    onchainTx:REQUIRES_ONCHAIN_TX.test(hay)||/\b(?:swap|send|transfer)\s+(?:[0-9.]+\s+|a |the |your )?(?:usdc|usdt|sui|sol|eth|btc|tokens?|crypto|funds)\b/i.test(hay),
     procurement:REQUIRES_PROCUREMENT.test(hay),
     physical:REQUIRES_PHYSICAL.test(hay),
-    humanIdentity:REQUIRES_HUMAN_IDENTITY.test(hay),
+    humanIdentity:REQUIRES_HUMAN_IDENTITY.test(hay)||/\b(?:join (?:the |our |a )?(?:community|discord|telegram)|referral|invite (?:your )?friends)\b/i.test(hay),
     designMedia:REQUIRES_DESIGN_MEDIA.test(hay),
     // web-research jobs that AREN'T handled by the safe, tool-free deterministic path
     // (robots.txt/header checks etc.) rely entirely on the LLM actually calling a real
@@ -72,7 +72,7 @@ export function classifyOpportunity(opportunity, { llmEnabled=false, hasGithubPr
   if(needs.shell&&!hasShellTool)missing.push('sandbox_shell');
   if(needs.browser&&!hasBrowserTool)missing.push('browser');
   if(needs.deploy&&!hasDeployTool)missing.push('deploy');
-  if(needs.artifact&&!hasArtifactTool)missing.push('artifact_storage');
+  if(needs.artifact&&!hasArtifactTool&&!(needs.github&&hasGithubPrTool))missing.push('artifact_storage');
   if(needs.app&&!hasAppTool)missing.push('connected_app_gateway');
   if(needs.app&&hasAppTool&&requiredApps.length){for(const app of requiredApps)if(!connected.has(app))missing.push(`connected_app:${app}`);}
   // Do not let a paid job trick the worker into spending money to hire/buy something else.
@@ -138,4 +138,19 @@ function safetyCheck(hay){
   ];
   for(const [re,reason] of blocked)if(re.test(hay))return{safe:false,reason};
   return{safe:true,reason:'allowed_digital_service'};
+}
+
+export function capabilityCatalog(context={}){
+  const examples=[
+    ['JavaScript / TypeScript / Node / React / Next','coding','Fix a repository bug, run tests and provide a patch.'],
+    ['Python','coding','Fix a Python function and run tests.'],
+    ['GitHub PR','coding','Fix the bug and open a pull request.'],
+    ['Regression testing / API integration','coding','Implement an API integration and run regression tests.'],
+    ['Scraping / technical research','research','Research current public sources and extract findings.'],
+    ['CSV / JSON / spreadsheets','data','Transform a CSV dataset and deliver a spreadsheet file.'],
+    ['PDF / document processing','document','Extract a PDF and create a downloadable document.'],
+    ['Translation / localization','translation','Translate and localize the provided text.'],
+    ['Browser QA / automation','browser','Navigate the dashboard and perform web app testing.']
+  ];
+  return examples.map(([name,category,description])=>{const cap=classifyOpportunity({title:name,category,description},context);return {name,available:cap.executable,skill:cap.skill,missingTools:cap.missingTools,mode:cap.mode};});
 }

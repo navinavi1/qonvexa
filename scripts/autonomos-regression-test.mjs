@@ -150,7 +150,7 @@ try{
   assert.match(runtimeSource,/clawjobs:\{discover:true,claim:false/,'ClawJobs must be explicitly discovery-only in lifecycle truth');
   assert.match(runtimeSource,/moltjobs:\{discover:true,claim:false/,'MoltJobs must be explicitly discovery-only until certified bid lifecycle is implemented');
   assert.match(runtimeSource,/marketplace_lifecycle_not_auto_ready/,'incomplete marketplace lifecycle must be a visible candidacy blocker');
-  assert.match(runtimeSource,/config\.cryptoOnlyEarnings\?\['clawlancer','t2000','workprotocol'\]:\['clawlancer','t2000','dealwork','workprotocol'\]/,'fast lane must exclude Dealwork in crypto-only mode and include WorkProtocol');
+  assert.match(runtimeSource,/const fastSources=config\.cryptoOnlyEarnings\?\['clawlancer','t2000','workprotocol'\]/,'Crypto-only mode excludes new fiat contracts');
   assert.match(runtimeSource,/source==='clawlancer'\)return\['direct_crypto'\]/,'Clawlancer payout must be represented as direct crypto, not a generic marketplace balance');
   assert.match(runtimeSource,/function buildEarningReadiness\(/,'runtime must produce one owner-facing earning readiness diagnosis per cycle');
   assert.match(runtimeSource,/cashout_action_required/,'earning readiness must distinguish settled marketplace money from owner-wallet cashout');

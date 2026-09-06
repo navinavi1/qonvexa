@@ -39,7 +39,7 @@ export class JobRegistry {
       // Only non-terminal/non-owned/non-system-blocked rows may become a new content
       // version. Permanent tombstones are already handled above. Claimed/system-blocked
       // jobs remain owned/blocked despite mutable marketplace metadata.
-      if(!row.terminal&&!OWNED_STATUSES.has(String(row.status||''))&&!SYSTEM_BLOCKED_STATUSES.has(String(row.status||''))){
+      if(!row.terminal&&!['stale_check','archived'].includes(row.status)&&!OWNED_STATUSES.has(String(row.status||''))&&!SYSTEM_BLOCKED_STATUSES.has(String(row.status||''))){
         row={...row,fingerprint,version:Number(row.version||1)+1,status:'new',failureOwner:'',reasonCode:'',reason:'',retryAfter:'',attempts:0,lastSeenAt:now,seenCount:Number(row.seenCount||0)+1,previousVersions:[...(row.previousVersions||[]).slice(-8),previous]};
       }else row={...row,lastSeenAt:now,seenCount:Number(row.seenCount||0)+1,previousVersions:[...(row.previousVersions||[]).slice(-8),previous]};
     }else row={...row,lastSeenAt:now,seenCount:Number(row.seenCount||0)+1};
@@ -47,6 +47,36 @@ export class JobRegistry {
     this.records[identity]=row;this.persist();return {...row};
   }
 
+  reconcileCompetitiveFeed(source, health={}) {
+    if(!health.ok||!health.authoritativeLive||!Array.isArray(health.liveIds))return {changed:0};
+    const live=new Set(health.liveIds.map(String));
+    const now=new Date().toISOString();let changed=0;
+    for(const [identity,row] of Object.entries(this.records)){
+      if(row.source!==source||this.tombstones[identity])continue;
+      if(!['new','ready','proposal','stale_check','archived'].includes(row.status))continue;
+      if(live.has(String(row.externalId))){
+        if(['stale_check','archived'].includes(row.status)){
+          this.records[identity]={...row,status:'new',terminal:false,missingLiveScans:0,reasonCode:'authoritative_live_reconfirmed',reason:'',lastStateAt:now};changed++;
+        }
+        continue;
+      }
+      if(row.status==='archived')continue;
+      const misses=Number(row.missingLiveScans||0)+1;
+      const expired=Number.isFinite(Date.parse(row.deadline))&&Date.parse(row.deadline)<Date.now();
+      const archive=expired||(health.complete===true&&misses>=2);
+      this.records[identity]={...row,status:archive?'archived':'stale_check',terminal:archive,missingLiveScans:misses,reasonCode:archive?'competitive_listing_no_longer_live':'competitive_listing_needs_live_confirmation',lastStateAt:now};changed++;
+    }
+    if(changed)this.persist();
+    return {changed};
+  }
+
+  reconcileCompetitiveSnapshot(source,liveItems,{authoritative=false}={}){
+    const before=this.summary();
+    const liveIds=(liveItems||[]).map(x=>typeof x==='string'?x.replace(`${source}:`,''):String(x.externalId||''));
+    const result=this.reconcileCompetitiveFeed(source,{ok:authoritative,authoritativeLive:authoritative,liveIds,complete:authoritative});
+    const after=this.summary();
+    return {...result,staleChecked:Math.max(0,after.stale-before.stale),archived:Math.max(0,after.archived-before.archived),reopened:Math.max(0,before.stale+before.archived-after.stale-after.archived)};
+  }
   get(opportunityOrIdentity){
     const identity=typeof opportunityOrIdentity==='string'?opportunityOrIdentity:jobIdentity(opportunityOrIdentity);
     const row=this.records[identity];return row?{...row}:null;
@@ -66,6 +96,7 @@ export class JobRegistry {
       if(row.retryAfter&&Date.parse(row.retryAfter)<=Date.now())return null;
       return {blocked:true,status:'dispatch_pending',reasonCode:row.reasonCode||'durable_dispatch_pending',reason:row.reason||'',failureOwner:'our_system'};
     }
+    if(['stale_check','archived'].includes(row.status))return {blocked:true,status:row.status,reasonCode:row.reasonCode,reason:'Awaiting authoritative live listing confirmation',failureOwner:'market'};
     if(row.terminal||OWNED_STATUSES.has(String(row.status||'')))return {blocked:true,status:row.status,reasonCode:row.reasonCode||`job_registry_${row.status}`,reason:row.reason||'',failureOwner:row.failureOwner||''};
     if(row.status==='retry'&&row.retryPhase==='execution')return {blocked:true,status:'retry_execution_owned',reasonCode:row.reasonCode||'execution_retry_owned',reason:row.reason||'',failureOwner:row.failureOwner||'our_system'};
     if(row.retryAfter&&Date.parse(row.retryAfter)>Date.now())return {blocked:true,status:'retry_wait',reasonCode:'retry_backoff',reason:`Retry after ${row.retryAfter}`,failureOwner:row.failureOwner||'transient'};
@@ -202,13 +233,13 @@ export class JobRegistry {
 
   summary(){
     const rows=Object.values(this.records),count=pred=>rows.filter(pred).length;
-    return {total:rows.length,new:count(x=>x.status==='new'),ready:count(x=>x.status==='ready'),proposal:count(x=>x.status==='proposal'),working:count(x=>['dispatch_pending','bid_submitted','claimed','executing','qa'].includes(x.status)),retry:count(x=>x.status==='retry'),policyHold:count(x=>POLICY_HOLD_STATUSES.has(x.status)),systemBlocked:count(x=>SYSTEM_BLOCKED_STATUSES.has(x.status)),graveyard:Object.keys(this.tombstones).length,delivered:count(x=>x.status==='delivered'),paid:count(x=>['paid','settled','completed'].includes(x.status)),updatedAt:new Date().toISOString()};
+    return {total:rows.length,stale:count(x=>x.status==='stale_check'),archived:count(x=>x.status==='archived'),new:count(x=>x.status==='new'),ready:count(x=>x.status==='ready'),proposal:count(x=>x.status==='proposal'),working:count(x=>['dispatch_pending','bid_submitted','claimed','executing','qa'].includes(x.status)),retry:count(x=>x.status==='retry'),policyHold:count(x=>POLICY_HOLD_STATUSES.has(x.status)),systemBlocked:count(x=>SYSTEM_BLOCKED_STATUSES.has(x.status)),graveyard:Object.keys(this.tombstones).length,delivered:count(x=>x.status==='delivered'),paid:count(x=>['paid','settled','completed'].includes(x.status)),updatedAt:new Date().toISOString()};
   }
 
   queues({limit=80}={}){
     const rows=Object.values(this.records).sort((a,b)=>Date.parse(b.lastStateAt||b.lastSeenAt||0)-Date.parse(a.lastStateAt||a.lastSeenAt||0));
     const take=statuses=>rows.filter(x=>statuses.includes(x.status)).slice(0,limit).map(x=>({...x}));
-    return {new:take(['new','ready']),proposal:take(['proposal']),working:take(['dispatch_pending','bid_submitted','claimed','executing','qa']),retry:take(['retry']),policyHold:take(['policy_hold','not_eligible']),systemBlocked:take(['system_blocked','capability_hold','manual_attention']),delivered:take(['delivered']),paid:take(['paid','settled','completed']),graveyard:take(['graveyard'])};
+    return {new:take(['new','ready']),proposal:take(['proposal']),working:take(['dispatch_pending','bid_submitted','claimed','executing','qa']),retry:take(['retry']),policyHold:take(['policy_hold','not_eligible']),systemBlocked:take(['system_blocked','capability_hold','manual_attention']),delivered:take(['delivered']),paid:take(['paid','settled','completed']),graveyard:take(['graveyard']),stale:take(['stale_check']),archived:take(['archived'])};
   }
 
   migrateLegacy({handledKeys=[],jobs=[]}={}){
@@ -250,6 +281,7 @@ export function jobFingerprint(opportunity={}){const stable=[opportunity.source,
 export function classifyFailure(errorLike,{phase='execution'}={}){
   const text=String(errorLike?.message||errorLike||'').toLowerCase();
   if(/already[_ -]?claimed|already[_ -]?assigned|job[_ -]?taken|no longer available|not[_ -]?available|expired|closed|cancelled|listing[_ -]?removed|not[_ -]?found|http_404|http_410|http_409/.test(text))return {owner:'market',permanent:true,reasonCode:'market_job_no_longer_available'};
+  if(/execution_checkpoint_uncertain/.test(text))return {owner:'our_system',permanent:false,reasonCode:'external_effect_requires_reconciliation'};
   if(/api[_ -]?key[_ -]?missing|unauthorized|forbidden|http_401|http_403/.test(text))return {owner:'our_system',permanent:false,reasonCode:'connector_credentials_or_auth_failure'};
   if(/http_402.*insufficient_balance|insufficient[_ -]?balance|poster(?:'s)? wallet.*insufficient|available\s*0(?:\.0+)?/.test(text))return {owner:'market',permanent:false,reasonCode:'buyer_funding_unavailable'};
   if(/http_400.*(?:budgetmax|fixedprice|maxconcurrent|under-funded|underfunded)|budgetmax.*less than.*fixedprice|job is under-funded/.test(text))return {owner:'market',permanent:false,reasonCode:'market_job_configuration_invalid'};

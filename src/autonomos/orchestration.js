@@ -1,3 +1,4 @@
+import { checkpointExecution } from './execution-checkpoint.js';
 import crypto from 'node:crypto';
 import { planJob } from './planner.js';
 import { evaluateDeliverable } from './qa-engine.js';
@@ -63,14 +64,17 @@ export async function orchestrateJob(opportunity,opts={}){
   return withAgentTrace('autonomos-paid-job',{source:opportunity?.source||'',externalId:opportunity?.externalId||'',title:String(opportunity?.title||'').slice(0,200)},()=>orchestrateJobCore(opportunity,opts),{env});
 }
 
-async function orchestrateJobCore(opportunity,{llm,execute,memory=null,taskAgents=null,jobId='',env=process.env,abortSignal=null,onEvent=()=>{},maxTaskAgents=null}={}){
+async function orchestrateJobCore(opportunity,{llm,execute,memory=null,taskAgents=null,jobId='',env=process.env,abortSignal=null,onEvent=()=>{},maxTaskAgents=null,store=null}={}){
+  const checkpoint=checkpointExecution(store,jobId);
+  const rawExecute=execute;
+  execute=(op,opts={})=>checkpoint(`execute:${opts.phaseRole||'single'}`,()=>rawExecute(op,opts));
   const memoryPack=memory?.contextForOpportunity?await memory.contextForOpportunity(opportunity,{limit:Number(env.AUTONOMOS_MEMORY_RECALL_LIMIT||5)}).catch(()=>({context:'',hits:[]})):{context:'',hits:[]};
   if(memoryPack.hits?.length)onEvent('memory_recalled',{count:memoryPack.hits.length,keys:memoryPack.hits.map(x=>x.key).slice(0,8)});
 
   // Plan exactly once. The old implementation planned/spawned once in LangGraph and then
   // again in its catch fallback, which could leave 2x worker leases after an execution
   // failure. Planning is now outside the graph so graph infrastructure fallback is safe.
-  const plan=await planJob(opportunity,{llm,env,abortSignal,memoryContext:memoryPack.context});
+  const plan=await checkpoint('plan',async()=>{try{return await planJob(opportunity,{llm,env,abortSignal,memoryContext:memoryPack.context});}catch(error){error.safeToRetry=true;throw error;}});
   onEvent('job_planned',{source:plan.source,steps:plan.steps?.length||0});
   const spawned=taskAgents?.spawnForPlan({jobId,opportunity,plan,maxAgents:maxTaskAgents})||[];
   if(spawned.length)onEvent('task_team_ready',{jobId,count:spawned.length,roles:spawned.map(x=>x.role)});
