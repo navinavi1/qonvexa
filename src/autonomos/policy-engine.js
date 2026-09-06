@@ -22,6 +22,7 @@ export const DEFAULT_AUTONOMOS_CONFIG = Object.freeze({
   maxJobsPerCycle: 6,
   maxConcurrentJobs: 4,
   platformGeneration: 8,
+  earningProfileVersion: 15,
   autoClaimJobs: true,
   autoCompetitiveSubmissions: false,
   // Commissioning lane: prove the autonomous execution path on small, fully-escrowed

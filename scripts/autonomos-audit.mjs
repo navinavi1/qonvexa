@@ -156,7 +156,7 @@ await ok('runtime boots without any paid API or private key', async () => {
     assert.equal(snap.config.zeroSpendMode, false);
     assert.equal(snap.config.maxPaidProcurementUsd, 3);
     assert.equal(snap.config.privateKeysStored, false);
-    assert.equal(snap.version, '14.0.0');
+    assert.equal(snap.version, '15.0.0');
     assert.ok('opportunitiesFound' in snap.metrics);
     assert.equal(snap.runtime.status, 'stopped');
   } finally {
@@ -213,7 +213,7 @@ await ok('GitHub PR tool is visible on dashboard and is capability-gated by conf
   const op = normalizeOpportunity('clawlancer', { id:'z', title:'Fix a bug and open a PR', description:'Clone the GitHub repo, fix the failing test, and open a pull request', category:'coding', priceUsd:5 }, { escrowed:true });
   const withoutToken = classifyOpportunity(op, { llmEnabled:true, hasGithubPrTool:false });
   assert.equal(withoutToken.executable, false);
-  const withToken = classifyOpportunity(op, { llmEnabled:true, hasGithubPrTool:true });
+  const withToken = classifyOpportunity(op, { llmEnabled:true, hasGithubPrTool:true, hasShellTool:true });
   assert.equal(withToken.executable, true);
 });
 

@@ -1,3 +1,4 @@
+import { classifyFailure } from './job-registry.js';
 import crypto from "node:crypto";
 import { TaskBountyConnector } from "./taskbounty-connector.js";
 import { AgentHansaConnector } from "./agenthansa-connector.js";
@@ -5,7 +6,7 @@ import { isDemoOrTestOpportunity } from "./policy-engine.js";
 import { solanaAddress } from "./marketplace-http.js";
 
 const SOURCES = ["agenthansa", "taskbounty"];
-const TERMINAL = new Set(["paid", "rejected", "closed"]);
+const TERMINAL = new Set(["paid", "rejected", "closed", "graveyard"]);
 const ACTIVE = new Set([
   "claiming",
   "claimed",
@@ -40,8 +41,8 @@ export function marketplaceSettings(source, env = {}, saved = {}) {
       : "read_only",
     minPayoutUsd: number(
       saved.minPayoutUsd ?? env[`${prefix}_MIN_PAYOUT_USD`],
-      5,
-      5,
+      0.5,
+      0.5,
       100000,
     ),
     maxSpendUsd: number(
@@ -61,6 +62,7 @@ export function marketplaceSettings(source, env = {}, saved = {}) {
     affiliateAllowed: false,
     pollSeconds: number(saved.pollSeconds, 120, 60, 3600),
     dynamicFloor: saved.dynamicFloor === true,
+    autoCommission: saved.autoCommission === true,
     walletConfirmed:
       saved.walletConfirmed === true &&
       (!saved.walletAddress || saved.walletAddress === address) &&
@@ -96,7 +98,7 @@ export function evaluateNewMarketplaceJob(
     reasons.push("individual_payout_unknown_shared_pool");
   const paid = Number(metrics.paid || 0);
   const floor = settings.dynamicFloor
-    ? Math.max(settings.minPayoutUsd, paid >= 10 ? 20 : paid >= 3 ? 10 : 5)
+    ? Math.max(settings.minPayoutUsd, paid >= 10 ? 20 : paid >= 3 ? 10 : settings.minPayoutUsd)
     : settings.minPayoutUsd;
   if (!(job.netPayoutUsd >= floor)) reasons.push("payout_below_" + floor);
   if (
@@ -152,6 +154,7 @@ export function evaluateNewMarketplaceJob(
   );
   const expectedNetUsd = job.netPayoutUsd * probability - expectedCost;
   const spendCeilingUsd = Math.min(
+    config.earnedFundsOnly ? Math.max(0,Number(config.availableSpendUsd||0)) : Infinity,
     settings.maxSpendUsd,
     (job.netPayoutUsd * settings.maxSpendPercent) / 100,
   );
@@ -277,6 +280,21 @@ export class MarketplaceManager {
     });
     this.data.outbox ||= [];
     this.data.webhookIds ||= [];
+    // Owner-requested earning profile. Applied once, with the previous settings retained.
+    // Global Pause/Emergency Stop, destination confirmation and spend gates still apply.
+    if(this.getConfig().earningProfileVersion===15 && this.data.earningProfileVersion!==15){
+      this.data.settingsBeforeV15=structuredClone(this.data.settings);
+      for(const id of SOURCES){
+        const old=this.settings(id);
+        const configured=Boolean(env[id.toUpperCase()+'_API_KEY']&&(id!=='taskbounty'||env.TASKBOUNTY_AGENT_ID));
+        this.data.settings[id]={...old,
+          minPayoutUsd:old.minPayoutUsd===5?0.5:old.minPayoutUsd,
+          dynamicFloor:false,competitiveAllowed:true,
+          mode:configured&&old.enabled&&old.mode==='read_only'?'canary':old.mode,
+          autoCommission:true};
+      }
+      this.data.earningProfileVersion=15;
+    }
     this.connectors =
       connectors ||
       Object.fromEntries(
@@ -329,8 +347,10 @@ export class MarketplaceManager {
     this.onEvent("marketplace_" + type, e);
   }
   set(row, status, detail = {}) {
+    if(TERMINAL.has(row.status)&&status!==row.status&&status!=='paid')return;
     row.status = status;
     row.updatedAt = stamp();
+    if(!Object.hasOwn(detail,"reason"))row.reason="";
     Object.assign(row, detail);
     this.save();
     this.log(row.job.source, status, {
@@ -338,6 +358,27 @@ export class MarketplaceManager {
       externalId: row.job.externalId,
       reason: row.reason || "",
     });
+  }
+  configurationVersion(job) {
+    return hash(JSON.stringify({rules:15,settings:this.settings(job.source),capability:this.classify(job),credentials:hash(JSON.stringify(Object.entries(this.env).filter(([k])=>/API_KEY|TOKEN|AGENT_ID|DATABASE_URL/.test(k))))}));
+  }
+  fail(row, error, {phase='execution', uncertain=false}={}) {
+    const reason=String(error?.message||error||'unknown_failure').slice(0,300);
+    if(uncertain){this.set(row,'uncertain',{reason,uncertainStage:phase==='claim'?'claim':'submit'});return;}
+    const failure=classifyFailure(error,{phase});
+    const resumeStatus=phase==='claim'?'eligible':phase==='submit'?'delivery_ready':'claimed';
+    const attempts=Number(row.failureAttempts||0)+1;
+    const status=failure.permanent?'graveyard':failure.owner==='transient'&&attempts<4?'retry':'system_blocked';
+    this.set(row,status,{reason,failureOwner:failure.owner,reasonCode:failure.reasonCode,resumeStatus,failureAttempts:attempts,
+      retryAfter:status==='retry'?new Date(Date.now()+Math.min(3600000,60000*2**(attempts-1))).toISOString():'',configurationVersion:this.configurationVersion(row.job)});
+    if(row.canary){this.data.canaries[row.job.source]={...this.data.canaries[row.job.source],status:status==='retry'?'retry':'failed',reason};this.save();}
+  }
+  releaseTransientRetries() {
+    let released=0;
+    for(const row of Object.values(this.data.jobs))if(row.status==='retry'&&row.failureOwner==='transient'){
+      row.retryAfter=stamp();released++;
+    }
+    this.save();return {released};
   }
   update(id, patch) {
     const current = this.settings(id);
@@ -352,6 +393,7 @@ export class MarketplaceManager {
       "dynamicFloor",
       "walletConfirmed",
       "pollSeconds",
+      "autoCommission",
     ];
     const clean = Object.fromEntries(
       allowed.filter((k) => Object.hasOwn(patch, k)).map((k) => [k, patch[k]]),
@@ -361,6 +403,7 @@ export class MarketplaceManager {
       "competitiveAllowed",
       "dynamicFloor",
       "walletConfirmed",
+      "autoCommission",
     ])
       if (k in clean && typeof clean[k] !== "boolean")
         throw new Error("invalid_boolean:" + k);
@@ -469,6 +512,9 @@ export class MarketplaceManager {
               status: r.status,
               payoutStatus: r.payoutStatus || "pending",
               netPayoutUsd: r.job.netPayoutUsd,
+              rewardUncertain:r.job.rewardUncertain,
+              queue:marketplaceQueue(r),
+              retryAfter:r.retryAfter||"",
               prizePoolUsd: r.job.prizePoolUsd || 0,
               kind: r.job.kind,
               qualification: r.qualification,
@@ -480,6 +526,25 @@ export class MarketplaceManager {
       }),
       events: this.store.readNdjson("marketplace-events.ndjson", 100).reverse(),
     };
+  }
+  registrySnapshot(legacy,limit=100) {
+    const summary={...legacy.summary},queues=structuredClone(legacy.queues);
+    const known=new Set(Object.values(queues).flat().map(r=>r.identity));
+    for(const row of Object.values(this.data.jobs)){
+      const identity=`${row.job.source}:${row.job.externalId}`;
+      if(known.has(identity))continue;
+      let queue=marketplaceQueue(row);
+      const settings=this.settings(row.job.source);
+      let reason=row.reason||row.qualification?.reasons?.join('; ')||'';
+      if(queue==='ready'&&(!settings.enabled||settings.mode==='read_only')){queue='policyHold';reason='Execution is disabled in marketplace controls';}
+      const status={ready:'ready',working:row.status,retry:'retry',systemBlocked:'system_blocked',policyHold:'policy_hold',watch:'watch',delivered:'delivered',paid:'paid',graveyard:'graveyard',stale:'stale_check'}[queue];
+      const item={identity,source:row.job.source,externalId:row.job.externalId,title:row.job.title,budgetUsd:row.job.netPayoutUsd,currency:row.job.currency,claimMode:row.job.claimMode,status,reason,reasonCode:row.reasonCode||'',failureOwner:row.failureOwner||'',firstSeenAt:row.createdAt||row.updatedAt,lastSeenAt:row.updatedAt,lastStateAt:row.updatedAt,retryAfter:row.retryAfter||'',deadline:row.job.deadline||''};
+      summary.total=(summary.total||0)+1;summary[queue]=(summary[queue]||0)+1;
+      const bucket=queue==='ready'?'new':queue;
+      (queues[bucket]||=[]).push(item);
+    }
+    for(const key of Object.keys(queues))queues[key]=queues[key].sort((a,b)=>Date.parse(b.lastStateAt||b.lastSeenAt||0)-Date.parse(a.lastStateAt||a.lastSeenAt||0)).slice(0,limit);
+    return {summary,queues};
   }
   async probe(id) {
     this.requireSource(id);
@@ -515,6 +580,8 @@ export class MarketplaceManager {
         count: discovered.rows?.length || 0,
         at: stamp(),
         authenticated: profile.authenticated || false,
+        coverage: discovered.coverage || null,
+        warnings: discovered.warnings || [],
         credentialsConfigured: Boolean(this.env[id.toUpperCase() + "_API_KEY"]),
       };
       const settings = this.settings(id);
@@ -528,7 +595,7 @@ export class MarketplaceManager {
             row &&
             (ACTIVE.has(row.status) ||
               TERMINAL.has(row.status) ||
-              ["submitted", "won"].includes(row.status))
+              ["submitted", "won", "failed", "system_blocked", "retry"].includes(row.status))
           )
             continue;
           const qualification = evaluateNewMarketplaceJob(job, {
@@ -552,9 +619,14 @@ export class MarketplaceManager {
             job,
             qualification,
             status: qualification.eligible ? "eligible" : "filtered",
+            createdAt: row?.createdAt||stamp(),
             updatedAt: stamp(),
             payoutStatus: "pending",
+            reason: qualification.reasons.join(";"),
           };
+          if(this.classify(job).permanentlyUnsupported || ['closed','expired','cancelled','removed','completed'].includes(job.status) || qualification.reasons.includes('deadline_expired')){
+            row.status='graveyard';row.reasonCode='permanently_unavailable';
+          }
           this.data.jobs[key] = row;
           this.log(id, qualification.eligible ? "eligible" : "filtered", {
             jobId: row.id,
@@ -743,6 +815,7 @@ export class MarketplaceManager {
       )[0];
   }
   async tick() {
+    if(this.getConfig().enabled===false||this.getConfig().killSwitch)return;
     if (this.busy.has("tick")) return;
     this.busy.add("tick");
     try {
@@ -764,6 +837,14 @@ export class MarketplaceManager {
             !this.env[id.toUpperCase() + "_API_KEY"]
           )
             continue;
+          for(const row of Object.values(this.data.jobs).filter(r=>r.job.source===id)){
+            if(row.status==='failed')this.fail(row,row.reason||'legacy_execution_failure',{phase:row.deliverable?'submit':row.claim?'execution':'claim'});
+            if(row.status==='system_blocked' && row.configurationVersion && row.configurationVersion!==this.configurationVersion(row.job) && this.classify(row.job).executable){
+              row.failureAttempts=0;
+              this.set(row,row.resumeStatus||'eligible',{reason:'configuration_changed_recheck',configurationVersion:this.configurationVersion(row.job)});
+            }
+            if(row.status==='retry' && Date.parse(row.retryAfter||0)<=Date.now())this.set(row,row.resumeStatus||'eligible',{reason:'retry_due',retryAfter:''});
+          }
           await this.reconcile(id);
           const health = this.data.health[id];
           if (
@@ -778,6 +859,16 @@ export class MarketplaceManager {
           );
           if (existing && s.mode !== "read_only") {
             this.launch(existing);
+            continue;
+          }
+          // Start one qualifying job; promotion requires the marketplace's acceptance.
+          if(s.mode==='canary'&&s.autoCommission){
+            const canary=this.data.canaries[id];
+            if(canary?.accepted){this.data.settings[id]={...s,mode:'live'};this.save();this.log(id,'commissioning_completed');}
+            else if(!canary||(canary.status==='failed'&&canary.reason==='no_eligible_job')){
+              const row=this.pick(id,true);
+              if(row&&this.canaryCheck(id).ok){this.data.canaries[id]={jobId:row.id,status:'queued',startedAt:stamp()};row.canary=true;this.save();this.launch(row);}
+            }
             continue;
           }
           if (s.mode !== "live" || !this.data.canaries[id]?.accepted) continue;
@@ -838,6 +929,7 @@ export class MarketplaceManager {
         ok: false,
         reason: "unresolved_prior_job_requires_reconciliation",
       };
+    if (!["eligible","claimed","delivery_ready"].includes(row.status))return {ok:false,reason:"job_not_runnable:"+row.status};
     if (this.running.has(row.id) || this.getConfig().killSwitch)
       return { ok: false, reason: "job_running_or_emergency_stop" };
     const globalLimit = number(
@@ -914,9 +1006,7 @@ export class MarketplaceManager {
         this.set(row, "claiming", { uncertainStage: "claim" });
         const claim = await c.claim(row.job, { signal: controller.signal });
         if (!claim.ok) {
-          this.set(row, claim.uncertain ? "uncertain" : "filtered", {
-            reason: claim.reason,
-          });
+          this.fail(row,claim.reason,{phase:'claim',uncertain:claim.uncertain});
           return claim;
         }
         metrics.attempts++;
@@ -982,9 +1072,7 @@ export class MarketplaceManager {
         signal: controller.signal,
       });
       if (!receipt.ok) {
-        this.set(row, receipt.uncertain ? "uncertain" : "delivery_ready", {
-          reason: receipt.reason,
-        });
+        this.fail(row,receipt.reason,{phase:'submit',uncertain:receipt.uncertain});
         return receipt;
       }
       this.set(row, "submitted", {
@@ -1003,19 +1091,13 @@ export class MarketplaceManager {
       return { ok: true, submitted: true, jobId: row.id };
     } catch (error) {
       const reason = String(error.message || error).slice(0, 220);
-      this.set(
-        row,
-        ["executing", "qa"].includes(row.status)
-          ? "claimed"
-          : row.status === "submitting"
-            ? "uncertain"
-            : "failed",
-        { reason },
-      );
+      const phase=['claiming','eligible','filtered'].includes(row.status)?'claim':['submitting','delivery_ready'].includes(row.status)?'submit':'execution';
+      this.fail(row,error,{phase,uncertain:['claiming','submitting'].includes(row.status)||/checkpoint_uncertain/.test(reason)});
       if (canary) {
         this.data.canaries[id] = {
           ...this.data.canaries[id],
-          status: row.status,
+          status: row.status === "retry" ? "retry" : "failed",
+          reason,
         };
         this.save();
       }
@@ -1073,7 +1155,7 @@ export class MarketplaceManager {
         continue;
       }
       const result = await this.connectors[id].status(row.job, row.receipt);
-      if (!result.ok) continue;
+      if (!result.ok || !["submitted","won","paid","rejected","closed"].includes(result.status)) continue;
       const metrics = (this.data.metrics[id] ||= {
         attempts: 0,
         won: 0,
@@ -1125,4 +1207,18 @@ export class MarketplaceManager {
       }
     }
   }
+}
+
+export function marketplaceQueue(row) {
+  if(row.status==='eligible')return 'ready';
+  if(ACTIVE.has(row.status))return row.status==='uncertain'?'systemBlocked':'working';
+  if(['failed','system_blocked'].includes(row.status))return 'systemBlocked';
+  if(row.status==='retry')return 'retry';
+  if(['submitted','won'].includes(row.status))return 'delivered';
+  if(row.status==='paid')return 'paid';
+  if(TERMINAL.has(row.status))return 'graveyard';
+  if(row.status==='stale')return 'stale';
+  if(row.job.kind==='affiliate'||row.job.kind==='unsupported')return 'watch';
+  if((row.qualification?.reasons||[]).some(r=>/skill_mismatch|credentials|wallet|agent_id|payout_destination|payout_network|registered_wallet/.test(r)))return 'systemBlocked';
+  return 'policyHold';
 }

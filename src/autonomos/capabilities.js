@@ -20,12 +20,12 @@ function containsWord(hay,phrase){
 
 const REQUIRES_SHELL=/\b(docker(file)?|kubernetes|k8s|ci\/cd|shell access|terminal access|npm install|yarn install|pnpm install|pip install|build the (app|project)|run (the )?tests?|compile|package (the )?(app|project))\b/i;
 const REQUIRES_BROWSER=/\b(browser automation|headless browser|screenshot of the (site|app|page)|fill (out )?(the )?form|navigate (the )?(site|dashboard)|web app testing|click through|log in to (the )?(site|dashboard))\b/i;
-const REQUIRES_DEPLOY=/\b(deploy(ment)?\b|production server|release to production|trigger (a )?deployment)\b/i;
-const REQUIRES_GITHUB_PR=/\b(git\s+(clone|push|pull|checkout|commit)|pull request|\bpr\b|open (a |an )?pr\b|merge request|github repo|fix.{0,30}(bug|issue).{0,30}repo)\b/i;
+const REQUIRES_DEPLOY=/\b(?:deploy\s+(?:the |this |a )?(?:app|application|site|service|project|contract)|release to production|trigger (?:a )?deployment|access (?:the )?production server)\b/i;
+const REQUIRES_GITHUB_PR=/\b(?:open|create|submit|deliver|publish|merge)\s+(?:a |an |the )?(?:github )?(?:pull request|pr|merge request)\b|\bgit\s+push\b|\bdeliver.{0,30}\bpull request\b/i;
 const REQUIRES_ARTIFACT=/\b(downloadable|attach(?:ed|ment)?|deliver (?:a )?(?:file|pdf|docx|xlsx|csv|zip|pptx)|create (?:a )?(?:pdf|docx|xlsx|csv|zip|pptx)|generate (?:a )?(?:pdf|docx|xlsx|csv|zip|pptx)|spreadsheet file|presentation file|(?:build|implement|develop|create)\s+(?:a |an |the )?(?:working\s+|functional\s+)?(?:prototype|dapp|d-app|application|smart\s+contract|api|website|web\s*app|program|bot|script|tool)|submit\s+(?:your|the)\s+(?:project|code|repo|repository|prototype|submission)|working\s+(?:prototype|demo|implementation))\b/i;
 const REQUIRES_APP=/\b(send (?:an )?email|create (?:a )?calendar event|update (?:the )?crm|update (?:a )?(?:google )?sheet|post to (?:slack|reddit|x|twitter|linkedin|discord|telegram)|publish (?:on|to) (?:reddit|x|twitter|linkedin|discord|telegram)|x post|post on x|create (?:a )?jira|create (?:a )?linear issue|edit (?:a )?notion|upload to (?:google )?drive|connected app)\b|\bpost\s*[—\-→:]\s*x\b/i;
 const REQUIRES_PROCUREMENT=/\b(hire (?:a |an |the )?(?:service|agent|provider|peer)|purchase(?:\s+(?:a|an|the))?\s+[^.\n]{0,80}|buy(?:\s+(?:a|an|the))?\s+[^.\n]{0,80}|post[, ]+hire[, ]+settle|pay (?:a |an |the )?(?:service|agent|provider)|passport connect[^.\n]{0,60}\b(?:buy|purchase|swap|send)|\b(?:buy|purchase|swap|send)[^.\n]{0,60}passport connect)\b/i;
-const REQUIRES_PHYSICAL=/\b(visit|go to|travel to|pick up|deliver in person|physical location|in[- ]person|take a photo of (?:a |the )?(?:store|building|receipt|sign|location)|mystery shop|phone call|call (?:the )?(?:customer|business|lead))\b/i;
+const REQUIRES_PHYSICAL=/\b((?:visit|go to)\s+(?:a |the )?(?:store|office|shop|building|physical location)|travel to|pick up|deliver in person|physical location|in[- ]person|take a photo of (?:a |the )?(?:store|building|receipt|sign|location)|mystery shop|phone call|call (?:the )?(?:customer|business|lead))\b/i;
 const REQUIRES_HUMAN_IDENTITY=/\b(kyc|selfie|government id|passport verification|personal account|aged account|account with \d+\+? (?:followers|karma|connections)|use your (?:reddit|x|twitter|linkedin|facebook|instagram) account|human verification|captcha solving|invite (?:a )?new agent|recruit (?:a )?new agent|referral (?:agent|user)|create (?:a )?new external agent identity)\b/i;
 const REQUIRES_DESIGN_MEDIA=/\b(logo design|podcast cover|cover art|illustration|brand identity|graphic design|figma design|canva design|video edit|motion graphics|3d render)\b/i;
 // This system permanently refuses to hold private keys or sign transactions (see
@@ -35,7 +35,7 @@ const REQUIRES_DESIGN_MEDIA=/\b(logo design|podcast cover|cover art|illustration
 // funded wallet, etc. — is therefore structurally impossible here, not a missing integration.
 // Previously this was only discovered mid-execution when the model, unable to really deploy,
 // fabricated a deployment claim that QA then correctly rejected after a full paid round-trip.
-const REQUIRES_ONCHAIN_TX=/\b(deploy\w*\b[\s\S]{0,40}?\b(?:mainnet|testnet|sepolia|goerli|mumbai|polygon|base|arbitrum|optimism|devnet|solana)\b|(?:build|develop|create)\b[\s\S]{0,50}?\b(?:dapp|d-app|on-chain program|smart contract)\b[\s\S]{0,50}?\bsolana\b|\bsolana\b[\s\S]{0,50}?\b(?:dapp|d-app|on-chain program|smart contract)\b|\bsign(?:ed|ing)?\s+(?:a\s+|the\s+)?transaction\b|\bbroadcast\s+(?:a\s+|the\s+)?transaction\b|\bmint\w*\b[\s\S]{0,20}?\bfunded\s+wallet\b|\bverify\w*\b[\s\S]{0,40}?\b(?:etherscan|polygonscan|solscan|basescan)\b|\bfunded\s+(?:deployer\s+)?wallet\b)/i;
+const REQUIRES_ONCHAIN_TX=/\b(?:deploy\w*\b[\s\S]{0,40}?\b(?:mainnet|testnet|sepolia|goerli|mumbai|polygon|base|arbitrum|optimism|devnet|solana)\b|sign(?:ed|ing)?\s+(?:a\s+|the\s+)?transaction|broadcast\s+(?:a\s+|the\s+)?transaction|mint\w*\b[\s\S]{0,20}?\bfunded\s+wallet|funded\s+(?:deployer\s+)?wallet)\b/i;
 
 export function classifyOpportunity(opportunity, { llmEnabled=false, hasGithubPrTool=false, hasShellTool=false, hasBrowserTool=false, hasDeployTool=false, hasArtifactTool=false, hasAppTool=false, connectedApps=[], hasWebSearchTool=false, hasDesignMediaTool=false } = {}) {
   const category=String(opportunity?.category||'').toLowerCase();
@@ -49,12 +49,12 @@ export function classifyOpportunity(opportunity, { llmEnabled=false, hasGithubPr
   const deterministic=canDoDeterministically(opportunity,skill);
   const needs={
     github:REQUIRES_GITHUB_PR.test(hay),
-    shell:opportunity.source==='taskbounty'||REQUIRES_SHELL.test(hay)||skill==='document-generation',
+    shell:opportunity.source==='taskbounty'||REQUIRES_SHELL.test(hay)||skill==='document-generation'||(skill==='code-analysis'&&!/\b(?:explain|summarize|document|describe)\b/i.test(title)),
     browser:REQUIRES_BROWSER.test(hay)||skill==='browser-ops',
     deploy:REQUIRES_DEPLOY.test(hay),
     artifact:opportunity.source==='agenthansa'||REQUIRES_ARTIFACT.test(hay)||skill==='document-generation',
-    app:REQUIRES_APP.test(hay)||skill==='app-automation',
-    onchainTx:REQUIRES_ONCHAIN_TX.test(hay)||/\b(?:swap|send|transfer)\s+(?:[0-9.]+\s+|a |the |your )?(?:usdc|usdt|sui|sol|eth|btc|tokens?|crypto|funds)\b/i.test(hay),
+    app:REQUIRES_APP.test(hay),
+    onchainTx:REQUIRES_ONCHAIN_TX.test(hay)||/\b(?:solana|ethereum|polygon|arbitrum|sepolia|devnet|mainnet|testnet)\b[\s\S]{0,100}\bsubmit\s+(?:the |your )?deployed\s+(?:application|dapp|contract)\b/i.test(hay)||/\b(?:swap|send|transfer)\s+(?:[0-9.]+\s+|a |the |your )?(?:usdc|usdt|sui|sol|eth|btc|tokens?|crypto|funds)\b/i.test(hay),
     procurement:REQUIRES_PROCUREMENT.test(hay),
     physical:REQUIRES_PHYSICAL.test(hay),
     humanIdentity:REQUIRES_HUMAN_IDENTITY.test(hay)||/\b(?:join (?:the |our |a )?(?:community|discord|telegram)|referral|invite (?:your )?friends)\b/i.test(hay),
@@ -92,6 +92,7 @@ export function classifyOpportunity(opportunity, { llmEnabled=false, hasGithubPr
     skill,
     confidence:recognized?Math.min(1,(matched?.score||0)/6):generalDigitalFallback?0.35:0,
     safe:safety.safe,
+    permanentlyUnsupported:needs.physical||needs.onchainTx,
     safetyReason:safety.reason,
     executable:safety.safe&&!needsUnavailableTooling&&(recognized?(deterministic||llmEnabled):generalDigitalFallback),
     mode:needsUnavailableTooling?'unsupported_missing_tooling':!recognized?(generalDigitalFallback?'llm_general_digital':'unsupported_unrecognized'):needs.github?'llm_with_github_pr':deterministic?'deterministic':llmEnabled?'llm_with_tools':'unsupported_without_llm',
@@ -114,7 +115,7 @@ function inferRequiredApps(hay=''){
 function canDoDeterministically(op,skill){
   const hay=`${op?.title||''} ${op?.description||''}`.toLowerCase();
   if(skill==='translation')return translationInDictionary(hay);
-  if(skill==='web-research')return /public\s+(url|endpoint)|headers|robots|sitemap|http|website\s+(check|audit)|security header/i.test(hay);
+  if(skill==='web-research')return (hay.match(/https?:\/\/\S+/g)||[]).length===1 && /\b(?:headers?|robots(?:\.txt)?|sitemap(?:\.xml)?|reachability|http status)\b/i.test(hay) && !/\b(?:compare|research|competitor|market|conversion|comprehensive|in-depth|extract)\b/i.test(hay);
   return false;
 }
 
@@ -131,9 +132,9 @@ function estimateLlmCost(op){
 
 function safetyCheck(hay){
   const blocked=[
-    [/password|seed phrase|private key|credential\s*(steal|dump|harvest)|api key steal|phishing/i,'credential_or_secret_request'],
-    [/malware|ransomware|keylogger|credential theft|exploit\s+(?:a|the)\s+server|ddos|botnet/i,'malicious_or_intrusive_work'],
-    [/fake review|spam|mass dm|mass message|impersonat|fake metric|astroturf/i,'spam_or_deceptive_work'],
+    [/\b(?:steal|dump|harvest|exfiltrate|reveal)\b.{0,40}\b(?:passwords?|credentials?|private keys?|seed phrase|api keys?)\b|\b(?:give|send|provide|export|share)\b.{0,25}\b(?:your|owner|user)\b.{0,20}\b(?:password|private key|seed phrase)\b|\b(?:create|build|run)\b.{0,25}\bphishing\s+(?:campaign|site|page)\b/i,'credential_or_secret_request'],
+    [/\b(?:create|build|deploy|spread|install)\b.{0,30}\b(?:malware|ransomware|keylogger|botnet)\b|credential theft|exploit\s+(?:a|the)\s+server|launch.{0,20}ddos/i,'malicious_or_intrusive_work'],
+    [/\b(?:write|post|create|buy)\b.{0,30}\bfake reviews?\b|\b(?:send|post|generate)\b.{0,20}\bspam\b|mass dm|mass message|impersonat|fake metric|astroturf/i,'spam_or_deceptive_work'],
     [/launder|mix(?:er|ing)\s+funds|hide source of funds|evade sanctions/i,'financial_evasion_request']
   ];
   for(const [re,reason] of blocked)if(re.test(hay))return{safe:false,reason};

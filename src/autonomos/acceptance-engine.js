@@ -2,9 +2,9 @@ import crypto from 'node:crypto';
 
 const URL_RE = /\bhttps?:\/\/[^\s<>]+/ig;
 const FILE_RE = /\b(?:pdf|docx|xlsx|csv|zip|png|jpg|jpeg|webp|pptx)\b/i;
-const CODE_RE = /\b(?:code|repo(?:sitory)?|pull request|api|bug|javascript|typescript|python|sql|docker|mvp|prototype|smart contract|solidity|rust|test(?:s|ing)?)\b/i;
-const RESEARCH_RE = /\b(?:research|audit|analy[sz]e|compare|investigate|find|sources?|citations?|current|live data|web search)\b/i;
-const ARTIFACT_RE = /\b(?:deliverable|file|artifact|download|upload|attachment|repository|pull request|repo|prototype|mvp|spreadsheet)\b/i;
+const CODE_RE = /\b(?:code|repo(?:sitory)?|pull request|bug|javascript|typescript|python|sql|docker|mvp|prototype|smart contract|solidity|rust)\b/i;
+const RESEARCH_RE = /\b(?:research|audit|analy[sz]e|compare|investigate|sources?|citations?|current|live data|web search)\b/i;
+const ARTIFACT_RE = /\b(?:downloadable|attachment|pull request|prototype|mvp|spreadsheet)\b|\b(?:create|generate|deliver|attach|upload|provide|submit)\b.{0,35}\b(?:file|artifact|repository|repo|pdf|docx|xlsx|csv|zip|pptx)\b/i;
 
 export function buildAcceptanceContract(opportunity = {}) {
   const text = `${opportunity.title || ''}\n${opportunity.description || ''}\n${opportunity.__workOrderRaw ? JSON.stringify(opportunity.__workOrderRaw) : ''}`.slice(0, 18000);
@@ -13,14 +13,17 @@ export function buildAcceptanceContract(opportunity = {}) {
   const requirements = [];
   const evidence = [];
   const artifacts = [];
-  const mustUseTool = CODE_RE.test(text) || RESEARCH_RE.test(text) || /web-research|code-analysis|data-transform/i.test(skill);
+  const writingOnly=/\b(?:explain|summarize|describe|document)\b/i.test(opportunity.title||'')&&!/\b(?:implement|fix|run|execute|build)\b/i.test(text);
+  const code=(CODE_RE.test(text)||skill==='code-analysis')&&!writingOnly&&skill!=='web-research';
+  const research=skill==='web-research'||(!code&&RESEARCH_RE.test(text))||/\b(?:research|investigate|compare current|web search)\b/i.test(text);
+  const mustUseTool=code||research||skill==='data-transform';
 
-  if (CODE_RE.test(text) || /code-analysis/i.test(skill)) {
+  if (code) {
     requirements.push({id:'implementation', description:'Produce the requested implementation/result, not a plan or proposal.'});
     requirements.push({id:'verification', description:'Run an applicable real verification step and preserve the result.'});
     evidence.push({id:'tool-verification', type:'successful_tool', tools:['run_shell','run_python','coderabbit_review']});
   }
-  if (RESEARCH_RE.test(text) || /web-research/i.test(skill)) {
+  if (research) {
     requirements.push({id:'research-grounded', description:'Base current or externally verifiable claims on actual live sources/tools.'});
     evidence.push({id:'live-source', type:'successful_tool', tools:['web_search','web_scrape','browser_task']});
     if (/source|citation|cite|references?/i.test(text)) requirements.push({id:'sources', description:'Include the requested source/citation information.'});
@@ -29,13 +32,13 @@ export function buildAcceptanceContract(opportunity = {}) {
     requirements.push({id:'artifact', description:'Provide the requested durable artifact or repository/PR output.'});
     artifacts.push({id:'durable-artifact', required:true});
   }
-  if (FILE_RE.test(text)) {
+  if (FILE_RE.test(text) && ARTIFACT_RE.test(text)) {
     artifacts.push({id:'file-format', required:true});
   }
   if (URL_RE.test(text) || /url|link|website|endpoint/i.test(text)) {
     requirements.push({id:'links', description:'Provide the required stable URL(s) or endpoint(s) when explicitly requested.'});
   }
-  if (/\b(?:tests?|unit test|integration test|e2e)\b/i.test(text)) {
+  if (code && /\b(?:tests?|unit test|integration test|e2e)\b/i.test(text)) {
     requirements.push({id:'tests', description:'Actually run the requested tests and preserve the observed result.'});
     evidence.push({id:'test-run', type:'successful_tool', tools:['run_shell','run_python']});
   }
@@ -88,9 +91,12 @@ export function validateAcceptanceContract(contract = {}, deliverable = {}) {
   const successful = toolCalls.filter(x => x?.ok === true);
   const artifactUrls = toolCalls.flatMap(x => Array.isArray(x?.artifacts) ? x.artifacts : []).filter(a => a?.ok && a?.url);
   if (contract.mustUseTool && successful.length < Number(contract.minimumSuccessfulToolCalls || 1)) reasons.push('required_real_tool_evidence_missing');
+  for(const item of contract.evidence||[]){
+    if(item.type==='successful_tool' && item.tools?.length && !successful.some(call=>item.tools.includes(call.tool)))reasons.push(`required_evidence_missing:${item.id}`);
+  }
   if (contract.artifacts?.some(a => a.required) && artifactUrls.length === 0 && !ev?.artifactUrls?.length) reasons.push('required_durable_artifact_missing');
   const content = String(deliverable?.content || '');
-  if (/proposal|plan|approach/i.test(content.slice(0,600)) && contract.requirements?.some(r => r.id === 'implementation')) {
+  if (/^(?:#+\s*)?(?:implementation plan|proposal|proposed approach)\b/i.test(content.trim()) && contract.requirements?.some(r => r.id === 'implementation')) {
     if (!artifactUrls.length && !ev?.artifactUrls?.length) reasons.push('looks_like_plan_not_completed_result');
   }
   return {ok: reasons.length === 0, reasons, successfulToolCalls: successful.length, artifactUrls};

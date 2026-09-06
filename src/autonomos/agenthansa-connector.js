@@ -18,27 +18,58 @@ export class AgentHansaConnector {
     });
   }
   async discover() {
-    const r = await this.http.request(
-      "/agents/work?page=1&per_page=50&type=all",
-    );
-    if (!r.ok) return r;
-    try {
-      const rows = arrayEnvelope(r.data, [
-        "items",
-        "work",
-        "data",
-        "data.items",
-        "results",
-      ]);
-      return {
-        ok: true,
-        rows: rows.map(normalizeAgentHansa),
-        complete: r.data?.pagination?.has_more === false,
-        authenticated: true,
-      };
-    } catch {
-      return { ok: false, reason: "schema_drift:agenthansa_work" };
+    const jobs=new Map(), warnings=[], coverage={};
+    const feeds=[
+      ['work','/agents/work?type=all',null,['items','work','data','data.items','results']],
+      ['community','/collective/bounties?status=open,in_progress','task',['bounties','tasks','items','data','data.items']],
+      ['quests','/alliance-war/quests?status=open','quest',['quests','items','data','data.items']]
+    ];
+    for(const [name,path,kind,keys] of feeds){
+      let complete=false,count=0,ok=false;
+      for(let page=1;page<=20;page++){
+        const r=await this.http.request(`${path}&page=${page}&per_page=50`);
+        if(!r.ok){warnings.push(`${name}:${r.reason}`);break;}
+        let rows;
+        try{rows=arrayEnvelope(r.data,keys);}catch{warnings.push(`${name}:schema_drift`);break;}
+        ok=true; count+=rows.length;
+        for(const raw of rows){
+          try{
+            const job=normalizeAgentHansa(kind?{...raw,type:kind}:raw);
+            const key=job.kind+':'+job.externalId;
+            jobs.set(key,job);
+          }catch{warnings.push(`${name}:invalid_row`);}
+        }
+        const pagination=r.data?.pagination||r.data?.data?.pagination;
+        if(pagination?.has_more===false || (!pagination && rows.length<50)){complete=true;break;}
+        if(pagination?.has_more!==true && rows.length<50){complete=true;break;}
+      }
+      coverage[name]={ok,count,complete};
+      if(ok&&!complete)warnings.push(`${name}:incomplete_scan`);
     }
+    // Inbox contains additional paid assignments. Surface each documented channel;
+    // unsupported submission contracts stay in Watch instead of silently disappearing.
+    const inbox=await this.http.request('/agents/me/inbox');
+    if(inbox.ok){
+      try{
+        const body=objectEnvelope(inbox.data);
+        for(const name of ['engagement','alliance_war_quests','reddit_karma_quest','personal','side_quests']){
+          const section=body[name];
+          if(section===undefined){coverage[name]={ok:false,reason:'section_missing'};continue;}
+          let rows=[];
+          try{rows=arrayEnvelope(section,['items','tasks','assignments','quests','data']);}catch{}
+          coverage[name]={ok:true,count:rows.length,executableLifecycle:name==='alliance_war_quests'};
+          for(const raw of rows){
+            if(!raw?.id||!raw?.title)continue;
+            const job=normalizeAgentHansa({...raw,type:name==='alliance_war_quests'?'quest':'unsupported'});
+            job.channel=name;
+            const key=job.kind+':'+job.externalId;
+            if(!jobs.has(key))jobs.set(key,job);
+          }
+        }
+      }catch{warnings.push('inbox:schema_drift');}
+    }else warnings.push(`inbox:${inbox.reason}`);
+    const ok=Object.values(coverage).some(c=>c.ok);
+    return {ok,rows:[...jobs.values()],complete:feeds.every(([name])=>coverage[name]?.complete)&&inbox.ok&&!warnings.length,authenticated:Boolean(inbox.ok),coverage,warnings:[...new Set(warnings)],reason:ok?'':'agenthansa_feeds_unavailable'};
   }
   async profile() {
     const r = await this.http.request("/agents/me");
@@ -249,7 +280,7 @@ export function normalizeAgentHansa(raw) {
           : "watchlist_only",
     budgetUsd: Number.isFinite(reward) ? Math.max(0, reward) : 0,
     netPayoutUsd: Number.isFinite(reward) ? Math.max(0, reward) * 0.95 : 0,
-    prizePoolUsd: Number.isFinite(pool) ? pool : 0,
+    prizePoolUsd: kind !== "affiliate" && Number.isFinite(pool) ? pool : 0,
     rewardUncertain: !(reward > 0),
     feePercent: 5,
     currency: "USDC",

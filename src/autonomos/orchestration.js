@@ -1,3 +1,4 @@
+import { SandboxSession } from './sandbox-session.js';
 import { checkpointExecution } from './execution-checkpoint.js';
 import crypto from 'node:crypto';
 import { planJob } from './planner.js';
@@ -61,7 +62,10 @@ export async function runHandoffChain(roles,opportunity,plan,{execute,taskAgents
 
 export async function orchestrateJob(opportunity,opts={}){
   const {env=process.env}=opts;
-  return withAgentTrace('autonomos-paid-job',{source:opportunity?.source||'',externalId:opportunity?.externalId||'',title:String(opportunity?.title||'').slice(0,200)},()=>orchestrateJobCore(opportunity,opts),{env});
+  const sandboxSession=new SandboxSession({env});
+  const execute=(op,phaseOpts={})=>opts.execute(op,{...phaseOpts,sandboxSession});
+  try { return await withAgentTrace('autonomos-paid-job',{source:opportunity?.source||'',externalId:opportunity?.externalId||'',title:String(opportunity?.title||'').slice(0,200)},()=>orchestrateJobCore(opportunity,{...opts,execute}),{env}); }
+  finally { await sandboxSession.close(); }
 }
 
 async function orchestrateJobCore(opportunity,{llm,execute,memory=null,taskAgents=null,jobId='',env=process.env,abortSignal=null,onEvent=()=>{},maxTaskAgents=null,store=null}={}){
@@ -106,7 +110,7 @@ async function buildGraphRunner({llm,execute,memoryPack,taskAgents,jobId,env,abo
       const {PostgresSaver}=await import('@langchain/langgraph-checkpoint-postgres');
       checkpointer=PostgresSaver.fromConnString(env.DATABASE_URL,{schema:env.AUTONOMOS_LANGGRAPH_SCHEMA||'public'});
       await checkpointer.setup();
-    }catch(error){onEvent('langgraph_checkpoint_unavailable',{error:String(error?.message||error).slice(0,160)});}
+    }catch(error){await checkpointer?.end?.().catch(()=>{});checkpointer=undefined;onEvent('langgraph_checkpoint_unavailable',{error:String(error?.message||error).slice(0,160)});}
   }
   const State=Annotation.Root({opportunity:Annotation(),plan:Annotation(),deliverable:Annotation(),qa:Annotation()});
   const graph=new StateGraph(State)
@@ -119,18 +123,16 @@ async function buildGraphRunner({llm,execute,memoryPack,taskAgents,jobId,env,abo
     })
     .addNode('qa',async state=>{
       taskAgents?.markJobPhase(jobId,'qa');
-      const qa=await evaluateDeliverable(state.opportunity,state.deliverable,{llm,abortSignal,env});
-      onEvent('qa_evaluated',{ok:qa.ok,score:qa.score,mode:qa.mode});
-      if(!qa.ok)throw new Error(`qa_failed:${qa.reasons.join(',').slice(0,180)}`);
-      return{qa,deliverable:attachEvidence(state.deliverable,state.plan,qa,memoryPack.hits,state.opportunity,jobId)};
+      const {qa,deliverable}=await reviewWithRepair(state.opportunity,state.deliverable,{llm,abortSignal,env,execute,onEvent});
+      return{qa,deliverable:attachEvidence(deliverable,state.plan,qa,memoryPack.hits,state.opportunity,jobId)};
     })
     .addEdge(START,'executor').addEdge('executor','qa').addEdge('qa',END)
     .compile(checkpointer?{checkpointer}:undefined);
   return async(opportunity,plan)=>{
     const threadId=`autonomos-${opportunity.source||'market'}-${opportunity.externalId||crypto.randomUUID()}`;
-    const result=await graph.invoke({opportunity,plan},{configurable:{thread_id:threadId}});
+    try { const result=await graph.invoke({opportunity,plan},{configurable:{thread_id:threadId}});
     onEvent('langgraph_completed',{threadId,persistentCheckpointing:Boolean(checkpointer),handoffRoles});
-    return result.deliverable;
+    return result.deliverable; } finally { await checkpointer?.end?.().catch(()=>{}); }
   };
 }
 
@@ -140,10 +142,27 @@ async function runSequential(opportunity,plan,{llm,execute,memoryPack,taskAgents
     ? await runHandoffChain(handoffRoles,{...opportunity,__memoryContext:memoryPack.context},plan,{execute,taskAgents,jobId,onEvent})
     : await execute({...opportunity,__plan:plan,__memoryContext:memoryPack.context});
   taskAgents?.markJobPhase(jobId,'qa');
-  const qa=await evaluateDeliverable(opportunity,deliverable,{llm,abortSignal,env});
+  const checked=await reviewWithRepair(opportunity,deliverable,{llm,abortSignal,env,execute,onEvent});
+  return attachEvidence(checked.deliverable,plan,checked.qa,memoryPack.hits,opportunity,jobId);
+}
+
+export async function reviewWithRepair(opportunity,deliverable,{llm,abortSignal,env={},execute,onEvent=()=>{}}={}){
+  let qa=await evaluateDeliverable(opportunity,deliverable,{llm,abortSignal,env});
   onEvent('qa_evaluated',{ok:qa.ok,score:qa.score,mode:qa.mode});
+  const prior=deliverable.evidence||{};
+  const externalEffect=(prior.toolCalls||[]).some(t=>['open_pull_request','app_action','deploy_webhook','browser_task'].includes(t.tool));
+  if(!qa.ok && !externalEffect && !abortSignal?.aborted && typeof execute==='function'){
+    onEvent('qa_repair_started',{attempt:1,reasons:qa.reasons});
+    const repaired=await execute(opportunity,{phaseRole:'qa-repair-1',toolFilter:['run_python','run_shell','web_search','web_scrape','store_artifact','coderabbit_review'],
+      briefing:`Repair the existing deliverable in the shared workspace. QA found: ${qa.reasons.join('; ')}. Re-run relevant verification, save changed artifacts, and return the complete corrected result. Previous output:\n${String(deliverable.content||'').slice(0,2800)}`});
+    const next=repaired.evidence||{};
+    deliverable={...repaired,evidence:{...next,toolCalls:[...(prior.toolCalls||[]),...(next.toolCalls||[])],toolCostUsd:Number(prior.toolCostUsd||0)+Number(next.toolCostUsd||0),
+      usage:{prompt_tokens:Number(prior.usage?.prompt_tokens||0)+Number(next.usage?.prompt_tokens||0),completion_tokens:Number(prior.usage?.completion_tokens||0)+Number(next.usage?.completion_tokens||0)},qaRepairAttempts:1}};
+    qa=await evaluateDeliverable(opportunity,deliverable,{llm,abortSignal,env});
+    onEvent('qa_repair_evaluated',{ok:qa.ok,score:qa.score});
+  }
   if(!qa.ok)throw new Error(`qa_failed:${qa.reasons.join(',').slice(0,180)}`);
-  return attachEvidence(deliverable,plan,qa,memoryPack.hits,opportunity,jobId);
+  return {qa,deliverable};
 }
 
 function attachEvidence(deliverable,plan,qa,memoryHits,opportunity,jobId){

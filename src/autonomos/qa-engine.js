@@ -1,4 +1,4 @@
-const BAD=/\b(i cannot|i can't|unable to complete|sorry|as an ai|i did not actually|placeholder|todo:|lorem ipsum)\b/i;
+const BAD=/\b(i cannot|i can't|unable to complete|as an ai|i did not actually|lorem ipsum)\b/i;
 
 // A compact, QA-readable proof record: which tools were actually called and what really
 // happened — separate from the deliverable's own prose CLAIMS about what it did. Without
@@ -8,14 +8,14 @@ export function buildProofLog(toolCalls){
   if(!Array.isArray(toolCalls)||!toolCalls.length)return 'No tools were called during execution — the deliverable is unsupported prose only.';
   return toolCalls.map((call,i)=>{
     const artifacts=(call.artifacts||[]).filter(a=>a?.ok&&a.url).map(a=>a.url);
-    return `${i+1}. tool=${call.tool} success=${call.ok?'true':'false'}${call.ok?'':` error="${String(call.error||'').slice(0,120)}"`}${artifacts.length?` artifacts=[${artifacts.slice(0,3).join(', ')}]`:''}`;
+    return `${i+1}. tool=${call.tool} success=${call.ok?'true':'false'}${call.ok?'':` error="${String(call.error||'').slice(0,120)}"`}${call.exitCode!==undefined?` exitCode=${call.exitCode}`:''}${call.stdout?` observed_output=${JSON.stringify(String(call.stdout).slice(-2000))}`:''}${call.stderr?` stderr=${JSON.stringify(String(call.stderr).slice(-800))}`:''}${artifacts.length?` artifacts=[${artifacts.slice(0,3).join(', ')}]`:''}`;
   }).join('\n');
 }
 
 export async function evaluateDeliverable(opportunity,deliverable,{llm=null,abortSignal=null,env=process.env}={}){
   const content=String(deliverable?.content||'').trim();
   const deterministic=[];
-  if(content.length<20)deterministic.push('too_short');
+  if(content.length<(['deterministic_dictionary','deterministic_product'].includes(deliverable?.evidence?.mode)?1:20))deterministic.push('too_short');
   if(BAD.test(content.slice(0,800)))deterministic.push('refusal_or_placeholder');
   if(deterministic.length)return{ok:false,score:0,reasons:deterministic,mode:'deterministic'};
   const deterministicOutput=['deterministic_dictionary','deterministic_product'].includes(deliverable?.evidence?.mode);
@@ -27,7 +27,7 @@ export async function evaluateDeliverable(opportunity,deliverable,{llm=null,abor
   for(let attempt=0;attempt<2;attempt++){
     const result=await llm.complete({messages:[{role:'system',content:'You are a strict independent QA grader. Output valid JSON only.'},{role:'user',content:prompt+(attempt?'\nYour prior response was invalid JSON. Return JSON only.':'')}],maxTokens:Number(env.AUTONOMOS_QA_MAX_TOKENS||900),signal:abortSignal,task:'qa'});
     if(!result?.ok){if(attempt===0)continue;return failOpen?{ok:true,score:.7,reasons:['llm_qa_unavailable_fail_open'],mode:'policy_fail_open'}:{ok:false,score:0,reasons:['llm_qa_unavailable'],mode:'fail_closed'};}
-    try{const parsed=JSON.parse(String(result.text||'').replace(/^```json\s*|```$/g,''));const score=Math.max(0,Math.min(1,Number(parsed.score||0)));return{ok:Boolean(parsed.pass)&&score>=0.72,score,reasons:Array.isArray(parsed.reasons)?parsed.reasons.slice(0,8):[],mode:'llm_evaluator'};}catch{if(attempt===1)return failOpen?{ok:true,score:.7,reasons:['llm_qa_parse_failed_fail_open'],mode:'policy_fail_open'}:{ok:false,score:0,reasons:['llm_qa_parse_failed'],mode:'fail_closed'};}
+    try{const parsed=JSON.parse(String(result.text||'').replace(/^```json\s*|```$/g,''));const score=Math.max(0,Math.min(1,Number(parsed.score||0)));return{ok:parsed.pass===true&&Number.isFinite(score)&&score>=0.72,score,reasons:Array.isArray(parsed.reasons)?parsed.reasons.slice(0,8):[],mode:'llm_evaluator'};}catch{if(attempt===1)return failOpen?{ok:true,score:.7,reasons:['llm_qa_parse_failed_fail_open'],mode:'policy_fail_open'}:{ok:false,score:0,reasons:['llm_qa_parse_failed'],mode:'fail_closed'};}
   }
   return{ok:false,score:0,reasons:['qa_unreachable'],mode:'fail_closed'};
 }

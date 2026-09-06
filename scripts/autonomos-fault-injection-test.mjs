@@ -32,7 +32,9 @@ async function testRestartAfterClaim(){
   };
   try{
     const first=createAutonomOS({storageDir:root,siteUrl:'https://qonvexa.co',ownerWallet:wallet,env:baseEnv(),logger:{error(){}}});
+    first.start();
     const firstCycle=await first.runCycle();
+    first.stop();
     assert.equal(firstCycle.ok,true);
     assert.equal(claimCalls,1,'initial run must claim exactly once');
     assert.equal(deliveryCalls,1,'initial run must reach delivery before simulated failure');
@@ -50,7 +52,9 @@ async function testRestartAfterClaim(){
     failDelivery=false;
 
     const restarted=createAutonomOS({storageDir:root,siteUrl:'https://qonvexa.co',ownerWallet:wallet,env:baseEnv(),logger:{error(){}}});
+    restarted.start();
     const recoveredCycle=await restarted.runCycle();
+    restarted.stop();
     assert.equal(recoveredCycle.ok,true);
     assert.equal(claimCalls,1,'restart recovery must NEVER claim an already-owned job again');
     assert.equal(deliveryCalls,1,'ambiguous delivery failure must reconcile settlement without repeating a possibly committed delivery');
@@ -88,7 +92,9 @@ async function testRestartAfterDeliveryAck(){
     fs.writeFileSync(path.join(dir,'jobs.ndjson'),`${JSON.stringify({id:jobId,source:'clawlancer',externalId:'fault_ack_1',status:'claimed',at:new Date().toISOString()})}\n`);
 
     const restarted=createAutonomOS({storageDir:root,siteUrl:'https://qonvexa.co',ownerWallet:wallet,env:baseEnv(),logger:{error(){}}});
+    restarted.start();
     const cycle=await restarted.runCycle();
+    restarted.stop();
     assert.equal(cycle.ok,true);
     assert.equal(claimCalls,0,'delivery-ack recovery must not claim again');
     assert.equal(deliveryCalls,0,'delivery-ack recovery must never resubmit an acknowledged deliverable');

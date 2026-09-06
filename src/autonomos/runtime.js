@@ -272,6 +272,7 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
     const repaired=jobRegistry.repairV76LegacyPollution();
     store.writeJson('job-registry-repair-v76.json',{...repaired,at:new Date().toISOString()});
   }
+  if(!store.readJson('job-registry-repair-v15.json',null)){const repaired=jobRegistry.repairMisclassifiedFailures();store.writeJson('job-registry-repair-v15.json',{...repaired,at:new Date().toISOString()});}
   const settledTx = new Set(store.readJson('settled-transactions.json', []));
   // Tracks failed claim attempts per opportunity so transient errors (timeouts, 5xx,
   // network blips) can be retried on a later cycle instead of the opportunity being
@@ -321,7 +322,7 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
     async set(key,value){ x402Idempotency[key]=value; const entries=Object.entries(x402Idempotency); if(entries.length>1000)x402Idempotency=Object.fromEntries(entries.slice(-1000)); store.writeJson('x402-idempotency.json',x402Idempotency); }
   } });
   const newMarkets = new MarketplaceManager({store,env,
-    getConfig:()=>({...config,activeLegacyJobs:Math.max(activeJobs.size,Object.values(inFlightJobs).filter(j=>j.status!=='delivery_accepted').length)+Object.values(jobRegistry.records).filter(j=>j.status==='dispatch_pending').length,availableSpendUsd:Math.max(0,computeEarnedSpendBudgetUsd(store.readNdjson('ledger.ndjson',-1),config))}),
+    getConfig:()=>({...config,activeLegacyJobs:Math.max(activeJobs.size,Object.values(inFlightJobs).filter(j=>['claimed','executing','qa','delivery_ready','delivery_uncertain'].includes(j.status)).length)+Object.values(jobRegistry.records).filter(j=>j.status==='dispatch_pending').length,availableSpendUsd:Math.max(0,computeEarnedSpendBudgetUsd(store.readNdjson('ledger.ndjson',-1),config))}),
     classify:job=>classifyOpportunity(job,capabilityContext()),
     onEvent:(type,detail)=>event(type,detail),
     onCost:record=>appendUniqueLedgerEntry(store,{...record,type:'cost',status:'reserved',at:new Date().toISOString(),estimated:true}),
@@ -394,7 +395,7 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
       taskAgents.retireOrphans([...activeJobs.keys(),...newMarkets.running.keys()]);
       const metrics = calculateMetrics(ledger, jobs, opportunities, seen.size);
       return {
-        project:'AutonomOS', version:'14.0.0',
+        project:'AutonomOS', version:'15.0.0',
         newMarketplaces:{...newMarkets.snapshot(),capabilities:capabilityCatalog(capabilityContext())},
         runtime:{
           ...state,
@@ -404,7 +405,7 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
           taskAgents:taskAgents.summary(),
           activeJobs:[...activeJobs.values()].map(job=>({id:job.id,source:job.source||'',externalId:job.externalId||'',title:job.title||'',productId:job.productId||'',workerId:job.workerId||'',startedAt:job.startedAt||'',etaAt:job.etaAt||'',estimatedMinutes:Number(job.estimatedMinutes||0),deadline:job.deadline||'',budgetUsd:Number(job.budgetUsd||0),currency:job.currency||'',claimMode:job.claimMode||'',escrowed:Boolean(job.escrowed)})),
           llm:llm.status ? llm.status() : { enabled:llm.enabled, available:llm.enabled, provider:llm.provider, model:llm.model },
-          jobRegistry:{summary:jobRegistry.summary(),queues:jobRegistry.queues({limit:100})},
+          jobRegistry:newMarkets.registrySnapshot({summary:jobRegistry.summary(),queues:jobRegistry.queues({limit:12000})},100),
           incidents:buildIncidents()
         },
         config:safeConfig(config),
@@ -416,7 +417,7 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
         infrastructure:infrastructureStatus(env),
         payouts:paymentDestinations(env),
         opportunities, jobs, events, missing:missingSetup(), pendingHumanClaims,
-        jobRegistry:{summary:jobRegistry.summary(),queues:jobRegistry.queues({limit:80})},
+        jobRegistry:newMarkets.registrySnapshot({summary:jobRegistry.summary(),queues:jobRegistry.queues({limit:12000})},80),
         pendingDealworkBidsCount:Object.keys(pendingDealworkBids).length,
         agencyIntelligence:{
           version:'4.0.0',
@@ -485,7 +486,8 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
     },
 
     retryTransientFailures(){
-      claimAttempts={};
+      for(const key of Object.keys(claimAttempts))if(jobRegistry.get(key)?.failureOwner==='transient')delete claimAttempts[key];
+      newMarkets.releaseTransientRetries();
       store.writeJson('claim-attempts.json',claimAttempts);
       const released=jobRegistry.releaseTransientRetries();
       for(const [key,attempt] of Object.entries(executionAttempts)){
@@ -589,7 +591,7 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
       return x402.protect({req,res,product,handler:async()=>executeTrackedProduct(product,Object.fromEntries(Object.entries(req.query||{}).map(([k,v])=>[k,String(v??'')])),{paid:true,source:'x402'})});
     },
     async previewProduct(productId,query){const product=currentProduct(productId);if(!product)throw Object.assign(new Error('Unknown product.'),{status:404});return executeTrackedProduct(product,query,{paid:false,source:'admin_preview'});},
-    catalog(){return{name:'AutonomOS Machine Services',version:'14.0.0',ownerWallet:wallet,payment:x402.status(),products:currentProducts().map(p=>({...p,url:new URL(p.path,siteUrl).toString()}))};}
+    catalog(){return{name:'AutonomOS Machine Services',version:'15.0.0',ownerWallet:wallet,payment:x402.status(),products:currentProducts().map(p=>({...p,url:new URL(p.path,siteUrl).toString()}))};}
   };
 
   async function cycle(trigger){
@@ -600,10 +602,10 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
     cycleRunning=true; const cycleId=`cy_${Date.now().toString(36)}_${crypto.randomBytes(3).toString('hex')}`; const started=Date.now();
     setAgent('prime-governor','working'); setAgent('policy-agent','working'); setAgent('opportunity-radar','working');
     try{
-          await recoverInFlightJobs({max:Math.max(1,Math.min(3,Number(config.maxConcurrentJobs||4)))}).catch(()=>{});
+      if(config.enabled)await recoverInFlightJobs({max:Math.max(1,Math.min(3,Number(config.maxConcurrentJobs||4)))}).catch(()=>{});
       await retryPendingArtifactPersistence({max:5}).catch(()=>{});
       await syncT2000Credential().catch(()=>{});
-      await pollDealworkBids().catch(()=>{});
+      if(config.enabled)await pollDealworkBids().catch(()=>{});
       const boot=await bootstrapMarketCredentials({env,credentials,ownerWallet:wallet,storeCredential:(id,value)=>{credentials={...credentials,[id]:value};store.writeSecretJson('credentials.private.json',credentials);}});
       state.bootstrapHealth=boot;
       const discovery=await discoverMarketOpportunities({env,credentials,limit:100}); state.connectorHealth=discovery.health;
@@ -663,7 +665,7 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
       candidates=applyCommissioningCandidateGate(candidates,config,{ledger:cycleLedger,activeCount:activeJobs.size});
       const commissioningProved=cycleLedger.some(row=>row?.type==='revenue'&&Number(row?.amountUsd||row?.grossUsd||0)>0&&['t2000','clawlancer','workprotocol'].includes(String(row?.source||'')));
 
-      const processed=await mapLimit(candidates,Number(config.commissioningMode&&!commissioningProved?1:config.maxConcurrentJobs||4),async opportunity=>{
+      const processed=await mapLimit(config.enabled?candidates:[],Number(config.commissioningMode&&!commissioningProved?1:config.maxConcurrentJobs||4),async opportunity=>{
         const leaseId=crypto.randomUUID();
         const durableOpportunity={...opportunity,__dispatchLeaseId:leaseId};
         if(triggerEnabled(env)){
@@ -681,11 +683,13 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
 
       await syncSettlements();
       // Accepted obligations and primary marketplace candidates get capacity first.
-      await newMarkets.tick();
+      if(config.enabled)await newMarkets.tick();
+      else for(const source of ['agenthansa','taskbounty'])if(newMarkets.settings(source).enabled)await newMarkets.probe(source);
       const postCycleJobs=store.readNdjson('jobs.ndjson',5000);
       const postCycleLedger=store.readNdjson('ledger.ndjson',-1);
       // Recompute the owner-facing answer after settlement reconciliation so Mission Control
       // never says "awaiting settlement" for a job that became Paid in this same cycle.
+      state.marketFunnel=buildMarketFunnel(normalized);
       state.earningReadiness=buildEarningReadiness(normalized,postCycleJobs,postCycleLedger);
       state.commissioningProof=buildCommissioningProof(normalized,postCycleJobs,postCycleLedger);
       const postCycleOpportunities=store.readNdjson('opportunities.ndjson',1000);
@@ -774,7 +778,6 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
   }
 
   function effectiveJobFloor(op={}){
-    if(config.commissioningMode&&['t2000','clawlancer','workprotocol'].includes(String(op.source||''))&&isCryptoNativeEarning(op))return Number(config.commissioningMinPayoutUsd||0.5);
     if(op?.source==='t2000')return Number(config.t2000MinOpenJobPayoutUsd??0.5);
     if(op?.source==='clawlancer')return Number(config.clawlancerMinJobPayoutUsd??0.5);
     if(op?.source==='dealwork')return Number(config.dealworkMinJobPayoutUsd??0.5);
@@ -852,6 +855,7 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
     // Policy Hold rather than the immutable Graveyard.
     const explicitFinalStatus=reasons.find(r=>/^status_not_open:(closed|expired|cancelled|canceled|removed|rejected|filled|completed)\b/i.test(r));
     const permanentReason=reasons.find(r=>/^demo_or_test_opportunity$/.test(r))||explicitFinalStatus;
+    if(op.capability?.permanentlyUnsupported){jobRegistry.markPermanent(op,{owner:'capability',reasonCode:'structurally_unsupported',reason:(op.capability.missingTools||[]).join(',')});return candidacy;}
     if(permanentReason){
       jobRegistry.markPermanent(op,{owner:'market',reasonCode:explicitFinalStatus?'market_status_final':'demo_or_test_listing',reason:permanentReason});
       return candidacy;
@@ -873,7 +877,7 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
       return candidacy;
     }
 
-    const reversiblePolicyReason=reasons.find(r=>/budget_below_|effective_floor|_job_below_floor:|t2000_open_job_below_floor:|economics_blocked:|estimated_model_cost_|not_escrowed_and_escrow_required|source_not_in_auto_claim_allowlist|status_not_open:|competitive_auto_submit_disabled|crypto_only_payout_required|dealwork_invalid_open_budget|payout_blocked:|marketplace_lifecycle_not_auto_ready:/.test(r));
+    const reversiblePolicyReason=reasons.find(r=>/budget_below_|effective_floor|_job_below_floor:|t2000_open_job_below_floor:|economics_blocked:|estimated_model_cost_|not_escrowed_and_escrow_required|source_not_in_auto_claim_allowlist|status_not_open:|competitive_auto_submit_disabled|crypto_only_payout_required|dealwork_invalid_open_budget|payout_blocked:|marketplace_lifecycle_not_auto_ready:|auto_claim_disabled_in_policy/.test(r));
     if(reversiblePolicyReason){
       jobRegistry.markPolicyHold(op,{reasonCode:'not_eligible_current_policy',reason:reversiblePolicyReason});
     }else if(candidacy.isCandidate){
@@ -1661,9 +1665,9 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
     finally{fastCycleRunning=false;}
   }
   function connectedApps(){try{const raw=JSON.parse(String(env.AUTONOMOS_CONNECTED_APPS_JSON||'[]'));if(Array.isArray(raw))return raw.map(x=>String(x).toLowerCase().trim()).filter(Boolean);}catch{}return String(env.AUTONOMOS_CONNECTED_APPS||'').split(',').map(x=>x.toLowerCase().trim()).filter(Boolean);}
-  function capabilityContext(){return{llmEnabled:Boolean(llm.available??llm.enabled),hasGithubPrTool:Boolean(env.GITHUB_TOKEN),hasShellTool:Boolean(env.E2B_API_KEY),hasBrowserTool:Boolean(env.BROWSERBASE_API_KEY&&env.BROWSERBASE_PROJECT_ID),hasDeployTool:Boolean(env.AUTONOMOS_DEPLOY_WEBHOOK_URL),hasArtifactTool:artifactStore.configured(),hasAppTool:Boolean(env.COMPOSIO_API_KEY),connectedApps:connectedApps(),hasWebSearchTool:Boolean(env.FIRECRAWL_API_KEY||env.TAVILY_API_KEY),hasDesignMediaTool:Boolean(env.CANVA_API_KEY||env.FIGMA_ACCESS_TOKEN||env.FIGMA_API_KEY)};}
+  function capabilityContext(){return{llmEnabled:Boolean(llm.available??llm.enabled),hasGithubPrTool:Boolean(env.GITHUB_TOKEN),hasShellTool:Boolean(env.E2B_API_KEY),hasBrowserTool:Boolean(env.BROWSERBASE_API_KEY&&env.BROWSERBASE_PROJECT_ID),hasDeployTool:Boolean(env.AUTONOMOS_DEPLOY_WEBHOOK_URL),hasArtifactTool:artifactStore.configured(),hasAppTool:Boolean(env.COMPOSIO_API_KEY),connectedApps:connectedApps(),hasWebSearchTool:Boolean(env.FIRECRAWL_API_KEY||env.TAVILY_API_KEY),hasDesignMediaTool:false};}
   function capabilityVersion(){
-    return crypto.createHash('sha256').update(JSON.stringify({rules:'7.8-final',model:llm.model||'',firecrawl:Boolean(env.FIRECRAWL_API_KEY),tavily:Boolean(env.TAVILY_API_KEY),e2b:Boolean(env.E2B_API_KEY),browserbase:Boolean(env.BROWSERBASE_API_KEY&&env.BROWSERBASE_PROJECT_ID),composio:Boolean(env.COMPOSIO_API_KEY),connectedApps:connectedApps().sort(),github:Boolean(env.GITHUB_TOKEN),artifact:artifactStore.configured(),designMedia:Boolean(env.CANVA_API_KEY||env.FIGMA_ACCESS_TOKEN||env.FIGMA_API_KEY)})).digest('hex').slice(0,16);
+    return crypto.createHash('sha256').update(JSON.stringify({rules:'15',credentialVersion:crypto.createHash('sha256').update(JSON.stringify(Object.entries(env).filter(([k])=>/API_KEY|TOKEN|AGENT_ID/.test(k)))).digest('hex'),model:llm.model||'',firecrawl:Boolean(env.FIRECRAWL_API_KEY),tavily:Boolean(env.TAVILY_API_KEY),e2b:Boolean(env.E2B_API_KEY),browserbase:Boolean(env.BROWSERBASE_API_KEY&&env.BROWSERBASE_PROJECT_ID),composio:Boolean(env.COMPOSIO_API_KEY),connectedApps:connectedApps().sort(),github:Boolean(env.GITHUB_TOKEN),artifact:artifactStore.configured(),designMedia:Boolean(env.CANVA_API_KEY||env.FIGMA_ACCESS_TOKEN||env.FIGMA_API_KEY)})).digest('hex').slice(0,16);
   }
   function buildIncidents(){
     const out=[];const now=Date.now();const summary=jobRegistry.summary();

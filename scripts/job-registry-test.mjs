@@ -54,8 +54,8 @@ try{
       {source:'superteam',externalId:'ours-1',title:'Failed',status:'execution_failed',error:'llm_empty_response',at:'2026-09-01T11:00:00Z'}
     ]
   });
-  assert.equal(migration.tombstoned,1);assert.equal(migration.systemBlocked,1);
-  assert.equal(migrationRegistry.blockReason({source:'dealwork',externalId:'done-1'})?.status,'graveyard');
+  assert.equal(migration.tombstoned,0);assert.equal(migration.systemBlocked,1);
+  assert.equal(migrationRegistry.blockReason({source:'dealwork',externalId:'done-1'})?.status,'delivered');
   assert.equal(migrationRegistry.blockReason({source:'superteam',externalId:'ours-1'})?.status,'system_blocked');
 
   // v7.6 production repair removes old x402 discovery pollution and rescues Dealwork

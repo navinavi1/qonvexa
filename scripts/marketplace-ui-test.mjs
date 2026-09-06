@@ -45,6 +45,9 @@ const form = card.querySelector("form");
 form.elements.mode.value = "canary";
 form.elements.competitiveAllowed.checked = true;
 form.elements.minPayoutUsd.value = "10";
+form.elements.minPayoutUsd.dispatchEvent(new window.Event('input',{bubbles:true}));
+window.renderNewMarketplaces(data);
+assert.equal(window.document.querySelector('[data-market="taskbounty"] input[name="minPayoutUsd"]').value,'10','polling cannot discard unsaved settings');
 form.dispatchEvent(
   new window.Event("submit", { bubbles: true, cancelable: true }),
 );
@@ -56,6 +59,7 @@ assert.equal(
 assert.equal(requests[0].body.minPayoutUsd, 10);
 assert.equal(requests[0].body.mode, "canary");
 assert.equal(requests[0].body.competitiveAllowed, true);
+assert.equal(form.dataset.dirty,undefined,'successful save releases polling lock');
 result = { ok: false, reason: "credentials_missing" };
 card.querySelector('[data-action="probe"]').click();
 await new Promise((r) => setTimeout(r, 0));

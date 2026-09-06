@@ -1,3 +1,4 @@
+import { SandboxSession } from './sandbox-session.js';
 import crypto from 'node:crypto';
 import { ArtifactStore } from './artifact-store.js';
 import { executeProduct } from './products.js';
@@ -27,11 +28,13 @@ export function exceedsJobSpendCeiling(toolCostUsd,ceilingUsd){
 
 export async function executeExternalOpportunity(opportunity, capability, opts={}) {
   const effectState={possible:false};
-  try { return await executeOpportunity(opportunity,capability,{...opts,effectState}); }
+  const sandboxSession=opts.sandboxSession || new SandboxSession({env:opts.env});
+  try { return await executeOpportunity(opportunity,capability,{...opts,sandboxSession,effectState}); }
   catch(error) { if(!effectState.possible)error.safeToRetry=true;throw error; }
+  finally { if(!opts.sandboxSession)await sandboxSession.close(); }
 }
 
-async function executeOpportunity(opportunity, capability, { llm, siteUrl='', env=process.env, config=null, abortSignal=null, memoryContext='', toolFilter=null, briefing='', effectState, budget=null }  = {}) {
+async function executeOpportunity(opportunity, capability, { llm, siteUrl='', env=process.env, config=null, abortSignal=null, memoryContext='', toolFilter=null, briefing='', effectState, budget=null, sandboxSession=null }  = {}) {
   if (capability.mode === 'deterministic') return deterministicExecute(opportunity);
   if (!llm?.enabled) throw new Error('llm_required_for_job');
 
@@ -89,7 +92,7 @@ async function executeOpportunity(opportunity, capability, { llm, siteUrl='', en
     'Do not claim actions you did not perform. Never fabricate citations, URLs, tests, files, metrics, transactions, deployments, or evidence.',
     availableTools.length ? `Available real tools: ${toolNames}. Use the real tool when the task depends on current facts, code execution, a connected app, an interactive website, a generated file, code review, a PR, or deployment.` : '',
     availableTools.some(t=>t.function.name==='app_tool_search') ? 'For connected apps, use app_tool_search before app_action when you do not already know the exact current Composio tool slug. Do not guess slugs.' : '',
-    availableTools.some(t=>t.function.name==='run_shell') ? 'For coding work, actually install dependencies/run tests/builds in E2B. If the customer needs downloadable files, use collectPaths or store_artifact so the final answer can contain durable artifact URLs.' : '',
+    availableTools.some(t=>t.function.name==='run_shell') ? 'Shell and Python share the same filesystem for this execution; use /home/user and explicit working directories in commands. For coding work, actually install dependencies/run tests/builds in E2B. If the customer needs downloadable files, use collectPaths or store_artifact so the final answer can contain durable artifact URLs.' : '',
     availableTools.some(t=>t.function.name==='open_pull_request') ? 'For public GitHub repo changes, test first, then use open_pull_request. It only opens a PR and never merges. Never claim the change is live unless an explicit deployment tool succeeds.' : '',
     highValueCodeReview ? 'This is high-value coding work and CodeRabbit is configured. After implementation/tests, run coderabbit_review on the changed code before the final answer.' : '',
     requiresVerification ? `Verification is mandatory for this skill: at least one of these tools must succeed before final answer: ${[...verificationTools].join(', ')}.` : '',
@@ -123,16 +126,16 @@ async function executeOpportunity(opportunity, capability, { llm, siteUrl='', en
         let args={};try{args=JSON.parse(call.function?.arguments||'{}');}catch{}
         const toolName=String(call.function?.name||'');
         if(availableTools.some(t=>t.function.name===toolName)&&!TOOL_RETRY_SAFE.has(toolName))effectState.possible=true;
-        let toolResult= !availableTools.some(t=>t.function.name===toolName) ? {ok:false,reason:'tool_not_allowed_for_phase'} : await runTool(toolName,args,env,{config,validateAction,signal:abortSignal,budget,remainingBudgetUsd:budget?budget.remaining:effectiveJobCeiling<Number.POSITIVE_INFINITY?Math.max(0,effectiveJobCeiling-toolCostUsd):null,jobId:String(opportunity.jobId||'')});
+        let toolResult= !availableTools.some(t=>t.function.name===toolName) ? {ok:false,reason:'tool_not_allowed_for_phase'} : await runTool(toolName,args,env,{config,validateAction,signal:abortSignal,budget,sandboxSession,remainingBudgetUsd:budget?budget.remaining:effectiveJobCeiling<Number.POSITIVE_INFINITY?Math.max(0,effectiveJobCeiling-toolCostUsd):null,jobId:String(opportunity.jobId||'')});
         toolCostUsd+=Number(toolResult.costUsd||0);
         if(!toolResult.ok && toolResult.reason!=='tool_not_allowed_for_phase' && TOOL_RETRY_SAFE.has(toolName) && !abortSignal?.aborted){
           await new Promise(resolve=>setTimeout(resolve,TOOL_RETRY_DELAY_MS));
-          const retryResult=await runTool(toolName,args,env,{config,validateAction,signal:abortSignal,budget,remainingBudgetUsd:budget?budget.remaining:effectiveJobCeiling<Number.POSITIVE_INFINITY?Math.max(0,effectiveJobCeiling-toolCostUsd):null,jobId:String(opportunity.jobId||'')});
+          const retryResult=await runTool(toolName,args,env,{config,validateAction,signal:abortSignal,budget,sandboxSession,remainingBudgetUsd:budget?budget.remaining:effectiveJobCeiling<Number.POSITIVE_INFINITY?Math.max(0,effectiveJobCeiling-toolCostUsd):null,jobId:String(opportunity.jobId||'')});
           toolCostUsd+=Number(retryResult.costUsd||0);
           if(retryResult.ok)toolResult=retryResult;
           else toolResult={...toolResult,error:`${toolResult.error||toolResult.reason||''} (retry also failed: ${retryResult.error||retryResult.reason||''})`.trim()};
         }
-        toolLog.push({tool:toolName,args:summarizeToolArgs(toolName,args),ok:Boolean(toolResult.ok),error:toolResult.ok?'':String(toolResult.error||toolResult.reason||'').slice(0,180),artifacts:summarizeArtifacts(toolResult)});
+        toolLog.push({tool:toolName,args:summarizeToolArgs(toolName,args),ok:Boolean(toolResult.ok),error:toolResult.ok?'':String(toolResult.error||toolResult.reason||'').slice(0,180),artifacts:summarizeArtifacts(toolResult),exitCode:toolResult.exitCode,stdout:String(toolResult.stdout||toolResult.result||'').slice(-3000),stderr:String(toolResult.stderr||'').slice(-1500)});
         messages.push({role:'tool',tool_call_id:call.id,content:JSON.stringify(stripToolSecrets(toolResult)).slice(0,10000)});
         if(effectiveJobCeiling < Number.POSITIVE_INFINITY && toolCostUsd > effectiveJobCeiling + 1e-9) throw new Error(`job_spend_ceiling_exceeded:${toolCostUsd.toFixed(4)}_over_${effectiveJobCeiling.toFixed(4)}`);
       }

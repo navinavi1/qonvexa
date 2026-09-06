@@ -28,12 +28,14 @@ globalThis.fetch=async (url,opts={})=>{
 const root=fs.mkdtempSync(path.join(os.tmpdir(),'autonomos2-flow-'));
 try{
   const runtime=createAutonomOS({storageDir:root,siteUrl:'https://qonvexa.co',ownerWallet:wallet,env:{AUTONOMOS_ENABLED:'false',AUTONOMOS_X402_ENABLED:'false',AUTONOMOS_OWNER_WALLET:wallet},logger:{error(){}}});
+  runtime.start();
   const cycle=await runtime.runCycle();
+  runtime.stop();
   assert.equal(cycle.ok,true);
   assert.equal(cycle.claimed,1);
   assert.equal(cycle.delivered,1);
   const snap=await runtime.snapshot();
-  assert.equal(snap.version,'14.0.0');
+  assert.equal(snap.version,'15.0.0');
   assert.equal(snap.metrics.claimedJobs,1);
   assert.equal(snap.metrics.deliveredJobs,1);
   assert.equal(snap.metrics.paidJobs,1);
@@ -54,7 +56,9 @@ try{
   // Restart against the same persistent disk and see the same marketplace settlement again.
   // Revenue must be idempotent and the paid job must not be reclaimed/re-executed.
   const restarted=createAutonomOS({storageDir:root,siteUrl:'https://qonvexa.co',ownerWallet:wallet,env:{AUTONOMOS_ENABLED:'false',AUTONOMOS_X402_ENABLED:'false',AUTONOMOS_OWNER_WALLET:wallet},logger:{error(){}}});
+  restarted.start();
   const second=await restarted.runCycle();
+  restarted.stop();
   assert.equal(second.ok,true);
   assert.equal(second.claimed,0,'a paid external job must never be reclaimed after restart');
   const ledgerAfterRestart=fs.readFileSync(path.join(autonomosDir,'ledger.ndjson'),'utf8').trim().split(/\n+/).filter(Boolean).map(JSON.parse).filter(x=>x.type==='revenue'&&x.source==='clawlancer');

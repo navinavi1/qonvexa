@@ -101,12 +101,12 @@ await test("Competitive work requires explicit owner setting", () =>
       capability: { executable: true },
     }).reasons.includes("competitive_disabled"),
   ));
-await test("$5 filter uses individual net payout", () =>
+await test("$0.50 filter uses individual net payout", () =>
   assert(
     evaluateNewMarketplaceJob(
-      { ...job, netPayoutUsd: 4.99 },
+      { ...job, netPayoutUsd: 0.49 },
       { settings, config, capability: { executable: true } },
-    ).reasons.includes("payout_below_5"),
+    ).reasons.includes("payout_below_0.5"),
   ));
 await test("Configured job with supported skills can qualify", () =>
   assert.equal(

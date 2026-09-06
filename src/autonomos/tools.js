@@ -1,6 +1,7 @@
 // Real capability tools for worker agents: live web research, isolated code/shell/filesystem
 // execution, browser automation and safe GitHub PR delivery. Tool access is still bounded
 // by spend policy and per-tool hard safety rules.
+import { abortable } from './sandbox-session.js';
 import { browserTask } from './browser-tool.js';
 import { composioExecute, composioSearch } from './composio-tool.js';
 import { ArtifactStore } from './artifact-store.js';
@@ -102,21 +103,19 @@ export async function firecrawlScrape(url, env = process.env, signal) {
   }
 }
 
-export async function e2bRunPython(code, env = process.env, signal) {
+export async function e2bRunPython(code, env = process.env, signal, sandboxSession=null) {
   const key = String(env.E2B_API_KEY || '');
   if (!key) return { ok: false, error: 'e2b_api_key_missing' };
   if (signal?.aborted) return { ok: false, error: 'aborted_by_emergency_stop' };
   let sbx;
   try {
     const { Sandbox } = await import('@e2b/code-interpreter');
-    sbx = await Sandbox.create({ apiKey: key, timeoutMs: 30000 });
+    sbx = sandboxSession ? await sandboxSession.get(signal) : await Sandbox.create({ apiKey: key, timeoutMs: 60000 });
     // E2B's SDK runCode() doesn't take an AbortSignal directly, so we race it against the
     // emergency-stop signal ourselves — the sandbox is killed in `finally` either way,
     // which stops billing/execution even if runCode() itself can't be cancelled mid-flight.
     const runPromise = sbx.runCode(String(code || '').slice(0, 20000));
-    const execution = signal
-      ? await Promise.race([runPromise, new Promise((_, reject) => signal.addEventListener('abort', () => reject(new Error('aborted_by_emergency_stop')), { once:true }))])
-      : await runPromise;
+    const execution = await abortable(runPromise, signal);
     const stdout = (execution?.logs?.stdout || []).join('\n').slice(0, 4000);
     const stderr = (execution?.logs?.stderr || []).join('\n').slice(0, 2000);
     const errorText = execution?.error ? `${execution.error.name}: ${execution.error.value}` : '';
@@ -130,12 +129,12 @@ export async function e2bRunPython(code, env = process.env, signal) {
   } catch (error) {
     return { ok: false, error: String(error?.message || error).slice(0, 300) };
   } finally {
-    if (sbx) { try { await sbx.kill(); } catch { /* best effort cleanup */ } }
+    if (sbx && !sandboxSession) { try { await sbx.kill(); } catch { /* best effort cleanup */ } }
   }
 }
 
 
-export async function e2bRunShell({ command, files = [], collectPaths = [] } = {}, env = process.env, signal) {
+export async function e2bRunShell({ command, files = [], collectPaths = [] } = {}, env = process.env, signal, sandboxSession=null) {
   const key = String(env.E2B_API_KEY || '');
   if (!key) return { ok: false, error: 'e2b_api_key_missing' };
   const cmd = String(command || '').trim();
@@ -152,14 +151,14 @@ export async function e2bRunShell({ command, files = [], collectPaths = [] } = {
   try {
     const { Sandbox } = await import('@e2b/code-interpreter');
     const commandTimeout=Math.min(180000, Number(env.AUTONOMOS_E2B_COMMAND_TIMEOUT_MS || 90000));
-    sbx = await Sandbox.create({ apiKey:key, timeoutMs:Math.max(30000, commandTimeout + 15000) });
+    sbx = sandboxSession ? await sandboxSession.get(signal) : await Sandbox.create({ apiKey:key, timeoutMs:Math.max(30000, commandTimeout + 15000) });
     for (const file of inputFiles) {
       const rel = cleanRelativePath(file?.path);
       if (!rel) continue;
       await sbx.files.write(`/home/user/${rel}`, String(file?.content ?? '').slice(0, 750000));
     }
     const runPromise = sbx.commands.run(cmd, { timeoutMs:commandTimeout });
-    const result = signal ? await Promise.race([runPromise, abortPromise(signal)]) : await runPromise;
+    const result = await abortable(runPromise, signal);
     const response = { ok:Number(result?.exitCode ?? 1) === 0, exitCode:Number(result?.exitCode ?? 1), stdout:String(result?.stdout || '').slice(0,12000), stderr:String(result?.stderr || '').slice(0,6000), artifacts:[] };
     if (response.ok && wanted.length) {
       const artifactStore = new ArtifactStore({ env });
@@ -182,8 +181,8 @@ export async function e2bRunShell({ command, files = [], collectPaths = [] } = {
     }
     return response;
   } catch (error) {
-    return { ok:false, error:signal?.aborted ? 'aborted_by_emergency_stop' : String(error?.message || error).slice(0,300) };
-  } finally { if (sbx) { try { await sbx.kill(); } catch {} } }
+    return { ok:false, error:signal?.aborted ? 'aborted_by_emergency_stop' : String(error?.message || error).slice(0,300), ...(Number.isFinite(error?.exitCode)?{exitCode:error.exitCode,stdout:String(error.stdout||'').slice(0,12000),stderr:String(error.stderr||'').slice(0,6000)}:{}) };
+  } finally { if (sbx && !sandboxSession) { try { await sbx.kill(); } catch {} } }
 }
 
 // Deliberately NOT a generic shell/git-push tool. A raw shell tool would need the LLM to
@@ -291,25 +290,29 @@ export async function codeRabbitReview({ files = [], focus='bugs security correc
   const apiKey = String(env.CODERABBIT_API_KEY || '');
   if (!e2bKey) return { ok:false, error:'e2b_api_key_missing' };
   if (!apiKey) return { ok:false, error:'coderabbit_api_key_missing' };
-  const cleanFiles = (Array.isArray(files) ? files : []).slice(0,20).map(f=>({path:cleanRelativePath(f?.path),content:String(f?.content ?? '').slice(0,750000)})).filter(f=>f.path);
+  const cleanFiles = (Array.isArray(files) ? files : []).slice(0,20).map(f=>({path:cleanRelativePath(f?.path),content:String(f?.content ?? '').slice(0,750000)})).filter(f=>f.path&&!f.path.split('/').some(p=>p.toLowerCase()==='.git'));
   if (!cleanFiles.length) return { ok:false, error:'coderabbit_no_files' };
   let sbx;
   try {
     const { Sandbox } = await import('@e2b/code-interpreter');
-    sbx = await Sandbox.create({ apiKey:e2bKey, timeoutMs:180000, envs:{ CODERABBIT_API_KEY:apiKey } });
+    const reviewTimeout=Math.max(30000,Math.min(1800000,Number(env.AUTONOMOS_CODERABBIT_TIMEOUT_MS)||480000));
+    sbx = await Sandbox.create({ apiKey:e2bKey, timeoutMs:reviewTimeout+180000, envs:{ CODERABBIT_API_KEY:apiKey } });
     await sbx.commands.run('mkdir -p /home/user/repo && cd /home/user/repo && git init -q && git config user.email autonomos@localhost && git config user.name AutonomOS && git commit --allow-empty -qm baseline', { timeoutMs:20000 });
     for (const file of cleanFiles) await sbx.files.write(`/home/user/repo/${file.path}`, file.content);
+    await sbx.commands.run('cd /home/user/repo && git add --all', {timeoutMs:20000});
     const install = await sbx.commands.run('curl -fsSL https://cli.coderabbit.ai/install.sh | sh', { timeoutMs:120000 });
     if (Number(install?.exitCode ?? 1) !== 0) return { ok:false, error:'coderabbit_install_failed', detail:String(install?.stderr || install?.stdout || '').slice(0,1200) };
-    const cmd = `cd /home/user/repo && export PATH="$HOME/.local/bin:$HOME/bin:$PATH" && (coderabbit review --agent --api-key "$CODERABBIT_API_KEY" --dir /home/user/repo || cr review --agent --api-key "$CODERABBIT_API_KEY" --dir /home/user/repo)`;
-    const runPromise = sbx.commands.run(cmd, { timeoutMs:Math.min(300000, Number(env.AUTONOMOS_CODERABBIT_TIMEOUT_MS || 240000)) });
-    const result = signal ? await Promise.race([runPromise, abortPromise(signal)]) : await runPromise;
+    const cmd = 'cd /home/user/repo && export PATH="$HOME/.local/bin:$HOME/bin:$PATH" && coderabbit review --agent --uncommitted --api-key "$CODERABBIT_API_KEY" --dir /home/user/repo';
+    const runPromise = sbx.commands.run(cmd, { timeoutMs:reviewTimeout });
+    const result = await abortable(runPromise, signal);
     const stdout = String(result?.stdout || '').slice(0,50000);
-    const findings = parseCodeRabbitFindings(stdout).slice(0,100);
-    const severe = findings.filter(x=>/critical|high|error|warning/i.test(String(x.severity || x.level || x.type || '')));
+    const parsed = parseCodeRabbitReview(stdout);
+    const findings = parsed.findings.slice(0,100);
+    const severe = findings.filter(x=>/critical|high|major|error|warning/i.test(String(x.severity || x.level || x.type || '')));
     const exitCode=Number(result?.exitCode ?? 1);
     const severeFindings=severe.slice(0,40);
-    return { ok:exitCode===0 && severeFindings.length===0, reviewCompleted:exitCode===0, reviewPassed:exitCode===0 && severeFindings.length===0, exitCode, focus:String(focus || '').slice(0,300), reviewedFiles:cleanFiles.length, findings, severeFindings, rawSummary:findings.length ? '' : stdout.slice(0,8000), stderr:String(result?.stderr || '').slice(0,4000) };
+    const reviewCompleted=exitCode===0 && parsed.completed;
+    return { ok:reviewCompleted && severeFindings.length===0, reviewCompleted, reviewPassed:reviewCompleted && severeFindings.length===0, error:parsed.error, exitCode, focus:String(focus || '').slice(0,300), reviewedFiles:cleanFiles.length, findings, severeFindings, rawSummary:findings.length ? '' : stdout.slice(0,8000), stderr:String(result?.stderr || '').slice(0,4000) };
   } catch (error) {
     return { ok:false, error:signal?.aborted ? 'aborted_by_emergency_stop' : String(error?.message || error).slice(0,300) };
   } finally { if (sbx) { try { await sbx.kill(); } catch {} } }
@@ -331,13 +334,23 @@ export async function deployWebhook({ ref='', reason='', metadata={} } = {}, env
   } catch (error) { return { ok:false, error:signal?.aborted ? 'aborted_by_emergency_stop' : String(error?.message || error).slice(0,250) }; }
 }
 
-function parseCodeRabbitFindings(stdout) {
-  const out=[];
-  for (const line of String(stdout || '').split(/\r?\n/)) {
-    const trimmed=line.trim(); if (!trimmed.startsWith('{')) continue;
-    try { const row=JSON.parse(trimmed); if (row && typeof row==='object') out.push(row); } catch {}
+export function parseCodeRabbitReview(stdout) {
+  const rows=[];const findings=[];let completed=false,error='';
+  const text=String(stdout||'').replace(/\u001b\[[0-9;]*m/g,'').trim();
+  try { const whole=JSON.parse(text);rows.push(...(Array.isArray(whole)?whole:[whole])); }
+  catch { for(const line of text.split(/\r?\n/)){try{rows.push(JSON.parse(line));}catch{}} }
+  for(const row of rows){
+    if(!row||typeof row!=='object')continue;
+    const body=row.data&&typeof row.data==='object'?row.data:row;
+    const type=String(row.type||row.event||'').toLowerCase();
+    const status=String(body.status||row.status||'').toLowerCase();
+    if(type==='action_required'||status==='awaiting_confirmation')error='coderabbit_action_required';
+    if(type==='error'||['failed','error','review_skipped','cancelled'].includes(status))error='coderabbit_'+(status||'error');
+    if(Array.isArray(body.findings))findings.push(...body.findings.filter(x=>x&&typeof x==='object'));
+    if(['finding','issue'].includes(type))findings.push(body.finding||body.issue||body);
+    if(['complete','completed','review_complete'].includes(type)||(['completed','success'].includes(status)&&Array.isArray(body.findings)))completed=true;
   }
-  return out;
+  return {completed:completed&&!error,findings,error:error||(!completed?'coderabbit_review_schema_unconfirmed':'')};
 }
 
 function cleanRelativePath(value) {
@@ -372,9 +385,9 @@ export const TOOL_SCHEMAS = [
   {type:'function',function:{name:'open_pull_request',description:'Propose verified code changes to a public GitHub repo via a fork and Pull Request. Never merges automatically.',parameters:{type:'object',properties:{repoUrl:{type:'string'},baseBranch:{type:'string'},newBranch:{type:'string'},commitMessage:{type:'string'},files:{type:'array',items:{type:'object',properties:{path:{type:'string'},content:{type:'string'}},required:['path','content']}}},required:['repoUrl','newBranch','commitMessage','files']}}}
 ];
 
-export async function runTool(name, args, env = process.env, { config = null, validateAction = null, signal = null, remainingBudgetUsd = null, jobId = '', budget = null } = {}) {
+export async function runTool(name, args, env = process.env, { config = null, validateAction = null, signal = null, remainingBudgetUsd = null, jobId = '', budget = null, sandboxSession = null } = {}) {
   if (signal?.aborted) return { ok:false, error:'aborted_by_emergency_stop', costUsd:0 };
-  const costUsd = estimateToolCostUsd(name, args, env);
+  let costUsd = estimateToolCostUsd(name, args, env);
   if (remainingBudgetUsd !== null && remainingBudgetUsd !== undefined && Number.isFinite(Number(remainingBudgetUsd)) && costUsd > Number(remainingBudgetUsd) + 1e-9) return { ok:false, error:`job_budget_exceeded:need_${costUsd.toFixed(6)}_remaining_${Number(remainingBudgetUsd).toFixed(6)}`, costUsd:0 };
   if (config && validateAction && costUsd > 0) {
     const policy = validateAction({ kind:'spend', amountUsd:costUsd }, config);
@@ -384,14 +397,19 @@ export async function runTool(name, args, env = process.env, { config = null, va
   let result;
   if (name === 'web_search') {
     result = env.TAVILY_API_KEY ? await tavilySearch(args?.query, env, signal) : await firecrawlSearch(args?.query, env, signal);
-    if (!result?.ok && env.FIRECRAWL_API_KEY && env.TAVILY_API_KEY) {
+    if (!result?.ok && env.FIRECRAWL_API_KEY && env.TAVILY_API_KEY && !signal?.aborted &&
+      (remainingBudgetUsd == null || Number(remainingBudgetUsd) >= costUsd*2) &&
+      (!budget || budget.remaining >= costUsd) &&
+      (!config || !validateAction || validateAction({kind:'spend',amountUsd:costUsd*2},config).allowed)) {
+      if(budget)budget.charge(costUsd);
+      costUsd *= 2;
       const fallback = await firecrawlSearch(args?.query, env, signal);
       if (fallback?.ok) result = { ...fallback, provider:'firecrawl_fallback', tavilyError:result?.error || '' };
     }
   }
   else if (name === 'web_scrape') result = await firecrawlScrape(args?.url, env, signal);
-  else if (name === 'run_python') result = await e2bRunPython(args?.code, env, signal);
-  else if (name === 'run_shell') result = await e2bRunShell(args, env, signal);
+  else if (name === 'run_python') result = await e2bRunPython(args?.code, env, signal, sandboxSession);
+  else if (name === 'run_shell') result = await e2bRunShell(args, env, signal, sandboxSession);
   else if (name === 'browser_task') result = await browserTask(args, env, signal);
   else if (name === 'app_tool_search') result = await composioSearch(args, env, signal);
   else if (name === 'app_action') result = await composioExecute(args, env, signal);
