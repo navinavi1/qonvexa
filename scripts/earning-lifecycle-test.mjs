@@ -112,7 +112,7 @@ await test('Automatic commissioning runs one job, waits for acceptance and respe
  const c={discover:async()=>({ok:true,rows:[j],complete:true}),inspect:async()=>({ok:true,job:j}),profile:async()=>({ok:true}),status:async()=>({ok:false})};
  let enabled=false,launches=0;
  const m=new MarketplaceManager({store:new AutonomOSStore(path.join(root,'commission')),env,connectors:{taskbounty:c,agenthansa:c},classify:()=>({executable:true}),getConfig:()=>({earningProfileVersion:15,enabled,allowExternalSpending:true})});
- m.update('taskbounty',{walletConfirmed:true});m.launch=()=>{launches++;};
+ m.update('taskbounty',{walletConfirmed:true});m.launch=row=>{launches++;m.set(row,'submitted');};
  await m.tick();assert.equal(launches,0);enabled=true;await m.tick();assert.equal(launches,1);assert.equal(m.data.canaries.taskbounty.status,'queued');
  await m.tick();assert.equal(launches,1);m.data.canaries.taskbounty.accepted=true;await m.tick();assert.equal(m.settings('taskbounty').mode,'live');
 });

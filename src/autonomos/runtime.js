@@ -1,5 +1,6 @@
 import { openVerifiedPullRequest } from './verified-github-pr.js';
 import { MarketplaceManager } from './marketplace-manager.js';
+import { executionDiagnostics, logExecutionEvent } from './execution-diagnostics.js';
 import { executeCodingJob } from './coding-job.js';
 import { createJobBudget } from './job-budget.js';
 import { checkpointExecution } from './execution-checkpoint.js';
@@ -357,6 +358,7 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
   });
   persistCore();
   const recoveryReady=integrationsReady.then(()=>recoverStartup()).catch(()=>{});
+  logDiagnostics('runtime_initialized');
   if (config.enabled && !config.killSwitch) schedule();
 
   return {
@@ -600,6 +602,7 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
     if(!config.enabled&&trigger!=='manual')return{ok:false,reason:'runtime_stopped'};
     await integrationsReady; await recoveryReady;
     cycleRunning=true; const cycleId=`cy_${Date.now().toString(36)}_${crypto.randomBytes(3).toString('hex')}`; const started=Date.now();
+    event('cycle_started',{cycleId,trigger});
     setAgent('prime-governor','working'); setAgent('policy-agent','working'); setAgent('opportunity-radar','working');
     try{
       if(config.enabled)await recoverInFlightJobs({max:Math.max(1,Math.min(3,Number(config.maxConcurrentJobs||4)))}).catch(()=>{});
@@ -704,6 +707,7 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
       state.cycles=Number(state.cycles||0)+1;state.lastCycleAt=new Date().toISOString();state.lastCycleMs=Date.now()-started;state.updatedAt=new Date().toISOString();state.lastCycleId=cycleId;state.lastCycleTrigger=trigger;
       state.lastCycleSummary={opportunities:normalized.length,candidates:candidates.length,claimed,delivered,durableDispatched,triggerDispatched,temporalDispatched,concurrency:Number(config.maxConcurrentJobs||4),elasticChildren:children.filter(c=>c.status==='alive').length};store.writeJson('state.json',state);
       event('cycle_completed',{cycleId,trigger,ms:state.lastCycleMs,opportunities:normalized.length,candidates:candidates.length,claimed,delivered,durableDispatched,triggerDispatched,temporalDispatched});
+      logDiagnostics('cycle_diagnostics');
       return{ok:true,cycleId,ms:state.lastCycleMs,opportunities:normalized.length,candidates:candidates.length,claimed,delivered,durableDispatched,triggerDispatched,temporalDispatched};
     }catch(error){state.lastError=String(error?.message||error).slice(0,400);state.updatedAt=new Date().toISOString();store.writeJson('state.json',state);incrementAgentError('prime-governor');event('cycle_failed',{cycleId,trigger,error:state.lastError});logger.error?.('AutonomOS cycle failed:',error);return{ok:false,cycleId,error:state.lastError};}
     finally{cycleRunning=false;for(const agent of agents)if(agent.status==='working')agent.status='idle';persistAgents();}
@@ -1238,7 +1242,10 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
   }
 
   async function recoverInFlightJobs({max=3}={}){
-    const pending=Object.values(inFlightJobs).filter(record=>record?.jobId&&!activeJobs.has(record.jobId)).slice(0,Math.max(1,Number(max||3)));
+    // Apply the work limit after holds/backoff, otherwise the first three blocked
+    // records permanently starve every later owned job (and delivery checkpoint).
+    const pending=Object.values(inFlightJobs).filter(record=>record?.jobId&&!activeJobs.has(record.jobId));
+    const limit=Math.max(1,Number(max||3));let attempted=0;
     let recovered=0,failed=0,manualAttention=0;
     for(const record of pending){
       const {jobId,op,claim}=record;if(!op||!claim)continue;
@@ -1273,6 +1280,8 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
       const key=opportunityKey(op);const attempt=executionAttempts[key]||{};
       if(Number(attempt.count||0)>=MAX_EXECUTION_ATTEMPTS){manualAttention++;writeInFlightJob(jobId,{...record,status:'manual_attention',manualAttentionAt:record.manualAttentionAt||new Date().toISOString()});continue;}
       if(attempt.lastAttemptAt&&Date.now()-Date.parse(attempt.lastAttemptAt)<retryDelayMs(EXECUTION_RETRY_BACKOFF_MS,Number(attempt.count||1),24*60*60_000))continue;
+      if(attempted>=limit)continue;
+      attempted++;
       const worker=children.find(c=>c.id===record.workerId&&c.status==='alive')||agents.find(a=>a.id===record.workerId)||pickExternalWorker(op.capability?.skill);
       const abortController=new AbortController();const recoveredStartedAt=new Date().toISOString();setWorkerStatus(worker,'working');activeJobs.set(jobId,{id:jobId,source:op.source,externalId:op.externalId,title:op.title||'',workerId:worker.id,startedAt:recoveredStartedAt,etaAt:new Date(Date.parse(recoveredStartedAt)+estimateJobDurationMinutes(op)*60000).toISOString(),estimatedMinutes:estimateJobDurationMinutes(op),deadline:op.deadline||'',budgetUsd:Number(op.budgetUsd||0),currency:op.currency||'',claimMode:op.claimMode||'',escrowed:Boolean(op.escrowed),cancelled:false,abortController});jobRegistry.setState(op,'executing',{jobId,workerId:worker.id,recovered:true});
       event('market_job_recovery_attempt',{jobId,source:op.source,externalId:op.externalId,attempt:Number(attempt.count||0)+1});
@@ -1681,7 +1690,12 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
   }
   function inferPayoutMethods(op){const source=String(op?.source||'');if(source==='clawlancer')return['direct_crypto'];if(['t2000','workprotocol','moltjobs'].includes(source))return['marketplace'];if(source==='superteam')return['human_crypto_claim'];if(source==='clawjobs')return[];if(source==='dealwork')return['marketplace'];return Array.isArray(op?.supportedMethods)?op.supportedMethods:[];}
   async function mapLimit(items,limit,worker){const rows=Array.from(items||[]);const out=new Array(rows.length);let cursor=0;const runners=Array.from({length:Math.min(rows.length,Math.max(1,Number(limit||1)))},async()=>{while(true){const index=cursor++;if(index>=rows.length)return;try{out[index]=await worker(rows[index],index);}catch(error){out[index]={ok:false,error:String(error?.message||error).slice(0,220)};}}});await Promise.all(runners);return out;}
-  function reschedule(){if(config.enabled&&!config.killSwitch)schedule();} function persistAgents(){store.writeJson('agents.json',agents);} function persistCore(){store.writeJson('config.json',config);store.writeJson('state.json',state);persistAgents();store.writeJson('children.json',children);store.writeJson('offers.json',offers);} function event(type,detail){const row={at:new Date().toISOString(),type,...detail};store.append('events.ndjson',row);eventBus.publish(type,row).catch(()=>{});emitOperationalLog(row,{env}).catch(()=>{});}
+  function logDiagnostics(type){
+    const detail=executionDiagnostics({config,state,registry:Object.values(jobRegistry.records),inFlight:Object.values(inFlightJobs),capabilities:capabilityContext(),
+      newMarkets:['agenthansa','taskbounty'].map(source=>({source,settings:newMarkets.settings(source),health:newMarkets.data.health[source],canary:newMarkets.data.canaries[source],jobs:Object.values(newMarkets.data.jobs).filter(row=>row.job.source===source)}))});
+    try{logger.info?.('[AutonomOS] '+JSON.stringify({at:new Date().toISOString(),type,...detail}));}catch{}
+  }
+  function reschedule(){if(config.enabled&&!config.killSwitch)schedule();} function persistAgents(){store.writeJson('agents.json',agents);} function persistCore(){store.writeJson('config.json',config);store.writeJson('state.json',state);persistAgents();store.writeJson('children.json',children);store.writeJson('offers.json',offers);} function event(type,detail){const row={at:new Date().toISOString(),type,...detail};store.append('events.ndjson',row);logExecutionEvent(logger,type,detail);eventBus.publish(type,row).catch(()=>{});emitOperationalLog(row,{env}).catch(()=>{});}
 }
 
 function defaultOffers(){return Object.fromEntries(MACHINE_PRODUCTS.map(p=>[p.id,{priceUsd:p.priceUsd,updatedAt:'',basis:'initial'}]));}

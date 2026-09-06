@@ -744,7 +744,10 @@ export class MarketplaceManager {
     };
   }
   launch(row) {
-    void this.run(row, Boolean(row.canary)).catch((error) =>
+    return this.run(row, Boolean(row.canary)).then(result => {
+      if (!result.ok) this.log(row.job.source, 'launch_deferred', {jobId:row.id,reason:result.reason});
+      return result;
+    }).catch((error) =>
       this.log(row.job.source, "worker_error", {
         jobId: row.id,
         reason: String(error.message).slice(0, 200),
@@ -865,6 +868,14 @@ export class MarketplaceManager {
           if(s.mode==='canary'&&s.autoCommission){
             const canary=this.data.canaries[id];
             if(canary?.accepted){this.data.settings[id]={...s,mode:'live'};this.save();this.log(id,'commissioning_completed');}
+            // A capacity rejection leaves the canary queued; a due claim retry returns
+            // its job to eligible. Resume that same job, including after a restart.
+            // Claimed/delivery-ready work is handled above; uncertain and submitted
+            // work must still wait for authoritative reconciliation.
+            else if(canary?.jobId){
+              const row=Object.values(this.data.jobs).find(r=>r.id===canary.jobId&&r.job.source===id);
+              if(row?.status==='eligible'&&row.qualification?.eligible&&!this.running.has(row.id)){row.canary=true;this.launch(row);}
+            }
             else if(!canary||(canary.status==='failed'&&canary.reason==='no_eligible_job')){
               const row=this.pick(id,true);
               if(row&&this.canaryCheck(id).ok){this.data.canaries[id]={jobId:row.id,status:'queued',startedAt:stamp()};row.canary=true;this.save();this.launch(row);}

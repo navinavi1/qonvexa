@@ -66,7 +66,7 @@ async function testRestartAfterClaim(){
   }finally{fs.rmSync(root,{recursive:true,force:true});}
 }
 
-async function testRestartAfterDeliveryAck(){
+async function testRestartAfterDeliveryAck({withBlocked=false}={}){
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'autonomos-fault-ack-'));
   let claimCalls=0,deliveryCalls=0;
   globalThis.fetch=async (url,opts={})=>{
@@ -91,6 +91,17 @@ async function testRestartAfterDeliveryAck(){
     writeJson(path.join(dir,'job-registry.json'),{'clawlancer:fault_ack_1':{identity:'clawlancer:fault_ack_1',source:'clawlancer',externalId:'fault_ack_1',title:op.title,budgetUsd:0.5,currency:'USDC',status:'executing',terminal:false,firstSeenAt:new Date().toISOString(),lastSeenAt:new Date().toISOString(),lastStateAt:new Date().toISOString(),seenCount:1}});
     fs.writeFileSync(path.join(dir,'jobs.ndjson'),`${JSON.stringify({id:jobId,source:'clawlancer',externalId:'fault_ack_1',status:'claimed',at:new Date().toISOString()})}\n`);
 
+    if(withBlocked){
+      const blocked={},attempts={};
+      for(let i=0;i<3;i++){
+        const id='blocked_'+i;const heldOp={...op,externalId:id};
+        blocked[id]={jobId:id,op:heldOp,claim:{ok:true,transactionId:id},status:'manual_attention'};
+        attempts[`clawlancer:${id}`]={count:3,lastAttemptAt:new Date().toISOString()};
+      }
+      writeJson(path.join(dir,'in-flight-jobs.json'),{...blocked,...readJson(path.join(dir,'in-flight-jobs.json'))});
+      writeJson(path.join(dir,'execution-attempts.json'),attempts);
+    }
+
     const restarted=createAutonomOS({storageDir:root,siteUrl:'https://qonvexa.co',ownerWallet:wallet,env:baseEnv(),logger:{error(){}}});
     restarted.start();
     const cycle=await restarted.runCycle();
@@ -98,7 +109,9 @@ async function testRestartAfterDeliveryAck(){
     assert.equal(cycle.ok,true);
     assert.equal(claimCalls,0,'delivery-ack recovery must not claim again');
     assert.equal(deliveryCalls,0,'delivery-ack recovery must never resubmit an acknowledged deliverable');
-    assert.deepEqual(readJson(path.join(dir,'in-flight-jobs.json')),{},'delivery checkpoint must be finalized and cleared');
+    const remaining=readJson(path.join(dir,'in-flight-jobs.json'));
+    assert.equal(remaining[jobId],undefined,'blocked records must not starve delivery checkpoint recovery');
+    assert.equal(Object.keys(remaining).length,withBlocked?3:0,'existing holds must remain intact');
     const registry=readJson(path.join(dir,'job-registry.json'));
     assert.equal(registry['clawlancer:fault_ack_1']?.status,'delivered','delivery ACK checkpoint must recover local state to Delivered');
     const jobs=fs.readFileSync(path.join(dir,'jobs.ndjson'),'utf8').trim().split(/\n+/).filter(Boolean).map(JSON.parse);
@@ -109,6 +122,7 @@ async function testRestartAfterDeliveryAck(){
 try{
   await testRestartAfterClaim();
   await testRestartAfterDeliveryAck();
+  await testRestartAfterDeliveryAck({withBlocked:true});
   console.log('AutonomOS fault injection PASS: post-claim restart recovery + post-delivery-ACK at-most-once recovery');
 } finally {
   globalThis.fetch=realFetch;
