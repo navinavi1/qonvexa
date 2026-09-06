@@ -305,6 +305,7 @@ export function jobFingerprint(opportunity={}){const stable=[opportunity.source,
 export function classifyFailure(errorLike,{phase='execution'}={}){
   const text=String(errorLike?.message||errorLike||'').toLowerCase();
   const result=(owner,reasonCode,permanent=false)=>({owner,reasonCode,permanent});
+  if(/superteam_listing_not_agent_eligible|agents are not eligible for this listing/.test(text))return result('market','market_agent_not_eligible');
   // Classify the operation, not generic English words such as "closed" or "not found".
   if(/execution_checkpoint_uncertain|submission_uncertain|ack_missing/.test(text))return result('our_system','external_effect_requires_reconciliation');
   if(/emergency_stop|job_cancelled|aborterror|aborted/.test(text))return result('our_system','execution_stopped');

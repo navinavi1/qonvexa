@@ -24,7 +24,7 @@ export function executionDiagnostics({config={},state={},registry=[],inFlight=[]
       canary:canary?code(canary.status):'none',statuses,blockers,missingTools};
   });
   const tools=Object.fromEntries(Object.entries(capabilities).filter(([key,value])=>typeof value==='boolean'&&/^(has|llm)/.test(key)));
-  return {enabled:Boolean(config.enabled),killSwitch:Boolean(config.killSwitch),autoClaimJobs:Boolean(config.autoClaimJobs),
+  return {enabled:Boolean(config.enabled),killSwitch:Boolean(config.killSwitch),autoClaimJobs:Boolean(config.autoClaimJobs),autoCompetitiveSubmissions:Boolean(config.autoCompetitiveSubmissions),
     zeroSpendMode:Boolean(config.zeroSpendMode),earnedFundsOnly:Boolean(config.earnedFundsOnly),allowExternalSpending:Boolean(config.allowExternalSpending),
     seedSpendBudgetUsd:Number(config.seedSpendBudgetUsd||0),availableSpendUsd:Number(state.earnedSpendBudgetUsd||0),
     maxPaidProcurementUsd:Number(config.maxPaidProcurementUsd||0),minJobPayoutUsd:Number(config.minJobPayoutUsd||0),
@@ -35,7 +35,7 @@ export function logExecutionEvent(logger,type,detail={}){
   if(!/^(?:runtime_|cycle_|fast_cycle_|job_(?:memory|planning|planned|graph_setup|execution|state_transition)|qa_evaluated|market_job_|marketplace_(?:claimed|executing|submitted|paid|retry|system_blocked|uncertain|launch_deferred|poll_error)|trigger_|temporal_|langgraph_checkpoint_unavailable)/.test(type))return;
   const row={at:new Date().toISOString(),type};
   for(const field of ['cycleId','jobId','source','provider','from','to'])if(detail[field])row[field]=code(detail[field]);
-  for(const field of ['ms','opportunities','candidates','claimed','delivered','durableDispatched','attempt','attempts','recovered','retryCount']){
+  for(const field of ['ms','opportunities','candidates','claimed','delivered','durableDispatched','attempt','attempts','recovered','retryCount','ok','score','steps']){
     if(typeof detail[field]==='number'||typeof detail[field]==='boolean')row[field]=detail[field];
   }
   if(detail.error||detail.reason){

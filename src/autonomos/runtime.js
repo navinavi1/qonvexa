@@ -17,7 +17,7 @@ import { createX402Gateway } from './x402.js';
 import {
   connectorStatuses, discoverMarketOpportunities, bootstrapMarketCredentials,
   claimMarketplaceJob, deliverMarketplaceJob, readMarketplaceWallets, syncMarketplaceTransactions,
-  submitDealworkBid, checkDealworkBidStatus, startDealworkContract, reconcileMarketplaceDelivery
+  submitDealworkBid, checkDealworkBidStatus, startDealworkContract, reconcileMarketplaceDelivery, verifySuperteamEligibility
 } from './connectors/index.js';
 import { createLlmClient } from './llm.js';
 import { classifyOpportunity, capabilityCatalog } from './capabilities.js';
@@ -1269,6 +1269,16 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
       // an unconnected social account, human identity, or another capability AutonomOS
       // cannot truthfully perform. Keep the claim visible for manual resolution, but do not
       // burn more model/tool budget retrying an impossible workflow.
+      // Superteam never reserves a paid order: these old records are local submission
+      // intents. Pause them when automatic competitive submissions are disabled.
+      if(op.source==='superteam'&&!config.autoCompetitiveSubmissions){
+        if(record.recoveryHold!=='competitive_auto_submit_disabled'){
+          jobRegistry.markPolicyHold(op,{reasonCode:'competitive_auto_submit_disabled',reason:'Automatic competitive submissions are disabled.'});
+          writeInFlightJob(jobId,{...record,status:'manual_attention',recoveryHold:'competitive_auto_submit_disabled'});
+          event('market_job_recovery_policy_hold',{jobId,source:op.source,reason:'competitive_auto_submit_disabled'});
+        }
+        continue;
+      }
       const recoveryDescription=claim.workOrder?`${op.description||''}\n\n${typeof claim.workOrder==='string'?claim.workOrder:JSON.stringify(claim.workOrder).slice(0,4000)}`:op.description;
       const recoveryCheck=revalidateClaimedCapability({...op,description:recoveryDescription},capabilityContext());
       if(!recoveryCheck.ok){
@@ -1283,7 +1293,22 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
       if(Number(attempt.count||0)>=MAX_EXECUTION_ATTEMPTS){manualAttention++;writeInFlightJob(jobId,{...record,status:'manual_attention',manualAttentionAt:record.manualAttentionAt||new Date().toISOString()});continue;}
       if(attempt.lastAttemptAt&&Date.now()-Date.parse(attempt.lastAttemptAt)<retryDelayMs(EXECUTION_RETRY_BACKOFF_MS,Number(attempt.count||1),24*60*60_000))continue;
       if(attempted>=limit)continue;
+      if(record.eligibilityRetryAfter&&Date.parse(record.eligibilityRetryAfter)>Date.now())continue;
       attempted++;
+      if(op.source==='superteam'){
+        const verified=await verifySuperteamEligibility(op,{credentials});
+        if(!verified.ok){
+          const failure=classifyFailure(verified.reason,{phase:'claim'});
+          if(failure.permanent){jobRegistry.markPermanent(op,{owner:failure.owner,reasonCode:failure.reasonCode,reason:verified.reason});clearInFlightJob(jobId);}
+          else{
+            if(failure.owner==='market')jobRegistry.markPolicyHold(op,{owner:'market',reasonCode:failure.reasonCode,reason:verified.reason,retryAfter:new Date(Date.now()+5*60_000).toISOString()});
+            else jobRegistry.markSystemBlocked(op,{reasonCode:failure.reasonCode,reason:verified.reason,capabilityVersion:capabilityVersion()});
+            writeInFlightJob(jobId,{...record,status:'manual_attention',lastError:verified.reason,eligibilityRetryAfter:new Date(Date.now()+5*60_000).toISOString()});
+          }
+          event('market_job_recovery_preflight_failed',{jobId,source:op.source,reason:verified.reason});
+          continue;
+        }
+      }
       const worker=children.find(c=>c.id===record.workerId&&c.status==='alive')||agents.find(a=>a.id===record.workerId)||pickExternalWorker(op.capability?.skill);
       const abortController=new AbortController();const recoveredStartedAt=new Date().toISOString();setWorkerStatus(worker,'working');activeJobs.set(jobId,{id:jobId,source:op.source,externalId:op.externalId,title:op.title||'',workerId:worker.id,startedAt:recoveredStartedAt,etaAt:new Date(Date.parse(recoveredStartedAt)+estimateJobDurationMinutes(op)*60000).toISOString(),estimatedMinutes:estimateJobDurationMinutes(op),deadline:op.deadline||'',budgetUsd:Number(op.budgetUsd||0),currency:op.currency||'',claimMode:op.claimMode||'',escrowed:Boolean(op.escrowed),cancelled:false,abortController});jobRegistry.setState(op,'executing',{jobId,workerId:worker.id,recovered:true});
       event('market_job_recovery_attempt',{jobId,source:op.source,externalId:op.externalId,attempt:Number(attempt.count||0)+1});

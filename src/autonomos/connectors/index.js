@@ -539,12 +539,37 @@ function extractDeliverableLink(deliverable){
   return'';
 }
 
+// https://superteam.fun/earn/agents documents an authenticated listing-details read
+// and AGENT_ALLOWED/AGENT_ONLY eligibility. A cached listing is not a reservation.
+export async function verifySuperteamEligibility(opportunity,{credentials={}}={}){
+  const key=String(credentials?.superteam?.apiKey||'');
+  if(!key)return{ok:false,reason:'superteam_api_key_missing'};
+  let slug=String(opportunity?.raw?.slug||'');
+  if(!slug){try{const url=new URL(opportunity.url);if(url.hostname==='superteam.fun')slug=url.pathname.match(/\/earn\/listing\/([^/]+)/)?.[1]||'';}catch{}}
+  if(!slug)return{ok:false,reason:'superteam_listing_details_missing'};
+  try{
+    const response=await fetch(`https://superteam.fun/api/agents/listings/details/${encodeURIComponent(slug)}`,{headers:{accept:'application/json',authorization:`Bearer ${key}`},signal:AbortSignal.timeout(15000)});
+    const body=await safeJson(response);
+    if(!response.ok)return{ok:false,reason:`http_${response.status}:${body?.error||body?.message||''}`.slice(0,200)};
+    const listing=body?.listing||body?.bounty||body?.data||body;
+    if(String(listing?.id||'')!==String(opportunity.externalId))return{ok:false,reason:'superteam_listing_identity_unverified'};
+    const access=String(listing.agentAccess||'').toUpperCase();
+    if(!['AGENT_ALLOWED','AGENT_ONLY'].includes(access))return{ok:false,reason:access?'superteam_listing_not_agent_eligible':'superteam_listing_eligibility_unverified'};
+    const status=String(listing.status||'').toLowerCase();
+    if(['closed','expired','cancelled','canceled','completed','unpublished','draft'].includes(status))return{ok:false,reason:'superteam_listing_closed'};
+    if(listing.deadline&&Date.parse(listing.deadline)<=Date.now())return{ok:false,reason:'superteam_listing_expired'};
+    return{ok:true,listing};
+  }catch(error){return{ok:false,reason:String(error?.message||error).slice(0,200)};}
+}
+
 async function superteamAction(kind,opportunity,{env=process.env,credentials,deliverable,recordPendingClaim}={}){
   const cred=credentials?.superteam; const key=String(cred?.apiKey||''); if(!key)return{ok:false,reason:'superteam_api_key_missing'};
   // No escrow/reservation step exists on this platform — "claiming" is just proceeding
-  // straight to a submission, so there is nothing to reserve here and no network call is
-  // needed or possible; the actual work happens at 'deliver'.
-  if(kind==='claim')return{ok:true,jobId:opportunity.externalId,transactionId:''};
+  // straight to a submission. Verify the current listing contract before model spend.
+  if(kind==='claim'){
+    const verified=await verifySuperteamEligibility(opportunity,{credentials});
+    return verified.ok?{ok:true,jobId:opportunity.externalId,transactionId:'',workOrder:verified.listing}:verified;
+  }
   try{
     // Per superteam.fun/earn/agents: telegram is REQUIRED for project-type listings
     // (optional otherwise) and must be the human operator's own t.me/<username> URL —

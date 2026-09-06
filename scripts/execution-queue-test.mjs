@@ -12,6 +12,8 @@ import {createJobBudget} from '../src/autonomos/job-budget.js';
 import {postgresPoolConfig} from '../src/autonomos/memory.js';
 import {checkpointExecution} from '../src/autonomos/execution-checkpoint.js';
 import {createAutonomOS} from '../src/autonomos/runtime.js';
+import {verifySuperteamEligibility,claimMarketplaceJob} from '../src/autonomos/connectors/index.js';
+import {classifyFailure} from '../src/autonomos/job-registry.js';
 
 const root=fs.mkdtempSync(path.join(os.tmpdir(),'execution-queue-'));
 let passed=0;
@@ -107,6 +109,47 @@ try{
       const first=runtime.runCycle();const second=await runtime.runCycle();
       assert.equal(second.ok,false);assert.equal(second.reason,'cycle_already_running');
       assert.equal((await first).ok,true);
+    }finally{runtime.stop();globalThis.fetch=realFetch;}
+  });
+  await test('Superteam checks the current agent permission and deadline before claiming',async()=>{
+    const realFetch=globalThis.fetch;
+    const op={source:'superteam',externalId:'listing',url:'https://superteam.fun/earn/listing/example'};
+    const credentials={superteam:{apiKey:'unused-key'}};
+    let listing={id:'listing',agentAccess:'HUMAN_ONLY',deadline:'2099-01-01'};
+    globalThis.fetch=async(url,options)=>{
+      assert.equal(String(url),'https://superteam.fun/api/agents/listings/details/example');
+      assert.equal(options.method,undefined,'eligibility must be read only');
+      return new Response(JSON.stringify(listing),{status:200});
+    };
+    try{
+      assert.equal((await claimMarketplaceJob(op,{credentials})).ok,false);
+      assert.equal(classifyFailure('http_403:Agents are not eligible for this listing').reasonCode,'market_agent_not_eligible');
+      listing={...listing,agentAccess:'AGENT_ALLOWED',deadline:'2000-01-01'};
+      assert.equal((await verifySuperteamEligibility(op,{credentials})).reason,'superteam_listing_expired');
+      listing={...listing,deadline:'2099-01-01'};
+      const claim=await claimMarketplaceJob(op,{credentials});assert.equal(claim.ok,true);assert.equal(claim.workOrder.id,'listing');
+      listing={...listing,id:'different'};assert.equal((await verifySuperteamEligibility(op,{credentials})).ok,false);
+    }finally{globalThis.fetch=realFetch;}
+  });
+  await test('Old competitive intents respect disabled autopost and revalidate before recovery',async()=>{
+    const dir=path.join(root,'competitive-recovery');const store=new AutonomOSStore(path.join(dir,'autonomos'));
+    const op={source:'superteam',externalId:'listing',url:'https://superteam.fun/earn/listing/example',title:'Translate "agents hiring agents" into Spanish',description:'Translate "agents hiring agents" into Spanish',category:'translation',budgetUsd:50,currency:'USDC',status:'open',capability:{mode:'deterministic',executable:true,skill:'translation'}};
+    store.writeJson('credentials.private.json',{superteam:{apiKey:'unused-key'}});
+    store.writeJson('in-flight-jobs.json',{old:{jobId:'old',op,claim:{ok:true},status:'claimed'}});
+    const realFetch=globalThis.fetch;let inspections=0,submissions=0;const events=[];
+    globalThis.fetch=async url=>{
+      if(String(url).includes('/listings/details/')){inspections++;return new Response(JSON.stringify({id:'listing',agentAccess:'HUMAN_ONLY'}));}
+      if(String(url).includes('/submissions/'))submissions++;
+      return new Response(JSON.stringify({}));
+    };
+    const runtime=createAutonomOS({storageDir:dir,siteUrl:'https://example.com',env:{AUTONOMOS_X402_ENABLED:'false'},logger:{info:line=>events.push(line)}});
+    try{
+      runtime.start();assert.equal((await runtime.runCycle()).ok,true);
+      assert.equal(inspections,0);assert.equal(submissions,0);
+      assert.equal(store.readJson('in-flight-jobs.json').old.recoveryHold,'competitive_auto_submit_disabled');
+      runtime.updateConfig({autoCompetitiveSubmissions:true});assert.equal((await runtime.runCycle()).ok,true);
+      assert.equal(inspections,1);assert.equal(submissions,0);
+      assert(!events.some(line=>line.includes('job_execution_started')),'ineligible work must never reach execution');
     }finally{runtime.stop();globalThis.fetch=realFetch;}
   });
   console.log(`EXECUTION QUEUE: ${passed}/${passed} passed`);
