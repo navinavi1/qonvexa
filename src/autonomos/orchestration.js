@@ -1,6 +1,7 @@
 import { SandboxSession } from './sandbox-session.js';
 import { checkpointExecution } from './execution-checkpoint.js';
 import { postgresPoolConfig } from './memory.js';
+import { executionEvidenceSummary, executionFailureCodes } from './execution-diagnostics.js';
 import crypto from 'node:crypto';
 import { planJob } from './planner.js';
 import { evaluateDeliverable } from './qa-engine.js';
@@ -154,7 +155,7 @@ async function runSequential(opportunity,plan,{llm,execute,memoryPack,taskAgents
 
 export async function reviewWithRepair(opportunity,deliverable,{llm,abortSignal,env={},execute,onEvent=()=>{}}={}){
   let qa=await evaluateDeliverable(opportunity,deliverable,{llm,abortSignal,env});
-  onEvent('qa_evaluated',{ok:qa.ok,score:qa.score,mode:qa.mode});
+  onEvent('qa_evaluated',{ok:qa.ok,score:qa.score,mode:qa.mode,reasons:qa.reasons.flatMap(executionFailureCodes),evidence:executionEvidenceSummary(deliverable)});
   const prior=deliverable.evidence||{};
   const externalEffect=(prior.toolCalls||[]).some(t=>['open_pull_request','app_action','deploy_webhook','browser_task'].includes(t.tool));
   if(!qa.ok && !externalEffect && !abortSignal?.aborted && typeof execute==='function'){
@@ -165,7 +166,7 @@ export async function reviewWithRepair(opportunity,deliverable,{llm,abortSignal,
     deliverable={...repaired,evidence:{...next,toolCalls:[...(prior.toolCalls||[]),...(next.toolCalls||[])],toolCostUsd:Number(prior.toolCostUsd||0)+Number(next.toolCostUsd||0),
       usage:{prompt_tokens:Number(prior.usage?.prompt_tokens||0)+Number(next.usage?.prompt_tokens||0),completion_tokens:Number(prior.usage?.completion_tokens||0)+Number(next.usage?.completion_tokens||0)},qaRepairAttempts:1}};
     qa=await evaluateDeliverable(opportunity,deliverable,{llm,abortSignal,env});
-    onEvent('qa_repair_evaluated',{ok:qa.ok,score:qa.score});
+    onEvent('qa_repair_evaluated',{ok:qa.ok,score:qa.score,mode:qa.mode,reasons:qa.reasons.flatMap(executionFailureCodes),evidence:executionEvidenceSummary(deliverable)});
   }
   if(!qa.ok)throw new Error(`qa_failed:${qa.reasons.join(',').slice(0,180)}`);
   return {qa,deliverable};

@@ -6,7 +6,7 @@ import net from 'node:net';
 import {Pool} from 'pg';
 import {AutonomOSStore} from '../src/autonomos/store.js';
 import {MarketplaceManager} from '../src/autonomos/marketplace-manager.js';
-import {executionDiagnostics,logExecutionEvent} from '../src/autonomos/execution-diagnostics.js';
+import {executionDiagnostics,logExecutionEvent,executionEvidenceSummary} from '../src/autonomos/execution-diagnostics.js';
 import {planJob} from '../src/autonomos/planner.js';
 import {createJobBudget} from '../src/autonomos/job-budget.js';
 import {postgresPoolConfig} from '../src/autonomos/memory.js';
@@ -61,14 +61,21 @@ try{
   });
   await test('Provider logs report blockers without job content, credentials or wallet addresses',()=>{
     const secret='private-fixture-value';
-    const diagnostic=executionDiagnostics({config:{enabled:true,password:secret},capabilities:{llmEnabled:true,apiKey:secret},
+    const diagnostic=executionDiagnostics({config:{enabled:true,password:secret},capabilities:{llmEnabled:true,apiKey:secret},inFlight:[{status:'retry_pending',lastError:'qa_failed:refusal_or_placeholder,'+secret}],
       newMarkets:[{source:'taskbounty',settings:{mode:'canary',walletAddress:secret,walletConfirmed:false},health:{profile:{apiKey:secret}},
         jobs:[{status:'filtered',job:{title:secret,description:secret},qualification:{reasons:['owner_payout_route_confirmation_required','skill_mismatch:shell,artifact']}}]}]});
     assert.equal(diagnostic.markets[0].blockers.owner_payout_route_confirmation_required,1);
     assert.equal(diagnostic.markets[0].missingTools.shell,1);
+    assert.equal(diagnostic.recoveryFailures.refusal_or_placeholder,1);
     assert(!JSON.stringify(diagnostic).includes(secret));
     const lines=[];logExecutionEvent({info:line=>lines.push(line)},'market_job_failed',{source:'taskbounty',error:'http_401:'+secret,payload:secret});
     assert.equal(JSON.parse(lines[0].slice('[AutonomOS] '.length)).httpStatus,401);
+    const evidence=executionEvidenceSummary({content:secret,evidence:{toolCalls:[{tool:'run_shell',ok:false,error:'job_spend_limit:'+secret,stdout:secret},{tool:secret,ok:true}]}});
+    assert(!JSON.stringify(evidence).includes(secret));
+    logExecutionEvent({info:line=>lines.push(line)},'qa_repair_evaluated',{ok:false,score:0,mode:'deterministic',reasons:['too_short',secret],evidence});
+    const qa=JSON.parse(lines[1].slice('[AutonomOS] '.length));
+    assert.equal(qa.evidence.tools.run_shell.failed,1);assert.equal(qa.evidence.failures.job_spend_limit,1);assert.equal(qa.evidence.tools.other.ok,1);
+    assert(qa.failureDetails.includes('too_short'));
     assert(!lines.join('').includes(secret));
   });
   await test('Slow planning times out to a usable plan; emergency cancellation is preserved',async()=>{
