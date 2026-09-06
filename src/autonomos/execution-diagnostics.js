@@ -32,7 +32,7 @@ export function executionDiagnostics({config={},state={},registry=[],inFlight=[]
 }
 
 export function logExecutionEvent(logger,type,detail={}){
-  if(!/^(?:runtime_|cycle_|fast_cycle_|market_job_|marketplace_(?:claimed|executing|submitted|paid|retry|system_blocked|uncertain|launch_deferred|poll_error)|trigger_|temporal_|job_state_transition_blocked|langgraph_checkpoint_unavailable)/.test(type))return;
+  if(!/^(?:runtime_|cycle_|fast_cycle_|job_(?:memory|planning|planned|graph_setup|execution|state_transition)|qa_evaluated|market_job_|marketplace_(?:claimed|executing|submitted|paid|retry|system_blocked|uncertain|launch_deferred|poll_error)|trigger_|temporal_|langgraph_checkpoint_unavailable)/.test(type))return;
   const row={at:new Date().toISOString(),type};
   for(const field of ['cycleId','jobId','source','provider','from','to'])if(detail[field])row[field]=code(detail[field]);
   for(const field of ['ms','opportunities','candidates','claimed','delivered','durableDispatched','attempt','attempts','recovered','retryCount']){

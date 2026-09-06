@@ -23,6 +23,7 @@ export function createJobBudget(
       const budget = this;
       return {
         ...client,
+        budgeted: true,
         complete: async (args) => {
           const size =
             JSON.stringify(

@@ -9,8 +9,7 @@ export class AgentMemory {
     if(!this.env.DATABASE_URL)return{ok:false,reason:'database_url_missing'};
     try{
       const {Pool}=await import('pg');
-      const ssl=postgresSslConfig(this.env);
-      this.pool=new Pool({connectionString:this.env.DATABASE_URL,...(ssl?{ssl}:{})});
+      this.pool=new Pool(postgresPoolConfig(this.env));
       await this.pool.query('CREATE EXTENSION IF NOT EXISTS vector');
       await this.pool.query(`CREATE TABLE IF NOT EXISTS autonomos_memory (
         id bigserial primary key,
@@ -126,4 +125,13 @@ export function postgresSslConfig(env){
   // unless a CA is supplied. Render's documented Node pattern is rejectUnauthorized:false.
   if(env.RENDER||/render\.com|render\.internal/i.test(url))return{rejectUnauthorized:false};
   return{rejectUnauthorized:true};
+}
+
+export function postgresPoolConfig(env={}){
+  const ssl=postgresSslConfig(env);
+  const bounded=(value,fallback)=>Math.max(10,Math.min(60000,Number(value)||fallback));
+  return {connectionString:env.DATABASE_URL,...(ssl?{ssl}:{}),
+    connectionTimeoutMillis:bounded(env.AUTONOMOS_DB_CONNECT_TIMEOUT_MS,10000),
+    query_timeout:bounded(env.AUTONOMOS_DB_QUERY_TIMEOUT_MS,15000),
+    statement_timeout:bounded(env.AUTONOMOS_DB_QUERY_TIMEOUT_MS,15000)};
 }

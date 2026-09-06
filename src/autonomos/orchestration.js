@@ -1,5 +1,6 @@
 import { SandboxSession } from './sandbox-session.js';
 import { checkpointExecution } from './execution-checkpoint.js';
+import { postgresPoolConfig } from './memory.js';
 import crypto from 'node:crypto';
 import { planJob } from './planner.js';
 import { evaluateDeliverable } from './qa-engine.js';
@@ -72,13 +73,15 @@ async function orchestrateJobCore(opportunity,{llm,execute,memory=null,taskAgent
   const checkpoint=checkpointExecution(store,jobId);
   const rawExecute=execute;
   execute=(op,opts={})=>checkpoint(`execute:${opts.phaseRole||'single'}`,()=>rawExecute(op,opts));
+  onEvent('job_memory_started',{jobId});
   const memoryPack=memory?.contextForOpportunity?await memory.contextForOpportunity(opportunity,{limit:Number(env.AUTONOMOS_MEMORY_RECALL_LIMIT||5)}).catch(()=>({context:'',hits:[]})):{context:'',hits:[]};
   if(memoryPack.hits?.length)onEvent('memory_recalled',{count:memoryPack.hits.length,keys:memoryPack.hits.map(x=>x.key).slice(0,8)});
 
   // Plan exactly once. The old implementation planned/spawned once in LangGraph and then
   // again in its catch fallback, which could leave 2x worker leases after an execution
   // failure. Planning is now outside the graph so graph infrastructure fallback is safe.
-  const plan=await checkpoint('plan',async()=>{try{return await planJob(opportunity,{llm,env,abortSignal,memoryContext:memoryPack.context});}catch(error){error.safeToRetry=true;throw error;}});
+  onEvent('job_planning_started',{jobId});
+  const plan=await checkpoint('plan',async()=>{try{return await planJob(opportunity,{llm,env,abortSignal,memoryContext:memoryPack.context});}catch(error){error.safeToRetry=true;throw error;}},{retrySafe:true});
   onEvent('job_planned',{source:plan.source,steps:plan.steps?.length||0});
   const spawned=taskAgents?.spawnForPlan({jobId,opportunity,plan,maxAgents:maxTaskAgents})||[];
   if(spawned.length)onEvent('task_team_ready',{jobId,count:spawned.length,roles:spawned.map(x=>x.role)});
@@ -86,10 +89,12 @@ async function orchestrateJobCore(opportunity,{llm,execute,memory=null,taskAgent
 
   let ok=false;
   try{
+    onEvent('job_graph_setup_started',{jobId});
     const runner=await buildGraphRunner({llm,execute,memoryPack,taskAgents,jobId,env,abortSignal,onEvent,handoffRoles}).catch(error=>{
       onEvent('langgraph_unavailable',{error:String(error?.message||error).slice(0,180)});
       return null;
     });
+    onEvent('job_execution_started',{jobId});
     const result=runner
       ? await runner(opportunity,plan)
       : await runSequential(opportunity,plan,{llm,execute,memoryPack,taskAgents,jobId,env,abortSignal,onEvent,handoffRoles});
@@ -108,7 +113,8 @@ async function buildGraphRunner({llm,execute,memoryPack,taskAgents,jobId,env,abo
   if(env.DATABASE_URL){
     try{
       const {PostgresSaver}=await import('@langchain/langgraph-checkpoint-postgres');
-      checkpointer=PostgresSaver.fromConnString(env.DATABASE_URL,{schema:env.AUTONOMOS_LANGGRAPH_SCHEMA||'public'});
+      const {Pool}=await import('pg');
+      checkpointer=new PostgresSaver(new Pool(postgresPoolConfig(env)),undefined,{schema:env.AUTONOMOS_LANGGRAPH_SCHEMA||'public'});
       await checkpointer.setup();
     }catch(error){await checkpointer?.end?.().catch(()=>{});checkpointer=undefined;onEvent('langgraph_checkpoint_unavailable',{error:String(error?.message||error).slice(0,160)});}
   }

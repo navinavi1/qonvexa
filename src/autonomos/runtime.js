@@ -357,7 +357,7 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
     }
   });
   persistCore();
-  const recoveryReady=integrationsReady.then(()=>recoverStartup()).catch(()=>{});
+  const recoveryReady=integrationsReady.then(()=>recoverStartup()).catch(error=>event('runtime_recovery_failed',{error:String(error?.message||error)}));
   logDiagnostics('runtime_initialized');
   if (config.enabled && !config.killSwitch) schedule();
 
@@ -597,14 +597,16 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
   };
 
   async function cycle(trigger){
-    if(cycleRunning)return{ok:false,reason:'cycle_already_running'};
+    if(cycleRunning||fastCycleRunning)return{ok:false,reason:'cycle_already_running'};
     if(config.killSwitch)return{ok:false,reason:'emergency_stop'};
     if(!config.enabled&&trigger!=='manual')return{ok:false,reason:'runtime_stopped'};
-    await integrationsReady; await recoveryReady;
     cycleRunning=true; const cycleId=`cy_${Date.now().toString(36)}_${crypto.randomBytes(3).toString('hex')}`; const started=Date.now();
-    event('cycle_started',{cycleId,trigger});
-    setAgent('prime-governor','working'); setAgent('policy-agent','working'); setAgent('opportunity-radar','working');
     try{
+      event('cycle_waiting_for_recovery',{cycleId,trigger});
+      await integrationsReady; await recoveryReady;
+      if(config.killSwitch||(!config.enabled&&trigger!=='manual'))return{ok:false,reason:config.killSwitch?'emergency_stop':'runtime_stopped'};
+      event('cycle_started',{cycleId,trigger});
+      setAgent('prime-governor','working'); setAgent('policy-agent','working'); setAgent('opportunity-radar','working');
       if(config.enabled)await recoverInFlightJobs({max:Math.max(1,Math.min(3,Number(config.maxConcurrentJobs||4)))}).catch(()=>{});
       await retryPendingArtifactPersistence({max:5}).catch(()=>{});
       await syncT2000Credential().catch(()=>{});
@@ -1630,7 +1632,7 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
     const premium=Number(config.t2000PremiumOpenJobPayoutUsd||100);
     state.connectorHealth.t2000={...h,openFloorUsd:min,eligibleOpenCount:open.filter(op=>Number(op.budgetUsd||0)>=min).length,priorityOpenCount:open.filter(op=>Number(op.budgetUsd||0)>=priority).length,premiumOpenCount:open.filter(op=>Number(op.budgetUsd||0)>=premium).length};
   }
-  async function recoverStartup(){await syncT2000Credential().catch(()=>{});await recoverInFlightJobs();}
+  async function recoverStartup(){await syncT2000Credential().catch(()=>{});if(config.enabled&&!config.killSwitch)await recoverInFlightJobs();event('runtime_recovery_completed',{});}
   function schedule(){clearTimer();if(!config.enabled||config.killSwitch)return;timer=setInterval(()=>cycle('heartbeat').catch(()=>{}),config.heartbeatSeconds*1000);timer.unref?.();setTimeout(()=>cycle('startup').catch(()=>{}),1200).unref?.();if(config.autoClaimJobs){fastTimer=setInterval(()=>fastClaimCycle().catch(()=>{}),config.fastClaimPollSeconds*1000);fastTimer.unref?.();}}
   function clearTimer(){if(timer)clearInterval(timer);timer=null;if(fastTimer)clearInterval(fastTimer);fastTimer=null;}
   // Fast lane: low-latency autonomous sources need a shorter claim/assignment loop than
@@ -1643,6 +1645,8 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
     if(config.killSwitch||!config.enabled||!config.autoClaimJobs)return{ok:false,reason:'not_applicable'};
     fastCycleRunning=true;
     try{
+      await integrationsReady;await recoveryReady;
+      if(config.killSwitch||!config.enabled||!config.autoClaimJobs)return{ok:false,reason:'not_applicable'};
       await syncT2000Credential().catch(()=>{});
       const fastSources=config.cryptoOnlyEarnings?['clawlancer','t2000','workprotocol']:['clawlancer','t2000','dealwork','workprotocol'];
       const discovery=await discoverMarketOpportunities({env,credentials,limit:60,sources:fastSources});
@@ -1670,7 +1674,7 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
       const fastCommissioningProved=fastLedger.some(row=>row?.type==='revenue'&&Number(row?.amountUsd||row?.grossUsd||0)>0&&['t2000','clawlancer','workprotocol'].includes(String(row?.source||'')));
       const rows=await mapLimit(candidates,Number(config.commissioningMode&&!fastCommissioningProved?1:config.maxConcurrentJobs||4),async op=>{const leaseId=crypto.randomUUID();const durableOp={...op,__dispatchLeaseId:leaseId};if(triggerEnabled(env)){const dispatched=await dispatchTriggerPaidOpportunity(durableOp,env);if(dispatched.ok){jobRegistry.markDispatchPending(op,{provider:'trigger',runId:dispatched.runId||'',leaseId,retryAfter:new Date(Date.now()+6*60*60_000).toISOString()});event('trigger_job_dispatched',{source:op.source,externalId:op.externalId,runId:dispatched.runId||'',leaseId,fastLane:true});return{durable:true,provider:'trigger'};}event('trigger_dispatch_fallback',{source:op.source,externalId:op.externalId,reason:dispatched.reason||'',fastLane:true});}else if(temporalEnabled(env)){const dispatched=await dispatchPaidOpportunity(durableOp,env);if(dispatched.ok){jobRegistry.markDispatchPending(op,{provider:'temporal',runId:dispatched.workflowId||'',leaseId,retryAfter:new Date(Date.now()+6*60*60_000).toISOString()});event('temporal_job_dispatched',{source:op.source,externalId:op.externalId,workflowId:dispatched.workflowId,duplicate:Boolean(dispatched.duplicate),leaseId,fastLane:true});return{durable:true,provider:'temporal'};}event('temporal_dispatch_fallback',{source:op.source,externalId:op.externalId,reason:dispatched.reason||'',fastLane:true});}return processMarketplaceOpportunity(op);});
       return{ok:true,found:normalized.length,processed:rows.filter(x=>!x?.durable).length,durableDispatched:rows.filter(x=>x?.durable).length,triggerDispatched:rows.filter(x=>x?.provider==='trigger').length,temporalDispatched:rows.filter(x=>x?.provider==='temporal').length};
-    }catch(error){return{ok:false,reason:String(error?.message||error).slice(0,200)};}
+    }catch(error){event('fast_cycle_failed',{error:String(error?.message||error)});return{ok:false,reason:String(error?.message||error).slice(0,200)};}
     finally{fastCycleRunning=false;}
   }
   function connectedApps(){try{const raw=JSON.parse(String(env.AUTONOMOS_CONNECTED_APPS_JSON||'[]'));if(Array.isArray(raw))return raw.map(x=>String(x).toLowerCase().trim()).filter(Boolean);}catch{}return String(env.AUTONOMOS_CONNECTED_APPS||'').split(',').map(x=>x.toLowerCase().trim()).filter(Boolean);}

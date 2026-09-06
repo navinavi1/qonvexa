@@ -5,7 +5,7 @@ import crypto from 'node:crypto';
 export function checkpointExecution(store, jobId) {
   if(!store||!jobId)return async (_key,run)=>run();
   const file=`execution-${crypto.createHash('sha256').update(String(jobId)).digest('hex')}.json`;
-  return async (key,run,{reconcile}={})=>{
+  return async (key,run,{reconcile,retrySafe=false}={})=>{
     const read=()=>store.readJsonStrict?store.readJsonStrict(file,{}):store.readJson(file,{});
     const update=fn=>{
       if(store.withLock&&store.writeJsonUnlocked&&store.file)return store.withLock(file,()=>{
@@ -15,7 +15,7 @@ export function checkpointExecution(store, jobId) {
     };
     const cached=update(state=>{
       if(state[key]?.status==='completed')return {hit:true,result:state[key].result};
-      if(state[key]?.status==='started')return {uncertain:true};
+      if(state[key]?.status==='started'&&!retrySafe)return {uncertain:true};
       state[key]={status:'started',startedAt:new Date().toISOString()};return {hit:false};
     });
     if(cached.hit)return cached.result;
