@@ -2,7 +2,8 @@ import { SearchFirstLeadActioner } from './search-first-lead-actioner.js';
 import { composioExecute } from './composio-tool.js';
 
 const EXPLICIT_LISTING_INTENT=/\b(job|jobs|project|projects|hiring|hire|hiring for|looking for|seeking|wanted|needed|required|contract|contractor|bounty|task|tasks|apply|application|opening|vacancy|freelance (?:role|work|job)|paid (?:work|task|project))\b/i;
-const GENERIC_OR_CONTENT_TITLE=/\b(how to|guide|tutorial|tips?|template|templates|course|courses|best\s+.+\s+freelancers?|top\s+.+\s+freelancers?|hire\s+.+\s+freelancers?|find\s+.+\s+freelance jobs|freelance jobs and leads|work from home careers|project proposals?|score freelance clients|marketplace for freelancers?|services? for freelancers?)\b/i;
+const GENERIC_OR_CONTENT_TITLE=/\b(how to|guide|tutorial|tips?|template|templates|course|courses|best\s+.+\s+freelancers?|top\s+.+\s+freelancers?|hire\s+.+\s+freelancers?|find\s+.+\s+freelance jobs|freelance jobs and leads|work from home careers|project proposals?|score freelance clients|marketplace for freelancers?|services? for freelancers?|places? to find|ways? to find|where to find)\b/i;
+const COLLECTION_TITLE=/(?:^|\b)\d+\s+(?:places?|ways?|sites?|websites?|resources?|tools?|tips?|templates?|jobs?|vacancies|openings)\b|^freelance\s+.+\s+jobs?\b|^remote\s+.+\s+jobs?\b|\b(?:find|browse|discover)\s+.+\s+(?:freelance|remote)\s+jobs?\b|\bjobs?\s*(?:\||-|—)\s*(?:indeed|linkedin|glassdoor|ziprecruiter|freelancer)\b/i;
 const GENERIC_COUNT_TITLE=/^\s*\d+\s+(?:remote\s+)?(?:jobs|vacancies|openings|freelance jobs)\b/i;
 const SPECIFIC_ROLE_OR_REQUEST=/\b(request for proposals|\brfp\b|hiring|seeking|looking for|wanted|needed|required|opening|vacanc(?:y|ies)|contractor|freelance\s+(?:developer|writer|translator|designer|researcher|tester|engineer|assistant|specialist|consultant)|developer|engineer|writer|translator|designer|researcher|tester|quality assurance|\bqa\b|analyst|assistant|specialist|consultant|manager|moderator|copywriter|editor|proofreader|data entry|automation)\b/i;
 const JOB_URL_HINT=/\/(?:jobs?|projects?|gigs?|bount(?:y|ies)|careers?|opportunities|openings|vacancies)(?:\/|\?|$)/i;
@@ -16,9 +17,6 @@ export class RevenueLeadActioner extends SearchFirstLeadActioner{
     return score;
   }
 
-  // Applying for work must never queue behind a paid model call. Execution can use the
-  // full LLM/tool stack after acceptance; first contact only needs a truthful job-specific
-  // statement of capability.
   async makeProposal(lead,_text,capability,payout){
     const title=clean(String(lead?.title||'the project')).slice(0,180);
     const skill=String(capability?.skill||lead?.category||'digital').toLowerCase();
@@ -45,9 +43,8 @@ export class RevenueLeadActioner extends SearchFirstLeadActioner{
 
     const now=Date.now();
     const events=Array.isArray(this.state?.events)?this.state.events:[];
-    // This is a provider/reputation pacing guard, not a business cap. Production can use
-    // the upper bound so every qualified listing is eventually attempted without blasting
-    // hundreds of messages in a single minute.
+    // Provider/reputation pacing only. Every qualified unique listing remains queued until
+    // attempted; this prevents a burst from looking like spam while avoiding the old 20-job bottleneck.
     const hourCap=Math.max(1,Math.min(100,Number(this.env.AUTONOMOS_EMAIL_APPLICATIONS_PER_HOUR||20)));
     const dayCap=Math.max(hourCap,Math.min(500,Number(this.env.AUTONOMOS_EMAIL_APPLICATIONS_PER_DAY||120)));
     const sentAt=events.filter(row=>String(row?.type||'')==='lead_applied_email').map(row=>Date.parse(String(row?.at||0))).filter(Number.isFinite);
@@ -62,14 +59,7 @@ export class RevenueLeadActioner extends SearchFirstLeadActioner{
     const prior=this.state.actions?.[id]||{};
     if(['email_send_in_progress','applied_email','application_uncertain'].includes(String(prior.status||'')))return;
     this.setAction(id,{status:'email_send_in_progress',recipient:route.email,applicationUrl:lead.url,proposal:String(proposal||'').slice(0,1800),payout,skill:capability.skill,emailStartedAt:new Date().toISOString(),nextRetryAt:''});
-
-    // GMAIL_SEND_EMAIL is Composio's canonical current Gmail action. Calling it directly
-    // removes the catalog-search/schema-discovery request from every application and uses
-    // the documented recipient_email/subject/body shape.
-    const result=await composioExecute({
-      toolSlug:'GMAIL_SEND_EMAIL',
-      arguments:{recipient_email:String(route.email||''),subject:String(subject||'').slice(0,240),body:String(body||'').slice(0,7000)}
-    },this.env);
+    const result=await composioExecute({toolSlug:'GMAIL_SEND_EMAIL',arguments:{recipient_email:String(route.email||''),subject:String(subject||'').slice(0,240),body:String(body||'').slice(0,7000)}},this.env);
     if(result.ok){
       this.setAction(id,{status:'applied_email',appliedAt:new Date().toISOString(),emailLogId:String(result.logId||''),recipient:route.email,reason:'targeted application sent to explicit public application contact',nextCheckAt:new Date(Date.now()+30*60_000).toISOString()});
       this.state.stats.applied=Number(this.state.stats.applied||0)+1;
@@ -79,8 +69,6 @@ export class RevenueLeadActioner extends SearchFirstLeadActioner{
       this.setAction(id,{status:'email_channel_unavailable',reason:String(result.detail||result.error||'gmail_not_connected').slice(0,240),nextRetryAt:new Date(Date.now()+60*60_000).toISOString()});
       this.event('email_channel_unavailable',{id,host,error:String(result.error||'gmail_not_connected').slice(0,120)});return;
     }
-    // An outbound send is non-idempotent. If Composio/Gmail returns an ambiguous failure,
-    // do not blindly resend the same job application.
     this.setAction(id,{status:'application_uncertain',reason:`email send outcome uncertain: ${String(result.detail||result.error||'unknown').slice(0,220)}`,recipient:route.email,nextCheckAt:new Date(Date.now()+60*60_000).toISOString()});
     this.event('lead_email_application_uncertain',{id,host,error:String(result.error||'unknown').slice(0,120)});
   }
@@ -92,7 +80,7 @@ function isSpecificWorkListing(lead){
   const discoveredBy=clean(lead?.discoveredBy).toLowerCase();
   const url=String(lead?.url||'');
   if(!title)return false;
-  if(GENERIC_OR_CONTENT_TITLE.test(title)||GENERIC_COUNT_TITLE.test(title))return false;
+  if(GENERIC_OR_CONTENT_TITLE.test(title)||GENERIC_COUNT_TITLE.test(title)||COLLECTION_TITLE.test(title))return false;
   if(SPECIFIC_ROLE_OR_REQUEST.test(title))return true;
   if(JOB_URL_HINT.test(url)&&EXPLICIT_LISTING_INTENT.test(`${title} ${snippet}`))return true;
   if(DIRECT_APPLICATION_HINT.test(discoveredBy)&&/\b(project|contract|task|bounty|paid work|freelance work)\b/i.test(`${title} ${snippet}`))return true;
