@@ -31,18 +31,12 @@ export function normalizeConfig(raw={}){
   if(env.AUTONOMOS_NO_ABANDON_ACCEPTED_JOBS!==undefined)envOverrides.noAbandonAcceptedJobs=/^(1|true|yes|on)$/i.test(String(env.AUTONOMOS_NO_ABANDON_ACCEPTED_JOBS));
   if(env.AUTONOMOS_EMERGENCY_FINISH_MODE!==undefined)envOverrides.emergencyFinishMode=/^(1|true|yes|on)$/i.test(String(env.AUTONOMOS_EMERGENCY_FINISH_MODE));
   if(env.AUTONOMOS_SKILL_ACQUISITION_MODE!==undefined)envOverrides.skillAcquisitionMode=/^(1|true|yes|on)$/i.test(String(env.AUTONOMOS_SKILL_ACQUISITION_MODE));
-  // Persisted/runtime config remains authoritative for isolated runtimes and tests. Environment
-  // values supply defaults when a field is absent, instead of leaking Render's production
-  // policy into every test fixture that constructs its own runtime.
   const mergedRaw={...envOverrides,...raw};
   const legacy=!Object.prototype.hasOwnProperty.call(mergedRaw,'platformGeneration');
   const previousGeneration=Number(mergedRaw.platformGeneration||(legacy?0:3));
   const previousProfile=Number(mergedRaw.earningProfileVersion||15);
   const cfg={...DEFAULT_AUTONOMOS_CONFIG,...mergedRaw};
 
-  // One known production v15/v16 stale value ($0.30) came from commissioning and blocked
-  // real work. If the deploy explicitly supplies the new Survival ceiling, migrate only that
-  // stale value. Deliberate admin/test values (0, 1, 3, etc.) are not overridden.
   if(env.AUTONOMOS_MAX_PAID_PROCUREMENT_USD!==undefined&&Number(raw.maxPaidProcurementUsd)===0.3){
     const deployed=Number(env.AUTONOMOS_MAX_PAID_PROCUREMENT_USD);
     if(Number.isFinite(deployed)&&deployed>=0)cfg.maxPaidProcurementUsd=deployed;
@@ -78,8 +72,9 @@ export function normalizeConfig(raw={}){
     if(raw.maxPaidProcurementUsd===undefined||Number(raw.maxPaidProcurementUsd)===3)cfg.maxPaidProcurementUsd=10;
   }
 
-  // Explicit production throughput overrides. The persisted config still wins in isolated
-  // tests/fixtures; these only apply to a real persisted runtime snapshot with updatedAt.
+  // Production swarm can scale elastically without leaking those limits into unit tests.
+  // These are high technical ceilings, not targets: runtime still scales only to real queue,
+  // available treasury and actual process capacity.
   const runtimeEnvOverridesEnabled=/^(1|true|yes|on)$/i.test(String(env.AUTONOMOS_RUNTIME_ENV_OVERRIDES||''))&&Boolean(String(raw.updatedAt||'').trim());
   if(runtimeEnvOverridesEnabled){
     if(env.AUTONOMOS_COMMISSIONING_MODE!==undefined)cfg.commissioningMode=/^(1|true|yes|on)$/i.test(String(env.AUTONOMOS_COMMISSIONING_MODE));
@@ -98,7 +93,10 @@ export function normalizeConfig(raw={}){
   cfg.ownerRevenuePercent=clampNumber(cfg.ownerRevenuePercent,0,100,50);cfg.agentTreasuryPercent=clampNumber(cfg.agentTreasuryPercent,0,100,50);let split=cfg.ownerRevenuePercent+cfg.agentTreasuryPercent;if(split<=0){cfg.ownerRevenuePercent=50;cfg.agentTreasuryPercent=50;}else if(Math.abs(split-100)>0.0001){cfg.ownerRevenuePercent=100*cfg.ownerRevenuePercent/split;cfg.agentTreasuryPercent=100-cfg.ownerRevenuePercent;}
   cfg.completionReservePercentOfPayout=clampNumber(cfg.completionReservePercentOfPayout,0,50,15);cfg.completionReserveMultiplier=clampNumber(cfg.completionReserveMultiplier,0,3,0.5);
   if(cfg.survivalMode){cfg.reservePercent=cfg.ownerRevenuePercent;cfg.growthPercent=cfg.agentTreasuryPercent*0.70;cfg.experimentPercent=cfg.agentTreasuryPercent*0.30;}else{cfg.reservePercent=clampNumber(cfg.reservePercent,0,100,85);cfg.growthPercent=clampNumber(cfg.growthPercent,0,100,10);cfg.experimentPercent=clampNumber(cfg.experimentPercent,0,100,5);}
-  cfg.heartbeatSeconds=Math.round(clampNumber(cfg.heartbeatSeconds,30,3600,60));cfg.fastClaimPollSeconds=Math.round(clampNumber(cfg.fastClaimPollSeconds,10,cfg.heartbeatSeconds,15));cfg.maxChildren=Math.round(clampNumber(cfg.maxChildren,1,100,50));cfg.childSpawnConcurrencyThreshold=Math.round(clampNumber(cfg.childSpawnConcurrencyThreshold,2,50,3));cfg.childTtlMinutes=Math.round(clampNumber(cfg.childTtlMinutes,5,1440,180));cfg.maxPaidProcurementUsd=clampNumber(cfg.maxPaidProcurementUsd,0,100000,3);cfg.maxApiCostPercentOfPayout=clampNumber(cfg.maxApiCostPercentOfPayout,0,80,60);cfg.maxJobsPerCycle=Math.round(clampNumber(cfg.maxJobsPerCycle,1,50,10));cfg.maxConcurrentJobs=Math.round(clampNumber(cfg.maxConcurrentJobs,1,20,6));
+  const maxChildrenCap=runtimeEnvOverridesEnabled?10000:100;
+  const maxJobsPerCycleCap=runtimeEnvOverridesEnabled?1000:50;
+  const maxConcurrentJobsCap=runtimeEnvOverridesEnabled?500:20;
+  cfg.heartbeatSeconds=Math.round(clampNumber(cfg.heartbeatSeconds,20,3600,60));cfg.fastClaimPollSeconds=Math.round(clampNumber(cfg.fastClaimPollSeconds,5,cfg.heartbeatSeconds,15));cfg.maxChildren=Math.round(clampNumber(cfg.maxChildren,1,maxChildrenCap,50));cfg.childSpawnConcurrencyThreshold=Math.round(clampNumber(cfg.childSpawnConcurrencyThreshold,2,500,3));cfg.childTtlMinutes=Math.round(clampNumber(cfg.childTtlMinutes,5,1440,180));cfg.maxPaidProcurementUsd=clampNumber(cfg.maxPaidProcurementUsd,0,100000,3);cfg.maxApiCostPercentOfPayout=clampNumber(cfg.maxApiCostPercentOfPayout,0,80,60);cfg.maxJobsPerCycle=Math.round(clampNumber(cfg.maxJobsPerCycle,1,maxJobsPerCycleCap,10));cfg.maxConcurrentJobs=Math.round(clampNumber(cfg.maxConcurrentJobs,1,maxConcurrentJobsCap,6));
   cfg.autoClaimJobs=cfg.autoClaimJobs!==false;cfg.autoCompetitiveSubmissions=Boolean(cfg.autoCompetitiveSubmissions);cfg.commissioningMode=cfg.commissioningMode!==false;cfg.commissioningMinPayoutUsd=clampNumber(cfg.commissioningMinPayoutUsd,0.01,10,0.5);cfg.cryptoOnlyEarnings=cfg.cryptoOnlyEarnings!==false;cfg.rejectDemoAndTestJobs=cfg.rejectDemoAndTestJobs!==false;cfg.requireEscrowForAutoClaim=cfg.requireEscrowForAutoClaim!==false;
   cfg.minJobPayoutUsd=clampNumber(cfg.minJobPayoutUsd,0,100000,0.5);cfg.clawlancerMinJobPayoutUsd=clampNumber(cfg.clawlancerMinJobPayoutUsd,cfg.minJobPayoutUsd,100000,Math.max(.5,cfg.minJobPayoutUsd));cfg.dealworkMinJobPayoutUsd=clampNumber(cfg.dealworkMinJobPayoutUsd,cfg.minJobPayoutUsd,100000,Math.max(.5,cfg.minJobPayoutUsd));cfg.superteamMinJobPayoutUsd=clampNumber(cfg.superteamMinJobPayoutUsd,cfg.minJobPayoutUsd,100000,Math.max(.5,cfg.minJobPayoutUsd));cfg.t2000MinOpenJobPayoutUsd=clampNumber(cfg.t2000MinOpenJobPayoutUsd,0,100000,.5);cfg.t2000PriorityOpenJobPayoutUsd=clampNumber(cfg.t2000PriorityOpenJobPayoutUsd,cfg.t2000MinOpenJobPayoutUsd,100000,Math.max(25,cfg.t2000MinOpenJobPayoutUsd));cfg.t2000PremiumOpenJobPayoutUsd=clampNumber(cfg.t2000PremiumOpenJobPayoutUsd,cfg.t2000PriorityOpenJobPayoutUsd,100000,Math.max(50,cfg.t2000PriorityOpenJobPayoutUsd));
   cfg.autoReplication=cfg.autoReplication!==false;cfg.genesisObjective=String(cfg.genesisObjective||DEFAULT_AUTONOMOS_CONFIG.genesisObjective).trim().slice(0,1000);cfg.treasuryAsset=['USDC','USDT','ETH','BTC','SOL'].includes(String(cfg.treasuryAsset).toUpperCase())?String(cfg.treasuryAsset).toUpperCase():'USDC';cfg.updatedAt=new Date().toISOString();return cfg;
