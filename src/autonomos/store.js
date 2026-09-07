@@ -1,16 +1,18 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-const TERMINAL_RECOVERY_HOLDS=new Set(['competitive_auto_submit_disabled']);
-
 export function pruneTerminalInFlightJobs(value){
   if(!value||Array.isArray(value)||typeof value!=='object')return value;
   for(const [jobId,record] of Object.entries(value)){
     if(String(record?.status||'')!=='manual_attention')continue;
-    const hold=String(record?.recoveryHold||'').toLowerCase();
     const lastError=String(record?.lastError||'').toLowerCase();
-    const terminal=TERMINAL_RECOVERY_HOLDS.has(hold)||lastError.includes('claimed_job_capability_no_longer_executable');
-    if(terminal)delete value[jobId];
+    // This is not a retryable execution failure: recovery has already reclassified the
+    // accepted job against the CURRENT capability catalog and proved that the runtime can
+    // no longer execute it truthfully. Keeping it in the in-flight recovery file only
+    // re-runs the same preflight every heartbeat. The JobRegistry remains authoritative
+    // and preserves the system_blocked record for owner visibility and future release if
+    // the opportunity is rediscovered after the capability catalog changes.
+    if(lastError.includes('claimed_job_capability_no_longer_executable'))delete value[jobId];
   }
   return value;
 }
