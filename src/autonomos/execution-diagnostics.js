@@ -22,11 +22,11 @@ export function executionEvidenceSummary(deliverable={}){
   return {contentChars:String(deliverable?.content||'').length,toolCount:calls.length,tools,failures};
 }
 
-function buildRevenueSourceDiagnostics(state={},marketRows=[]){
+function buildRevenueSourceDiagnostics(state={},marketRows=[],registryRows=[]){
   const bySource=new Map();
   const get=source=>{
     const id=code(source);
-    if(!bySource.has(id))bySource.set(id,{source:id,discovered:0,sampled:0,executable:0,candidates:0,maxPayoutUsd:0,blockers:{}});
+    if(!bySource.has(id))bySource.set(id,{source:id,discovered:0,sampled:0,executable:0,candidates:0,maxPayoutUsd:0,blockers:{},registryBlockers:{}});
     return bySource.get(id);
   };
   const legacyIds=['clawlancer','t2000','dealwork','workprotocol','superteam'];
@@ -49,15 +49,21 @@ function buildRevenueSourceDiagnostics(state={},marketRows=[]){
     row.maxPayoutUsd=Math.max(row.maxPayoutUsd,Number(opportunity.budgetUsd||0));
     for(const reason of opportunity.candidacy?.reasons||[])add(row.blockers,reason);
   }
+  // Registry details are intentionally reduced to source + reason counters. No external
+  // job ids, titles, descriptions or marketplace payloads enter provider logs. This lets
+  // us distinguish a stale preflight/auth hold from an old claimed/QA failure without
+  // exposing customer work or credentials.
+  for(const registry of registryRows||[]){
+    if(!['system_blocked','capability_hold','manual_attention'].includes(String(registry?.status||'')))continue;
+    const row=get(registry?.source||'unknown');
+    add(row.registryBlockers,registry?.reasonCode||'system_blocked');
+  }
   for(const market of marketRows){
     const row=get(market.source);row.discovered=Math.max(row.discovered,Number(market.signals||0));row.healthy=Boolean(market.healthy);row.healthKnown=true;row.authenticated=Boolean(market.authenticated);
     row.sampled+=Object.values(market.statuses||{}).reduce((n,v)=>n+Number(v||0),0);
     row.candidates+=Number(market.statuses?.eligible||0);
     for(const [reason,count] of Object.entries(market.blockers||{}))row.blockers[code(reason)]=(row.blockers[code(reason)]||0)+Number(count||0);
   }
-  // Keep every core revenue connector visible even when it currently returns zero jobs or
-  // a health error. Otherwise "0 open jobs" and "connector could not authenticate/read"
-  // collapse into the same absence from diagnostics, which hides the exact revenue blocker.
   return [...bySource.values()].sort((a,b)=>b.candidates-a.candidates||b.maxPayoutUsd-a.maxPayoutUsd||b.discovered-a.discovered||a.source.localeCompare(b.source));
 }
 
@@ -81,7 +87,7 @@ export function executionDiagnostics({config={},state={},registry=[],inFlight=[]
       canary:canary?code(canary.status):'none',statuses,blockers,missingTools};
   });
   const tools=Object.fromEntries(Object.entries(capabilities).filter(([key,value])=>typeof value==='boolean'&&/^(has|llm)/.test(key)));
-  const revenueSources=buildRevenueSourceDiagnostics(state,markets);
+  const revenueSources=buildRevenueSourceDiagnostics(state,markets,registry);
   return {enabled:Boolean(config.enabled),killSwitch:Boolean(config.killSwitch),autoClaimJobs:Boolean(config.autoClaimJobs),autoCompetitiveSubmissions:Boolean(config.autoCompetitiveSubmissions),
     zeroSpendMode:Boolean(config.zeroSpendMode),earnedFundsOnly:Boolean(config.earnedFundsOnly),allowExternalSpending:Boolean(config.allowExternalSpending),
     seedSpendBudgetUsd:Number(config.seedSpendBudgetUsd||0),availableSpendUsd:Number(state.earnedSpendBudgetUsd||0),
