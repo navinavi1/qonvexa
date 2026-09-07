@@ -1,7 +1,10 @@
 import crypto from 'node:crypto';
 
-const DEFAULT_MAX_TASK_AGENTS = 50;
-const DEFAULT_MAX_PER_JOB = 8;
+// Survival Swarm has no business-level worker cap. These are only process-safety defaults:
+// the runtime creates workers only when accepted work needs them and retires them afterwards.
+// Operators can raise/lower them without changing earning logic.
+const DEFAULT_MAX_TASK_AGENTS = 100000;
+const DEFAULT_MAX_PER_JOB = 64;
 const DEFAULT_TTL_MS = 30 * 60_000;
 
 /** Job-scoped elastic workforce. Durable ownership remains in the job registry; helpers
@@ -12,11 +15,14 @@ export class TaskAgentRuntime {
   spawnForPlan({jobId,opportunity,plan,maxAgents=null}={}){
     this.cleanup();const key=String(jobId||'');if(!key)throw new Error('task_agent_job_id_required');
     const existing=this.forJob(key).filter(x=>x.status==='active');if(existing.length)return existing;
-    const configuredGlobal=Math.max(1,Number(maxAgents??this.env.AUTONOMOS_MAX_TASK_AGENTS??DEFAULT_MAX_TASK_AGENTS));
+    // maxAgents is a scheduler hint, not a business cap. A larger deployment-level workforce
+    // setting always wins so the swarm can grow with available work.
+    const deploymentCapacity=Math.max(1,Number(this.env.AUTONOMOS_MAX_TASK_AGENTS||DEFAULT_MAX_TASK_AGENTS));
+    const configuredGlobal=Math.max(deploymentCapacity,Number(maxAgents||0));
     const perJob=Math.max(1,Math.min(configuredGlobal,Number(this.env.AUTONOMOS_MAX_TASK_AGENTS_PER_JOB||DEFAULT_MAX_PER_JOB)));
     const activeGlobal=[...this.agents.values()].filter(x=>x.status==='active').length;
     const slots=Math.max(0,Math.min(perJob,configuredGlobal-activeGlobal));
-    if(!slots){this.onEvent('task_team_deferred',{jobId:key,reason:'workforce_capacity_reached',activeGlobal,configuredGlobal});return[];}
+    if(!slots){this.onEvent('task_team_deferred',{jobId:key,reason:'process_workforce_capacity_reached',activeGlobal,configuredGlobal});return[];}
     const requested=collapseWorkerSteps(plan?.steps||[],opportunity).slice(0,slots);
     const created=requested.map((group,index)=>{
       const now=Date.now();const agent={id:`task_${sanitize(key).slice(-16)}_${sanitize(group.role).slice(0,18)}_${crypto.randomBytes(3).toString('hex')}`,jobId:key,role:group.role,specialization:group.specialization,stepIds:group.stepIds,status:'active',phase:'ready',createdAt:new Date(now).toISOString(),lastActiveAt:new Date(now).toISOString(),expiresAt:new Date(now+Math.max(60_000,Number(this.env.AUTONOMOS_TASK_AGENT_TTL_MS||DEFAULT_TTL_MS))).toISOString(),tasksCompleted:0,errors:0,costUsd:0,revenueUsd:0,ordinal:index+1};
@@ -25,8 +31,8 @@ export class TaskAgentRuntime {
     this.jobAgents.set(key,created.map(x=>x.id));this.onEvent('task_team_created',{jobId:key,count:created.length,roles:created.map(x=>x.role)});return created;
   }
 
-  // Bounded emergency helper expansion for an already accepted job. It never creates a
-  // new marketplace identity or claim; it only adds missing specialist roles to the same job.
+  // Add specialists to an accepted job whenever the current team is missing a capability.
+  // No new marketplace identity/claim is created; helpers belong to the same obligation.
   spawnHelpers({jobId,roles=[],opportunity={},maxAgents=null}={}){
     this.cleanup();const key=String(jobId||'');if(!key)return[];
     const active=this.forJob(key).filter(x=>x.status==='active');
@@ -34,8 +40,6 @@ export class TaskAgentRuntime {
     const extra=(Array.isArray(roles)?roles:[]).map(normalizeRole).filter(r=>r&&!existingRoles.has(r));
     if(!extra.length)return[];
     const steps=extra.map((role,i)=>({id:`helper-${i+1}`,role,action:'help the accepted job reach verified completion using role-scoped tools'}));
-    // Temporarily remove the idempotency mapping so spawnForPlan can extend the same job,
-    // then merge old and new worker ids back together.
     const oldIds=this.jobAgents.get(key)||[];this.jobAgents.delete(key);
     const created=this.spawnForPlan({jobId:key,opportunity,plan:{steps},maxAgents});
     this.jobAgents.set(key,[...new Set([...oldIds,...created.map(x=>x.id)])]);
@@ -48,10 +52,10 @@ export class TaskAgentRuntime {
   recordJobUsage(jobId,{costUsd=0,revenueUsd=0}={}){const rows=this.mutableForJob(jobId).filter(x=>x.status==='active');if(!rows.length)return;const cost=Number(costUsd||0)/rows.length,revenue=Number(revenueUsd||0)/rows.length;for(const agent of rows){agent.costUsd+=cost;agent.revenueUsd+=revenue;}}
   retireJob(jobId,{ok=true,error=''}={}){const key=String(jobId||''),now=new Date().toISOString(),retired=[];for(const agent of this.mutableForJob(key)){if(agent.status!=='active')continue;agent.status=ok?'completed':'failed';agent.phase='closed';agent.lastActiveAt=now;agent.closedAt=now;agent.tasksCompleted+=ok?1:0;agent.errors+=ok?0:1;if(error)agent.lastError=String(error).slice(0,300);retired.push({...agent});this.onEvent('task_agent_retired',{jobId:key,taskAgentId:agent.id,role:agent.role,status:agent.status});}this.jobAgents.delete(key);this.prune();return retired;}
   retireOrphans(activeJobIds=[]){const active=new Set((activeJobIds||[]).map(String));let retired=0;for(const jobId of [...this.jobAgents.keys()])if(!active.has(jobId))retired+=this.retireJob(jobId,{ok:false,error:'orphaned_worker_lease'}).length;return retired;}
-  snapshot(){this.cleanup();return[...this.agents.values()].sort((a,b)=>Date.parse(b.lastActiveAt||0)-Date.parse(a.lastActiveAt||0)).slice(0,240).map(x=>({...x}));}
-  summary(){const rows=this.snapshot();return{active:rows.filter(x=>x.status==='active').length,completed:rows.filter(x=>x.status==='completed').length,failed:rows.filter(x=>x.status==='failed').length,expired:rows.filter(x=>x.status==='expired').length,activeJobs:new Set(rows.filter(x=>x.status==='active').map(x=>x.jobId)).size,capacity:Number(this.env.AUTONOMOS_MAX_TASK_AGENTS||DEFAULT_MAX_TASK_AGENTS),perJobCapacity:Number(this.env.AUTONOMOS_MAX_TASK_AGENTS_PER_JOB||DEFAULT_MAX_PER_JOB),byRole:Object.fromEntries(Object.entries(rows.filter(x=>x.status==='active').reduce((acc,x)=>(acc[x.role]=(acc[x.role]||0)+1,acc),{})).sort((a,b)=>b[1]-a[1]))};}
+  snapshot(){this.cleanup();return[...this.agents.values()].sort((a,b)=>Date.parse(b.lastActiveAt||0)-Date.parse(a.lastActiveAt||0)).slice(0,2000).map(x=>({...x}));}
+  summary(){const rows=this.snapshot();return{active:rows.filter(x=>x.status==='active').length,completed:rows.filter(x=>x.status==='completed').length,failed:rows.filter(x=>x.status==='failed').length,expired:rows.filter(x=>x.status==='expired').length,activeJobs:new Set(rows.filter(x=>x.status==='active').map(x=>x.jobId)).size,capacity:Number(this.env.AUTONOMOS_MAX_TASK_AGENTS||DEFAULT_MAX_TASK_AGENTS),perJobCapacity:Number(this.env.AUTONOMOS_MAX_TASK_AGENTS_PER_JOB||DEFAULT_MAX_PER_JOB),elastic:true,businessCap:false,byRole:Object.fromEntries(Object.entries(rows.filter(x=>x.status==='active').reduce((acc,x)=>(acc[x.role]=(acc[x.role]||0)+1,acc),{})).sort((a,b)=>b[1]-a[1]))};}
   cleanup(){const now=Date.now();for(const agent of this.agents.values())if(agent.status==='active'&&Date.parse(agent.expiresAt||0)<=now){agent.status='expired';agent.phase='closed';agent.closedAt=new Date(now).toISOString();this.onEvent('task_agent_expired',{jobId:agent.jobId,taskAgentId:agent.id,role:agent.role});}for(const[jobId,ids]of this.jobAgents)if(!ids.some(id=>this.agents.get(id)?.status==='active'))this.jobAgents.delete(jobId);this.prune();}
-  prune(){const rows=[...this.agents.values()],active=rows.filter(r=>r.status==='active'),inactive=rows.filter(r=>r.status!=='active').sort((a,b)=>Date.parse(b.lastActiveAt||0)-Date.parse(a.lastActiveAt||0)),keepInactive=Math.max(0,240-active.length);for(const row of inactive.slice(keepInactive))this.agents.delete(row.id);}
+  prune(){const rows=[...this.agents.values()],active=rows.filter(r=>r.status==='active'),inactive=rows.filter(r=>r.status!=='active').sort((a,b)=>Date.parse(b.lastActiveAt||0)-Date.parse(a.lastActiveAt||0)),keepInactive=Math.max(0,2000-active.length);for(const row of inactive.slice(keepInactive))this.agents.delete(row.id);}
   mutableForJob(jobId){const ids=this.jobAgents.get(String(jobId||''))||[];return ids.map(id=>this.agents.get(id)).filter(Boolean);}
 }
 
