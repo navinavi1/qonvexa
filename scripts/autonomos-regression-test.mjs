@@ -29,8 +29,12 @@ assert.equal(registry.summary().graveyard,1);
 const hold={...op,externalId:'hold-1'};
 registry.observe(hold);
 registry.markSystemBlocked(hold,{reasonCode:'execution_or_capability_failure',capabilityVersion:'cap-v1'});
-assert.equal(registry.releaseSystemBlocked(hold,{capabilityVersion:'cap-v1'}).released,false,'same capability version must not release a held job');
-assert.equal(registry.releaseSystemBlocked(hold,{capabilityVersion:'cap-v2'}).released,true,'new capability version may release a held job');
+assert.equal(registry.releaseSystemBlocked(hold,{capabilityVersion:'cap-v1'}).released,false,'same capability version must not release an execution failure');
+assert.equal(registry.releaseSystemBlocked(hold,{capabilityVersion:'cap-v2'}).released,false,'capability-version changes must not revive execution/QA failures');
+const preflightHold={...op,externalId:'preflight-hold-1'};
+registry.observe(preflightHold);
+registry.markSystemBlocked(preflightHold,{reasonCode:'preflight_or_internal_capability_hold',capabilityVersion:'cap-v1'});
+assert.equal(registry.releaseSystemBlocked(preflightHold,{capabilityVersion:'cap-v1'}).released,true,'fresh live preflight may release only an explicitly reversible pre-claim hold');
 
 const contract=buildAcceptanceContract({...op,capability:{skill:'code-analysis',requiresArtifact:true}});
 const research=buildPhaseAcceptanceContract(contract,'research-worker');
@@ -99,7 +103,6 @@ const solanaDapp=classifyOpportunity({title:'Build a Solana dApp',description:'C
 assert.equal(solanaDapp.executable,false,'Solana dApp work requiring on-chain deployment must not be accepted without signing capability');
 assert.ok(solanaDapp.missingTools.includes('signed_onchain_transaction'));
 
-
 const genericDigital=classifyOpportunity({title:'Evaluate supplied materials',description:'Produce prioritized conclusions and a concise decision memo from the supplied materials.'},{llmEnabled:true,hasWebSearchTool:true});
 assert.equal(genericDigital.executable,true,'safe digital work must not be rejected merely because its title misses a hand-written keyword rule');
 assert.equal(genericDigital.mode,'llm_general_digital');
@@ -142,7 +145,6 @@ try{
   assert.equal(wpSync.transactions.find(x=>x.source==='workprotocol')?.amountUsd,2.5,'released WorkProtocol USDC must reconcile into the settlement feed');
 } finally { global.fetch=originalFetch; }
 
-
 // Marketplace lifecycle truth: discovery-only connectors must never enter autonomous claim.
 {
   const runtimeSource=fs.readFileSync(path.join(process.cwd(),'src/autonomos/runtime.js'),'utf8');
@@ -161,7 +163,6 @@ try{
   assert.match(adminSource,/Why AutonomOS is \/ is not earning now/,'Mission Control must display the primary earning diagnosis');
   assert.match(adminSource,/FULL AUTO.*AUTO WORK · CASHOUT ACTION.*DISCOVERY ONLY/s,'connector UI must show lifecycle truth instead of a generic Ready badge');
 }
-
 
 const passportBuy=classifyOpportunity({title:'Buy MANIFEST via Passport Connect',description:'Use Passport Connect to buy MANIFEST and return proof.'},{llmEnabled:true,hasWebSearchTool:true});
 assert.equal(passportBuy.executable,false,'paid jobs that require buying/swapping through Passport must be rejected before claim');
