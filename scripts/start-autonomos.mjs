@@ -1,14 +1,17 @@
 import 'dotenv/config';
 import { InternetHunter } from '../src/autonomos/internet-hunter.js';
 import { GlobalWorkHunter } from '../src/autonomos/global-work-hunter.js';
+import { TaskForceVerifier } from '../src/autonomos/taskforce-verifier.js';
 
 const hunter=new InternetHunter({env:process.env,storageDir:process.env.STORAGE_DIR,logger:console});
 const globalHunter=new GlobalWorkHunter({env:process.env,storageDir:process.env.STORAGE_DIR,logger:console});
+const taskForceVerifier=new TaskForceVerifier({env:process.env,storageDir:process.env.STORAGE_DIR,logger:console});
 
 hunter.start();
 globalHunter.start();
+taskForceVerifier.start();
 
-const stop=()=>{hunter.stop();globalHunter.stop();};
+const stop=()=>{hunter.stop();globalHunter.stop();taskForceVerifier.stop();};
 process.on('SIGTERM',stop);
 process.on('SIGINT',stop);
 
