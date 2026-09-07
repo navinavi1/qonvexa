@@ -140,7 +140,7 @@ export class JobRegistry {
     const identity=jobIdentity(opportunity);const row=this.records[identity]||this.observe(opportunity);const now=new Date().toISOString();
     if(this.tombstones[identity]||row.terminal||row.everOwned)return {...row};
     this.records[identity]={...row,status:'policy_hold',terminal:false,failureOwner:String(owner||'policy'),reasonCode:String(reasonCode).slice(0,120),reason:String(reason).slice(0,500),retryAfter:String(retryAfter||''),lastStateAt:now};
-    this.persist();return {...row};
+    this.persist();return {...this.records[identity]};
   }
 
   repairV76LegacyPollution(){
