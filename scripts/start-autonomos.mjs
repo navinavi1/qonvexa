@@ -2,6 +2,7 @@ import 'dotenv/config';
 import { InternetHunter } from '../src/autonomos/internet-hunter.js';
 import { GlobalWorkHunter } from '../src/autonomos/global-work-hunter.js';
 import { GlobalLeadActioner } from '../src/autonomos/global-lead-actioner.js';
+import { migrateGlobalActionerState } from '../src/autonomos/global-actioner-migrations.js';
 import { TaskForceVerifier } from '../src/autonomos/taskforce-verifier.js';
 import { TaskForceWorker } from '../src/autonomos/taskforce-worker.js';
 import { applySourceQuarantine } from '../src/autonomos/source-quarantine.js';
@@ -14,6 +15,7 @@ if (/^(1|true|yes|on)$/i.test(String(process.env.AUTONOMOS_PRODUCTION_SWARM_MODE
 }
 
 applySourceQuarantine({env:process.env,storageDir:process.env.STORAGE_DIR,logger:console});
+migrateGlobalActionerState({env:process.env,storageDir:process.env.STORAGE_DIR,logger:console});
 
 const hunter=new InternetHunter({env:process.env,storageDir:process.env.STORAGE_DIR,logger:console});
 const globalHunter=new GlobalWorkHunter({env:process.env,storageDir:process.env.STORAGE_DIR,logger:console});
