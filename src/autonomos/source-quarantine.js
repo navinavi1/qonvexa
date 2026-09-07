@@ -8,12 +8,24 @@ export function applySourceQuarantine({env=process.env,storageDir='',logger=cons
   const disabled=new Set(String(env.AUTONOMOS_DISABLED_MARKETS||'').split(',').map(x=>x.trim().toLowerCase()).filter(Boolean));
   const hardIgnoreBelow=Math.max(0,Number(env.AUTONOMOS_HARD_IGNORE_BELOW_USD||0.10));
   const now=new Date().toISOString();
-  const summary={disabled:[...disabled],archived:0,inFlightRemoved:0,t2000Disconnected:false};
+  const summary={disabled:[...disabled],archived:0,inFlightRemoved:0,t2000Disconnected:false,t2000CredentialRemoved:false};
 
   if(disabled.has('t2000')){
     try{
+      // Hard-disable both the modern OAuth state and the legacy persisted credential.
+      // Older releases can otherwise resurrect credentials.private.json.t2000 after an
+      // OAuth disconnect, which makes discovery silently come back after restart.
+      const credentials=store.readJson('credentials.private.json',{});
+      if(credentials?.t2000){
+        const next={...credentials};delete next.t2000;
+        store.writeSecretJson('credentials.private.json',next);
+        summary.t2000CredentialRemoved=true;
+      }
       const oauth=createT2000OAuth({store,siteUrl:env.SITE_URL||env.RENDER_EXTERNAL_URL||'https://qonvexa.co',env,logger});
       oauth.disconnect();
+      // Remove any process-level aliases if a legacy deployment supplied one.
+      delete env.T2000_ACCESS_TOKEN;
+      delete env.T2000_TOKEN;
       summary.t2000Disconnected=true;
     }catch(error){logger.warn?.('[SourceQuarantine] t2000 disconnect failed: '+String(error?.message||error).slice(0,180));}
   }
