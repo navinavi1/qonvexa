@@ -30,10 +30,9 @@ export class SearchFirstLeadActioner extends BrowserlessLeadActioner{
       const disposition=this.inspectPage(evidenceText,lead);
       if(disposition){this.archive(id,disposition.status,disposition.reason);return;}
 
-      const capabilityText=`${String(lead.title||'')}\n${String(lead.snippet||'')}`.slice(0,6000);
-      const capability=classifyOpportunity(this.toOpportunity(lead,capabilityText),{...this.capabilityContext(),hasBrowserTool:false});
+      const capability=classifyLeadCapability(lead,this.capabilityContext());
       if(!capability.executable){
-        this.setAction(id,{status:'needs_capability',missingTools:capability.missingTools||[],skill:capability.skill,nextRetryAt:new Date(Date.now()+6*60*60_000).toISOString()});
+        this.setAction(id,{status:'needs_capability',missingTools:capability.missingTools||[],skill:capability.skill,nextRetryAt:new Date(Date.now()+60*60_000).toISOString()});
         this.event('searchfirst_needs_capability',{id,host,skill:capability.skill,missingTools:capability.missingTools||[]});return;
       }
       const payout=this.resolvePayout(lead,evidenceText);
@@ -83,6 +82,21 @@ export class SearchFirstLeadActioner extends BrowserlessLeadActioner{
     }finally{this.persist();}
   }
 }
+
+// Search snippets often contain marketplace navigation such as "Writing · Graphic Design ·
+// Translation". That chrome used to make an ordinary translation/research lead require the
+// unavailable design_media_tool. First classify the rich snippet; if DESIGN is the only
+// blocker and the actual lead title/category is not a media job, re-check the true job scope.
+function classifyLeadCapability(lead,context){
+  const rich=`${String(lead?.title||'')}\n${String(lead?.snippet||'')}`.slice(0,6000);
+  const first=classifyOpportunity(toCapabilityOpportunity(lead,rich),{...context,hasBrowserTool:false});
+  const missing=Array.isArray(first?.missingTools)?first.missingTools.map(String):[];
+  if(first.executable||missing.length!==1||missing[0]!=='design_media_tool'||looksLikeRealMediaLead(lead))return first;
+  const narrow=`${String(lead?.category||'')}\n${String(lead?.title||'')}`.slice(0,1800);
+  return classifyOpportunity(toCapabilityOpportunity(lead,narrow),{...context,hasBrowserTool:false});
+}
+function toCapabilityOpportunity(lead,description){return{source:'global-web',externalId:String(lead?.id||''),title:String(lead?.title||'Paid digital work'),description,category:String(lead?.category||'general-digital'),budgetUsd:Number(lead?.amountUsd||0),currency:String(lead?.payoutCurrency||'USD'),network:lead?.cryptoPayout?'crypto':'fiat',escrowed:Boolean(lead?.payoutVerified),claimMode:'competitive_submission',status:'open',url:String(lead?.url||''),skills:[]};}
+function looksLikeRealMediaLead(lead){const scope=`${String(lead?.category||'')} ${String(lead?.title||'')}`.toLowerCase();return /\b(graphic[- ]design|logo|illustration|figma|canva|video edit|motion graphics|3d render|podcast cover|cover art|ui\/?ux|website design)\b/i.test(scope);}
 
 async function searchForOriginalApplication(lead,host,env){
   const title=cleanTitle(lead?.title);
