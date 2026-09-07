@@ -17,6 +17,22 @@ export function pruneTerminalInFlightJobs(value){
   return value;
 }
 
+export function legacyT2000OAuthFallback(rootDir){
+  try{
+    const credentials=JSON.parse(fs.readFileSync(path.join(rootDir,'credentials.private.json'),'utf8'));
+    const accessToken=String(credentials?.t2000?.accessToken||'').trim();
+    if(!accessToken)return null;
+    // Older AutonomOS releases persisted the already-authorized Passport Connect token in
+    // credentials.private.json. New OAuth code moved tokens to t2000-oauth.private.json.
+    // On the first deploy after that migration the new file may not exist yet; returning a
+    // synthetic in-memory OAuth state preserves the user's EXISTING authorization instead
+    // of silently disconnecting T2000. We never use this fallback when an OAuth state file
+    // exists (including an explicit disconnect or a decryption failure), so it cannot
+    // override a newer/revoked session.
+    return {token:{accessToken},oauth:{legacyCredentialFallback:true},lastError:'legacy_t2000_token_fallback'};
+  }catch{return null;}
+}
+
 export class AutonomOSStore {
   constructor(rootDir) {
     this.rootDir = rootDir;
@@ -27,7 +43,12 @@ export class AutonomOSStore {
     try {
       const value=JSON.parse(fs.readFileSync(this.file(name), 'utf8'));
       return name==='in-flight-jobs.json'?pruneTerminalInFlightJobs(value):value;
-    } catch { return structuredCloneSafe(fallback); }
+    } catch(error) {
+      if(error?.code==='ENOENT'&&name==='t2000-oauth.private.json'){
+        const migrated=legacyT2000OAuthFallback(this.rootDir);if(migrated)return migrated;
+      }
+      return structuredCloneSafe(fallback);
+    }
   }
 
   readJsonStrict(name, fallback = {}) {
@@ -35,7 +56,12 @@ export class AutonomOSStore {
       const value=JSON.parse(fs.readFileSync(this.file(name), 'utf8'));
       return name==='in-flight-jobs.json'?pruneTerminalInFlightJobs(value):value;
     }
-    catch(error) { if(error?.code==='ENOENT')return structuredCloneSafe(fallback);throw error; }
+    catch(error) {
+      if(error?.code==='ENOENT'&&name==='t2000-oauth.private.json'){
+        const migrated=legacyT2000OAuthFallback(this.rootDir);if(migrated)return migrated;
+      }
+      if(error?.code==='ENOENT')return structuredCloneSafe(fallback);throw error;
+    }
   }
 
   writeJson(name, value) {
