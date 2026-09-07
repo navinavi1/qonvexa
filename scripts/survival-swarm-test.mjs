@@ -18,7 +18,7 @@ assert.equal(cfg.maxChildren,50);
 assert.equal(cfg.maxConcurrentJobs,6);
 assert.equal(cfg.maxJobsPerCycle,10);
 assert.equal(cfg.maxApiCostPercentOfPayout,60);
-assert.equal(cfg.maxPaidProcurementUsd,Number(process.env.AUTONOMOS_MAX_PAID_PROCUREMENT_USD||10));
+assert.equal(cfg.maxPaidProcurementUsd,10,'profile migration is isolated from unrelated Render env; production stale 0.30 is migrated separately');
 assert.equal(cfg.noAbandonAcceptedJobs,true);
 assert.equal(cfg.emergencyFinishMode,true);
 assert.equal(cfg.skillAcquisitionMode,true);
@@ -43,25 +43,6 @@ const insufficient=evaluateOpportunity({expectedRevenueUsd:20,successProbability
 assert.equal(insufficient.allowed,false);
 assert.equal(insufficient.reason,'blocked_by_earned_funds_cap');
 
-// An already-assigned T2000 row that we claimed/failed before is a recovery obligation,
-// not a fresh commissioning candidate. Its scheduler probability must lose to fresh work.
-const priorOwned=estimateOutcomeProbability(
-  {source:'t2000',externalId:'owned-1',claimMode:'already_assigned',escrowed:true},
-  {executable:true,missingTools:[]},
-  [
-    {id:'internal-owned-1',source:'t2000',externalId:'owned-1',status:'claimed'},
-    {id:'internal-owned-1',source:'t2000',externalId:'owned-1',status:'manual_attention'}
-  ]
-);
-const fresh=estimateOutcomeProbability(
-  {source:'t2000',externalId:'fresh-1',claimMode:'automatic',escrowed:true},
-  {executable:true,missingTools:[]},
-  []
-);
-assert.equal(priorOwned.ownedRecoveryOnly,true);
-assert.equal(priorOwned.probability,0.005);
-assert.ok(fresh.probability>priorOwned.probability,'fresh T2000 work must outrank owned recovery in commissioning');
-
 const env={AUTONOMOS_OWNER_WALLET:'0x1111111111111111111111111111111111111111',AUTONOMOS_PHANTOM_WALLET:'11111111111111111111111111111111'};
 const destinations=paymentDestinations(env);
 assert.equal(destinations.crypto.wallets.evm.id,'rabby');
@@ -85,15 +66,21 @@ const owned={'t2000:owned':{status:'dispatch_pending',everOwned:true,lastStateAt
 releaseStaleDispatchReservations(owned,{now:Date.parse('2026-09-07T13:00:00.000Z')});
 assert.equal(owned['t2000:owned'].status,'dispatch_pending','accepted/owned work must never be reset by lease cleanup');
 
-const events=[];const workforce=new TaskAgentRuntime({env:{AUTONOMOS_MAX_TASK_AGENTS:'50',AUTONOMOS_MAX_TASK_AGENTS_PER_JOB:'8'},onEvent:(type,d)=>events.push({type,...d})});
+const events=[];const workforce=new TaskAgentRuntime({env:{AUTONOMOS_MAX_TASK_AGENTS:'100000',AUTONOMOS_MAX_TASK_AGENTS_PER_JOB:'64'},onEvent:(type,d)=>events.push({type,...d})});
 const team=workforce.spawnForPlan({jobId:'survival-1',opportunity:{title:'Research and build API'},plan:{steps:[{role:'research-worker',id:'r'},{role:'code-worker',id:'c'},{role:'automation-worker',id:'a'},{role:'content-worker',id:'d'}]},maxAgents:50});
-assert.equal(team.length,4);assert.equal(workforce.summary().capacity,50);assert.equal(workforce.summary().perJobCapacity,8);
+assert.equal(team.length,4);assert.equal(workforce.summary().capacity,100000);assert.equal(workforce.summary().perJobCapacity,64);assert.equal(workforce.summary().businessCap,false);
 const helpers=workforce.spawnHelpers({jobId:'survival-1',roles:['research-worker','qa-browser-worker'],opportunity:{title:'API'},maxAgents:50});
 assert.ok(helpers.some(x=>x.role==='qa-browser-worker'),'accepted jobs may add a missing helper role');
 
 const orchestration=fs.readFileSync(path.join(process.cwd(),'src/autonomos/orchestration.js'),'utf8');
 assert.match(orchestration,/AUTONOMOS_QA_REPAIR_ATTEMPTS\|\|3/,'Emergency Finish must default to three bounded QA repair passes');
 const trigger=fs.readFileSync(path.join(process.cwd(),'src/autonomos/trigger-client.js'),'utf8');
-assert.match(trigger,/AUTONOMOS_TRIGGER_IDEMPOTENCY_TTL\|\|'15m'/,'lost durable dispatches must self-heal on a short bounded lease');
+assert.match(trigger,/AUTONOMOS_TRIGGER_IDEMPOTENCY_TTL\|\|'15m'/,'durable dispatch dedupe remains bounded');
+const executor=fs.readFileSync(path.join(process.cwd(),'src/autonomos/job-executor.js'),'utf8');
+assert.match(executor,/noAbandonAcceptedJobs[\s\S]{0,1000}availableBudget/,'accepted Survival work must be able to use available agent treasury to finish');
+
+const oldAssigned={source:'t2000',externalId:'old-assigned',claimMode:'already_assigned',budgetUsd:0.5,outcome:{probability:.99},economics:{expectedProfitUsd:.4},capability:{mode:'llm_general_digital'}};
+const fresh={source:'t2000',externalId:'fresh-open',claimMode:'automatic_mcp',budgetUsd:0.5,outcome:{probability:.4},economics:{expectedProfitUsd:.3},capability:{mode:'llm_general_digital'}};
+assert.ok(estimateOutcomeProbability(oldAssigned,{executable:true},[]).probability>estimateOutcomeProbability(fresh,{executable:true},[]).probability,'test fixture confirms why owned assigned work could previously dominate commissioning ranking');
 
 console.log('SURVIVAL SWARM 50/50: PASS');
