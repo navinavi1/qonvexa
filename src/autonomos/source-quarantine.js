@@ -8,7 +8,7 @@ export function applySourceQuarantine({env=process.env,storageDir='',logger=cons
   const disabled=new Set(String(env.AUTONOMOS_DISABLED_MARKETS||'').split(',').map(x=>x.trim().toLowerCase()).filter(Boolean));
   const hardIgnoreBelow=Math.max(0,Number(env.AUTONOMOS_HARD_IGNORE_BELOW_USD||0.10));
   const now=new Date().toISOString();
-  const summary={disabled:[...disabled],archived:0,inFlightRemoved:0,t2000Disconnected:false,t2000CredentialRemoved:false};
+  const summary={disabled:[...disabled],archived:0,inFlightRemoved:0,t2000Disconnected:false,t2000CredentialRemoved:false,registryWriteDeferred:false};
 
   if(disabled.has('t2000')){
     try{
@@ -38,7 +38,10 @@ export function applySourceQuarantine({env=process.env,storageDir='',logger=cons
       delete inflight[id];inflightChanged=true;summary.inFlightRemoved++;
     }
   }
-  if(inflightChanged)store.writeJson('in-flight-jobs.json',inflight);
+  if(inflightChanged){
+    try{store.writeJson('in-flight-jobs.json',inflight);}
+    catch(error){logger.warn?.('[SourceQuarantine] in-flight cleanup deferred: '+String(error?.message||error).slice(0,180));}
+  }
 
   const registry=store.readJson('job-registry.json',{});
   let registryChanged=false;
@@ -51,12 +54,16 @@ export function applySourceQuarantine({env=process.env,storageDir='',logger=cons
     const worthless=!owned&&payout>0&&payout<hardIgnoreBelow;
     if(!disabledSource&&!worthless)continue;
     if(owned&&!disabledSource)continue;
+    const desiredReason=disabledSource?'source_disabled_by_owner':'hard_ignore_below_floor';
+    // Rolling deploys share the persistent disk. Do not rewrite hundreds of rows that are
+    // already quarantined; that only creates lock contention with the outgoing instance.
+    if(status==='archived'&&row?.terminal===true&&String(row?.reasonCode||'')===desiredReason)continue;
     registry[identity]={
       ...row,
       status:'archived',
       terminal:true,
       failureOwner:disabledSource?'owner_policy':'economics',
-      reasonCode:disabledSource?'source_disabled_by_owner':'hard_ignore_below_floor',
+      reasonCode:desiredReason,
       reason:disabledSource?`Source ${source} disabled by owner; hidden from fresh agent work.`:`Payout $${payout.toFixed(4)} is below hard-ignore floor $${hardIgnoreBelow.toFixed(2)}.`,
       retryAfter:'',
       closedAt:row?.closedAt||now,
@@ -64,7 +71,10 @@ export function applySourceQuarantine({env=process.env,storageDir='',logger=cons
     };
     registryChanged=true;summary.archived++;
   }
-  if(registryChanged)store.writeJson('job-registry.json',registry);
+  if(registryChanged){
+    try{store.writeJson('job-registry.json',registry);}
+    catch(error){summary.registryWriteDeferred=true;logger.warn?.('[SourceQuarantine] registry cleanup deferred: '+String(error?.message||error).slice(0,180));}
+  }
 
   try{logger.info?.('[SourceQuarantine] '+JSON.stringify(summary));}catch{}
   return summary;
