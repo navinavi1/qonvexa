@@ -4,6 +4,14 @@ const TERMINAL_STATUSES=new Set(['graveyard','delivered','paid','settled','compl
 const OWNED_STATUSES=new Set(['dispatch_pending','bid_submitted','claimed','executing','qa','delivered','paid','settled','completed']);
 const SYSTEM_BLOCKED_STATUSES=new Set(['system_blocked','capability_hold','manual_attention']);
 const POLICY_HOLD_STATUSES=new Set(['policy_hold','not_eligible']);
+// These blocks are created before a marketplace side effect is allowed. The only runtime
+// caller of releaseSystemBlocked() invokes it after a fresh live capability preflight has
+// already returned executable=true. Therefore these two reasons may safely be released
+// even when the static capability catalog version did not change (for example, credentials
+// were reconnected or a transient tool/auth condition recovered). Execution/QA/claimed
+// failures are deliberately excluded so this can never resurrect owned work or duplicate
+// an external effect.
+const LIVE_REVALIDATABLE_SYSTEM_REASONS=new Set(['preflight_or_internal_capability_hold','connector_credentials_or_auth_failure']);
 
 export class JobRegistry {
   constructor({store,maxRecords=12000}={}){
@@ -133,7 +141,6 @@ export class JobRegistry {
     this.persist();return {...this.records[identity]};
   }
 
-
   markPolicyHold(opportunity,{reasonCode='policy_hold',reason='',owner='policy',retryAfter=''}={}){
     const identity=jobIdentity(opportunity);const row=this.records[identity]||this.observe(opportunity);const now=new Date().toISOString();
     if(this.tombstones[identity]||row.terminal)return {...row};
@@ -143,18 +150,12 @@ export class JobRegistry {
 
   repairV76LegacyPollution(){
     let removedSignals=0,rescuedDealwork=0;const now=new Date().toISOString();
-    // x402 Bazaar rows are buyer-side machine API discovery signals, not earning jobs.
-    // Older builds registered them as jobs and inflated System Blocked/Graveyard. Remove
-    // only those operational records/tombstones; x402 seller revenue remains in ledger.
     for(const identity of Object.keys(this.records)){
       if(identity.startsWith('x402-bazaar:')){delete this.records[identity];removedSignals++;}
     }
     for(const identity of Object.keys(this.tombstones)){
       if(identity.startsWith('x402-bazaar:')){delete this.tombstones[identity];removedSignals++;}
     }
-    // Dealwork buyer funding and malformed open-mode budget are reversible marketplace
-    // conditions. Old builds tombstoned them permanently after claim. Rescue them into a
-    // timed market hold so they can be revalidated later without hammering the API.
     for(const [identity,tomb] of Object.entries({...this.tombstones})){
       if(!identity.startsWith('dealwork:'))continue;
       const text=`${tomb?.reasonCode||''} ${tomb?.reason||''}`;
@@ -215,9 +216,14 @@ export class JobRegistry {
   releaseSystemBlocked(opportunity,{capabilityVersion=''}={}){
     const identity=jobIdentity(opportunity);const row=this.records[identity];
     if(!row||!SYSTEM_BLOCKED_STATUSES.has(String(row.status||'')))return {ok:true,released:false};
+    if(row.terminal||OWNED_STATUSES.has(String(row.status||'')))return {ok:true,released:false};
     const nextVersion=String(capabilityVersion||'');
-    if(!nextVersion||nextVersion===String(row.capabilityVersion||''))return {ok:true,released:false};
-    this.records[identity]={...row,status:'new',failureOwner:'',reasonCode:'capability_version_changed',reason:'Execution capability changed; job released for a fresh preflight.',attempts:0,retryAfter:'',capabilityVersion:nextVersion,lastStateAt:new Date().toISOString()};
+    const versionChanged=Boolean(nextVersion&&nextVersion!==String(row.capabilityVersion||''));
+    const liveRevalidated=row.failureOwner==='our_system'&&LIVE_REVALIDATABLE_SYSTEM_REASONS.has(String(row.reasonCode||''));
+    if(!versionChanged&&!liveRevalidated)return {ok:true,released:false};
+    const reasonCode=versionChanged?'capability_version_changed':'live_preflight_revalidated';
+    const reason=versionChanged?'Execution capability changed; job released for a fresh preflight.':'Fresh live preflight is executable; stale preflight/auth block released.';
+    this.records[identity]={...row,status:'new',failureOwner:'',reasonCode,reason,attempts:0,retryAfter:'',capabilityVersion:nextVersion||String(row.capabilityVersion||''),lastStateAt:new Date().toISOString()};
     this.persist();return {ok:true,released:true};
   }
 
@@ -306,7 +312,6 @@ export function classifyFailure(errorLike,{phase='execution'}={}){
   const text=String(errorLike?.message||errorLike||'').toLowerCase();
   const result=(owner,reasonCode,permanent=false)=>({owner,reasonCode,permanent});
   if(/superteam_listing_not_agent_eligible|agents are not eligible for this listing/.test(text))return result('market','market_agent_not_eligible');
-  // Classify the operation, not generic English words such as "closed" or "not found".
   if(/execution_checkpoint_uncertain|submission_uncertain|ack_missing/.test(text))return result('our_system','external_effect_requires_reconciliation');
   if(/emergency_stop|job_cancelled|aborterror|aborted/.test(text))return result('our_system','execution_stopped');
   if(/api[_ -]?key[_ -]?missing|unauthorized|forbidden|http_401|http_403|(?:token|credential|session).{0,25}expired/.test(text))return result('our_system','connector_credentials_or_auth_failure');
