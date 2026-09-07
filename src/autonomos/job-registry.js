@@ -2,13 +2,13 @@ import crypto from 'node:crypto';
 
 const TERMINAL_STATUSES=new Set(['graveyard','delivered','paid','settled','completed','expired','cancelled','rejected']);
 const OWNED_STATUSES=new Set(['dispatch_pending','bid_submitted','claimed','executing','qa','delivered','paid','settled','completed']);
+const STICKY_OWNED_STATUSES=new Set(['bid_submitted','claimed','executing','qa','delivered','paid','settled','completed']);
 const SYSTEM_BLOCKED_STATUSES=new Set(['system_blocked','capability_hold','manual_attention']);
 const POLICY_HOLD_STATUSES=new Set(['policy_hold','not_eligible']);
-// These blocks are created before a marketplace side effect is allowed. The only runtime
-// caller of releaseSystemBlocked() invokes it after a fresh live capability preflight has
-// already returned executable=true. Therefore these two reasons may safely be released
-// when credentials/tools recover. Execution/QA/claimed failures are deliberately excluded
-// so a later deploy/capability-version bump can never resurrect owned work or double-claim.
+// These blocks are created before a marketplace side effect is allowed. A fresh live
+// preflight may release only these explicitly reversible reasons. Execution/QA/claimed
+// failures are deliberately excluded so a deploy/capability-version bump can never
+// resurrect already-owned work or cause a duplicate marketplace claim.
 const LIVE_REVALIDATABLE_SYSTEM_REASONS=new Set(['preflight_or_internal_capability_hold','connector_credentials_or_auth_failure']);
 
 export class JobRegistry {
@@ -106,7 +106,7 @@ export class JobRegistry {
     if(this.tombstones[identity] && status!=='graveyard')return {...row};
     if(['paid','settled','completed','delivered'].includes(row.status)&&!TERMINAL_STATUSES.has(status))return {...row};
     const nextStatus=String(status||row.status||'new');
-    row={...row,status:nextStatus,everOwned:Boolean(row.everOwned)||OWNED_STATUSES.has(nextStatus),lastStateAt:now,lastSeenAt:row.lastSeenAt||now,...safeDetail(detail)};
+    row={...row,status:nextStatus,everOwned:Boolean(row.everOwned)||STICKY_OWNED_STATUSES.has(nextStatus),lastStateAt:now,lastSeenAt:row.lastSeenAt||now,...safeDetail(detail)};
     row.terminal=TERMINAL_STATUSES.has(row.status);
     this.records[identity]=row;this.persist();return {...row};
   }
@@ -210,7 +210,7 @@ export class JobRegistry {
   markDispatchPending(opportunity,{provider='durable',runId='',leaseId='',retryAfter=''}={}){
     const identity=jobIdentity(opportunity);const row=this.records[identity]||this.observe(opportunity);const now=new Date().toISOString();
     if(this.tombstones[identity]||row.terminal||row.everOwned)return {...row};
-    this.records[identity]={...row,status:'dispatch_pending',everOwned:true,terminal:false,failureOwner:'our_system',reasonCode:'durable_dispatch_pending',reason:`Dispatched to ${String(provider||'durable')}; awaiting worker callback.`,dispatchProvider:String(provider||'durable'),dispatchRunId:String(runId||''),dispatchLeaseId:String(leaseId||''),retryAfter:String(retryAfter||new Date(Date.now()+6*60*60_000).toISOString()),lastStateAt:now};
+    this.records[identity]={...row,status:'dispatch_pending',terminal:false,failureOwner:'our_system',reasonCode:'durable_dispatch_pending',reason:`Dispatched to ${String(provider||'durable')}; awaiting worker callback.`,dispatchProvider:String(provider||'durable'),dispatchRunId:String(runId||''),dispatchLeaseId:String(leaseId||''),retryAfter:String(retryAfter||new Date(Date.now()+6*60*60_000).toISOString()),lastStateAt:now};
     this.persist();return {...this.records[identity]};
   }
 
@@ -219,9 +219,7 @@ export class JobRegistry {
     if(!row||row.status!=='dispatch_pending')return {ok:true,released:false};
     const expected=String(row.dispatchLeaseId||'');const supplied=String(leaseId||'');
     if(expected&&expected!==supplied)return {ok:true,released:false,stale:true,expectedLeaseId:expected};
-    // Keep ownership sticky. Callback can proceed inside the durable execution path, but
-    // the opportunity must never become claimable by the normal discovery loop again.
-    this.records[identity]={...row,status:'new',everOwned:true,failureOwner:'',reasonCode:'durable_worker_callback_received',reason:'Durable worker callback received; performing fresh pre-claim validation inside owned execution.',retryAfter:'',dispatchLeaseId:'',lastStateAt:new Date().toISOString()};
+    this.records[identity]={...row,status:'new',failureOwner:'',reasonCode:'durable_worker_callback_received',reason:'Durable worker callback received; performing fresh pre-claim validation.',retryAfter:'',dispatchLeaseId:'',lastStateAt:new Date().toISOString()};
     this.persist();return {ok:true,released:true};
   }
 
