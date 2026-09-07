@@ -1,3 +1,6 @@
+import fs from 'node:fs';
+import path from 'node:path';
+
 export async function probeRuntimeEmailChannel({env=process.env,logger=console}={}){
   const key=String(env.COMPOSIO_API_KEY||'').trim();
   if(!key){const result={ok:false,ready:false,reason:'composio_api_key_missing'};log(logger,result);return result;}
@@ -26,6 +29,10 @@ export async function probeRuntimeEmailChannel({env=process.env,logger=console}=
     const apiReady=apiProbe.ok&&apiProbe.status===200;
     const sendAuthorized=scopesReady&&apiReady;
     const reason=!scopesReady?'gmail_connected_missing_send_scope':!apiReady?`gmail_api_read_probe_${apiProbe.status||'failed'}`:'gmail_connected_send_authorized';
+    let reconnect={required:false,available:false,url:'',reason:''};
+    if(!sendAuthorized&&details.composioManaged&&apiProbe.reason==='insufficient_scope'){
+      reconnect=await ensureReconnectUrl(accountId,key,env);
+    }
     const result={
       ok:true,
       ready:sendAuthorized,
@@ -39,6 +46,10 @@ export async function probeRuntimeEmailChannel({env=process.env,logger=console}=
       gmailApiReadStatus:apiProbe.status||0,
       gmailApiReadReason:apiProbe.reason||'',
       recentSendFailure:recentFailure.reason||'',
+      reconnectRequired:reconnect.required,
+      reconnectAvailable:reconnect.available,
+      reconnectUrl:reconnect.url,
+      reconnectReason:reconnect.reason,
       reason
     };
     log(logger,result);return result;
@@ -105,6 +116,33 @@ async function getRecentGmailFailure(key){
     if(!latest)return{ok:true,reason:'none'};
     return{ok:true,reason:classifyExecutionMessage(latest?.message)};
   }catch(error){return{ok:false,reason:`gmail_log_query_${String(error?.name||'network').toLowerCase()}`};}
+}
+
+async function ensureReconnectUrl(accountId,key,env){
+  const root=path.join(String(env.STORAGE_DIR||'data'),'autonomos');
+  const file=path.join(root,'gmail-reconnect.private.json');
+  try{fs.mkdirSync(root,{recursive:true});}catch{}
+  try{
+    const cached=JSON.parse(fs.readFileSync(file,'utf8'));
+    const age=Date.now()-Date.parse(String(cached?.createdAt||0));
+    if(cached?.accountId===accountId&&/^https:\/\//i.test(String(cached?.url||''))&&age>=0&&age<8*60_000){
+      return{required:true,available:true,url:String(cached.url),reason:'cached_reauthorization_link'};
+    }
+  }catch{}
+  try{
+    const redirect=String(env.SITE_URL||env.RENDER_EXTERNAL_URL||'https://qonvexa.co').replace(/\/$/,'')+'/admin.html?gmail=reauthorized';
+    const response=await fetch(`https://backend.composio.dev/api/v3.1/connected_accounts/${encodeURIComponent(accountId)}/refresh`,{
+      method:'POST',headers:{'x-api-key':key,accept:'application/json','content-type':'application/json'},
+      body:JSON.stringify({redirect_url:redirect}),signal:AbortSignal.timeout(15_000)
+    });
+    const body=await response.json().catch(()=>({}));
+    if(!response.ok)return{required:true,available:false,url:'',reason:`reauthorization_http_${response.status}`};
+    const url=String(body?.redirect_url||body?.redirectUrl||'');
+    if(!/^https:\/\//i.test(url))return{required:true,available:false,url:'',reason:'reauthorization_url_missing'};
+    const row={accountId,url,createdAt:new Date().toISOString()};
+    const tmp=`${file}.${process.pid}.${Date.now()}.tmp`;fs.writeFileSync(tmp,JSON.stringify(row,null,2),{mode:0o600});fs.renameSync(tmp,file);try{fs.chmodSync(file,0o600);}catch{}
+    return{required:true,available:true,url,reason:'reauthorization_link_created'};
+  }catch(error){return{required:true,available:false,url:'',reason:`reauthorization_${String(error?.name||'network').toLowerCase()}`};}
 }
 
 function classifyExecutionMessage(value){
