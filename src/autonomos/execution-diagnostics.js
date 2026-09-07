@@ -33,7 +33,14 @@ function buildRevenueSourceDiagnostics(state={},marketRows=[]){
   for(const source of legacyIds){
     const row=get(source);const health=state.connectorHealth?.[source]||{};const lifecycle=state.marketplaceLifecycle?.[source]||{};
     row.discovered=Math.max(row.discovered,Number(health.count||health.openCount||health.signals||0));
-    row.healthy=health.ok===true;row.workAutoReady=Boolean(lifecycle.workAutoReady);row.fullAutoReady=Boolean(lifecycle.fullAutoReady);row.cashoutState=code(lifecycle.cashoutState||'unknown');
+    row.healthy=health.ok===true;
+    row.healthKnown=Object.keys(health).length>0;
+    row.connected=Boolean(health.connected??health.configured??health.authenticated);
+    row.claimReady=Boolean(health.claimReady);
+    row.deliveryReady=Boolean(health.deliveryReady??health.deliveryQueueReady);
+    if(health.error||health.reason)row.healthFailure=code(health.error||health.reason);
+    if(Number(health.status)>=400)row.httpStatus=Number(health.status);
+    row.workAutoReady=Boolean(lifecycle.workAutoReady);row.fullAutoReady=Boolean(lifecycle.fullAutoReady);row.cashoutState=code(lifecycle.cashoutState||'unknown');
   }
   for(const opportunity of Array.isArray(state.opportunityEconomics)?state.opportunityEconomics:[]){
     const row=get(opportunity.source);row.sampled++;
@@ -43,13 +50,15 @@ function buildRevenueSourceDiagnostics(state={},marketRows=[]){
     for(const reason of opportunity.candidacy?.reasons||[])add(row.blockers,reason);
   }
   for(const market of marketRows){
-    const row=get(market.source);row.discovered=Math.max(row.discovered,Number(market.signals||0));row.healthy=Boolean(market.healthy);row.authenticated=Boolean(market.authenticated);
+    const row=get(market.source);row.discovered=Math.max(row.discovered,Number(market.signals||0));row.healthy=Boolean(market.healthy);row.healthKnown=true;row.authenticated=Boolean(market.authenticated);
     row.sampled+=Object.values(market.statuses||{}).reduce((n,v)=>n+Number(v||0),0);
     row.candidates+=Number(market.statuses?.eligible||0);
     for(const [reason,count] of Object.entries(market.blockers||{}))row.blockers[code(reason)]=(row.blockers[code(reason)]||0)+Number(count||0);
   }
-  return [...bySource.values()].filter(row=>row.discovered||row.sampled||row.candidates||Object.keys(row.blockers).length)
-    .sort((a,b)=>b.candidates-a.candidates||b.maxPayoutUsd-a.maxPayoutUsd||b.discovered-a.discovered||a.source.localeCompare(b.source));
+  // Keep every core revenue connector visible even when it currently returns zero jobs or
+  // a health error. Otherwise "0 open jobs" and "connector could not authenticate/read"
+  // collapse into the same absence from diagnostics, which hides the exact revenue blocker.
+  return [...bySource.values()].sort((a,b)=>b.candidates-a.candidates||b.maxPayoutUsd-a.maxPayoutUsd||b.discovered-a.discovered||a.source.localeCompare(b.source));
 }
 
 export function executionDiagnostics({config={},state={},registry=[],inFlight=[],newMarkets=[],capabilities={}}={}){
