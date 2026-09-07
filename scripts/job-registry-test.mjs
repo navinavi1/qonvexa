@@ -69,7 +69,8 @@ try{
   assert.equal(restarted.get(dispatched)?.everOwned,false);
   assert.equal(restarted.blockReason(dispatched),null);
 
-  // Transient claim retry can be released, execution-owned retry cannot be reclaimed.
+  // Transient claim retry can be released. Once execution has begun, everOwned keeps the
+  // retry blocked from normal discovery even though its public block label is simply retry.
   const transient={source:'dealwork',externalId:'job-3',title:'Research',description:'Research',budgetUsd:60,currency:'USD',claimMode:'automatic'};
   restarted.observe(transient);
   restarted.markRetry(transient,{owner:'transient',reasonCode:'network_timeout',reason:'timeout',retryAfter:'2099-01-01T00:00:00Z'});
@@ -78,9 +79,9 @@ try{
   assert.equal(restarted.get(transient).status,'new');
   restarted.setState(transient,'executing',{jobId:'owned-1'});
   restarted.markRetry(transient,{owner:'transient',reasonCode:'delivery_timeout',reason:'timeout',retryAfter:'2000-01-01T00:00:00Z',phase:'execution'});
-  assert.equal(restarted.blockReason(transient)?.status,'retry_execution_owned');
+  assert.equal(restarted.blockReason(transient)?.status,'retry');
   restarted.releaseTransientRetries();
-  assert.equal(restarted.blockReason(transient)?.status,'retry_execution_owned');
+  assert.equal(restarted.blockReason(transient)?.status,'retry');
   assert.equal(restarted.get(transient)?.everOwned,true);
 
   const migrationStore=new AutonomOSStore(path.join(root,'migration'));
