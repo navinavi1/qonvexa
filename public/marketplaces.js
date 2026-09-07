@@ -132,7 +132,7 @@ async function marketplaceRequest(card, action, body = {}) {
     marketplaceFeedback.set(card.dataset.market,feedback.textContent);
   } catch (error) {
     feedback.textContent = error.message;
-    marketplaceFeedback.set(card.dataset.market,error.message;
+    marketplaceFeedback.set(card.dataset.market,error.message);
   } finally {
     buttons.forEach((b, i) => (b.disabled = prior[i]));
     delete card.dataset.request;
