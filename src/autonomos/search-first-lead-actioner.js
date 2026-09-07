@@ -49,6 +49,21 @@ export class SearchFirstLeadActioner extends BrowserlessLeadActioner{
         if(follow.ok)routes.push(...discoverEmailRoutes(follow.html,follow.finalUrl||url));
         if(routes.length>=3)break;
       }
+      // If the original listing/company pages still expose no route, explicitly search for
+      // a PUBLIC job-application contact. We do not scrape personal emails or guess
+      // addresses: only emails returned in a job/apply/proposal context are admitted by
+      // discoverEmailRoutes().
+      if(!routes.length){
+        const contactSearch=await searchForExplicitApplicationContact(lead,host,this.env);
+        if(contactSearch.ok){
+          routes.push(...discoverEmailRoutes(contactSearch.html||'',lead.url));
+          for(const url of (contactSearch.urls||[]).slice(0,4)){
+            const follow=await fetchPage(url);
+            if(follow.ok)routes.push(...discoverEmailRoutes(follow.html,follow.finalUrl||url));
+            if(routes.length>=3)break;
+          }
+        }
+      }
       routes=rankRoutes(routes);
       const route=routes[0];
       if(!route){
@@ -57,6 +72,7 @@ export class SearchFirstLeadActioner extends BrowserlessLeadActioner{
         this.event('lead_no_direct_route',{id,host,searchFallbackUsed:Boolean(searchFallback.ok),directFetchError:page.error||''});return;
       }
 
+      this.event('explicit_application_route_found',{id,host,recipientDomain:String(route.email||'').split('@')[1]||'',score:Number(route.score||0)});
       const proposal=await this.makeProposal(lead,evidenceText,capability,payout);
       const subject=`Application: ${String(lead.title||'Paid digital project').replace(/\s+/g,' ').slice(0,120)} — AutonomOS`;
       const body=[proposal,'',`Job: ${String(lead.title||'').slice(0,220)}`,`Source: ${String(lead.url||'')}`,'','AutonomOS is an AI-assisted digital-services agency. We only accept work we can execute and verify with our available tools; no human identity or credentials are being misrepresented.'].join('\n').slice(0,7000);
@@ -69,14 +85,36 @@ export class SearchFirstLeadActioner extends BrowserlessLeadActioner{
 }
 
 async function searchForOriginalApplication(lead,host,env){
-  const title=String(lead?.title||'').replace(/["']/g,' ').replace(/\s+/g,' ').trim().slice(0,180);
+  const title=cleanTitle(lead?.title);
   const category=String(lead?.category||'digital freelance').replace(/[^a-z0-9 -]/gi,' ').slice(0,80);
   const query=`"${title}" ${category} freelance contract apply proposal email -site:${host}`;
+  return searchBundle(query,env);
+}
+
+async function searchForExplicitApplicationContact(lead,host,env){
+  const title=cleanTitle(lead?.title);
+  const sourceHint=companyHint(lead,host);
+  const category=String(lead?.category||'freelance').replace(/[^a-z0-9 -]/gi,' ').slice(0,60);
+  // The terms are deliberately role mailboxes, not people-search patterns.
+  const queries=[
+    `"${title}" ${sourceHint} ${category} "apply by email" OR "send proposal" OR "application email" -site:${host}`,
+    `"${title}" ${sourceHint} (jobs@ OR careers@ OR hiring@ OR talent@ OR freelance@ OR projects@) -site:${host}`,
+    `${sourceHint} ${category} freelancer contractor "send your proposal" email -site:${host}`
+  ];
+  let text='',html='',urls=[];let ok=false;
+  for(const query of queries){
+    const result=await searchBundle(query,env);
+    if(!result.ok)continue;ok=true;text+=`\n${result.text}`;html+=`\n${result.html}`;urls.push(...result.urls);
+    if(discoverEmailRoutes(html,lead?.url||'').length)break;
+  }
+  return{ok,text:text.slice(0,35_000),html:html.slice(0,90_000),urls:unique(urls).slice(0,12)};
+}
+
+async function searchBundle(query,env){
   const result=await tavilySearch(query,env);
   if(!result.ok)return{ok:false,text:'',html:'',urls:[],error:String(result.error||'search_failed')};
   const rows=(result.results||[]).slice(0,8);
   const text=rows.map(row=>`${row.title||''} ${row.snippet||''}`).join('\n').slice(0,25_000);
-  // discoverEmailRoutes can safely parse plain emails in this synthetic HTML/text bundle.
   const html=rows.map(row=>`<section><a href="${escapeAttr(row.url||'')}">${escapeHtml(row.title||'')}</a><p>${escapeHtml(row.snippet||'')}</p></section>`).join('\n');
   const urls=rows.map(row=>String(row.url||'')).filter(url=>/^https?:\/\//i.test(url));
   return{ok:true,text,html,urls};
@@ -92,6 +130,12 @@ async function fetchPage(url){
   return{ok:true,html,text:stripHtml(html).slice(0,35_000),finalUrl:String(response.url||url),error:''};
 }
 function rankRoutes(rows){const map=new Map();for(const row of rows||[]){const email=String(row?.email||'').toLowerCase();if(!email)continue;const prev=map.get(email);if(!prev||Number(row?.score||0)>Number(prev?.score||0))map.set(email,row);}return[...map.values()].sort((a,b)=>Number(b.score||0)-Number(a.score||0));}
+function cleanTitle(value){return String(value||'').replace(/["']/g,' ').replace(/\s+/g,' ').trim().slice(0,180);}
+function companyHint(lead,host){
+  const title=cleanTitle(lead?.title);const parts=title.split(/\s[-–—|]\s/).map(x=>x.trim()).filter(Boolean);
+  if(parts.length>1)return `"${parts[parts.length-1].slice(0,100)}"`;
+  const base=String(host||'').split('.')[0].replace(/[-_]+/g,' ');return base?`"${base.slice(0,80)}"`:'';
+}
 function unique(rows){return[...new Set((rows||[]).filter(Boolean))];}
 function hostname(url){try{return new URL(String(url)).hostname.toLowerCase().replace(/^www\./,'');}catch{return'';}}
 function safeError(error){return String(error?.message||error||'').slice(0,300);}
