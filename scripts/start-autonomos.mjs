@@ -9,6 +9,7 @@ import { TaskForceWorker } from '../src/autonomos/taskforce-worker.js';
 import { applySourceQuarantine } from '../src/autonomos/source-quarantine.js';
 import { GlobalFeedPublisher } from '../src/autonomos/global-feed-publisher.js';
 import { probeRuntimeEmailChannel } from '../src/autonomos/email-channel-probe.js';
+import { installNetworkGuard } from '../src/autonomos/network-guard.js';
 
 // Build/verify runs must keep their isolated fixture config. Only the actual long-running
 // service process enables persisted-runtime throughput overrides.
@@ -16,6 +17,9 @@ if (/^(1|true|yes|on)$/i.test(String(process.env.AUTONOMOS_PRODUCTION_SWARM_MODE
   process.env.AUTONOMOS_RUNTIME_ENV_OVERRIDES='true';
 }
 
+// Must be installed before server.js imports the legacy connector runtime. Disabled/noisy
+// sources therefore cannot consume network time even if an older connector still tries to poll.
+installNetworkGuard({env:process.env,logger:console});
 applySourceQuarantine({env:process.env,storageDir:process.env.STORAGE_DIR,logger:console});
 migrateGlobalActionerState({env:process.env,storageDir:process.env.STORAGE_DIR,logger:console});
 probeRuntimeEmailChannel({env:process.env,logger:console}).catch(()=>{});
