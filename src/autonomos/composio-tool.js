@@ -22,9 +22,6 @@ export async function composioExecute({toolSlug,arguments:args={},connectedAccou
   const inferredToolkit=detectToolkit(slug,env);
   if(!isAllowed(slug,inferredToolkit,env))return{ok:false,error:'composio_tool_blocked_by_financial_destructive_or_allowlist_policy'};
   try{
-    // Resolve the exact current definition first. Composio's direct execution endpoint
-    // requires a concrete tool version for manual execution; sending the literal string
-    // "latest" can return HTTP 400 even though catalog lookup accepts toolkit_versions=latest.
     const info=await resolveToolInfo(slug,key,signal);
     const toolkit=info.toolkit||inferredToolkit;
     if(!isAllowed(slug,toolkit,env))return{ok:false,error:'composio_tool_blocked_by_financial_destructive_or_allowlist_policy'};
@@ -38,8 +35,23 @@ export async function composioExecute({toolSlug,arguments:args={},connectedAccou
       signal:withTimeout(45000,signal)
     });
     const body=await response.json().catch(()=>({}));
-    if(!response.ok||body?.successful===false)return{ok:false,error:`composio_http_${response.status}`,detail:String(body?.error?.message||body?.error||body?.message||'').slice(0,500),toolkit,toolVersion:info.version||'',needsConnectedAccount:response.status===401||response.status===403||response.status===422};
-    return{ok:true,data:body?.data??body,logId:body?.log_id||body?.logId||'',toolkit,toolVersion:info.version||''};
+    if(response.ok&&body?.successful!==false)return{ok:true,data:body?.data??body,logId:body?.log_id||body?.logId||'',toolkit,toolVersion:info.version||''};
+
+    // GMAIL_SEND_EMAIL has changed argument shape across toolkit versions. A fast HTTP 400
+    // is a request-validation failure, not an ambiguous Gmail send. Fall back to Composio's
+    // authenticated proxy and call Gmail's native users.messages.send endpoint directly.
+    // This keeps OAuth credentials inside Composio while removing schema drift from the
+    // revenue application path. Never proxy after timeouts/5xx/uncertain writes.
+    if(slug==='GMAIL_SEND_EMAIL'&&response.status===400&&account){
+      const mail=extractGmailSendFields(args);
+      if(mail){
+        const proxied=await gmailProxySend({key,account,mail,signal});
+        if(proxied.ok)return{ok:true,data:proxied.data,logId:proxied.logId||'',toolkit:'GMAIL',toolVersion:info.version||'',fallback:'gmail_proxy'};
+        return{ok:false,error:proxied.error,detail:proxied.detail||'',toolkit:'GMAIL',toolVersion:info.version||'',needsConnectedAccount:proxied.needsConnectedAccount};
+      }
+    }
+
+    return{ok:false,error:`composio_http_${response.status}`,detail:String(body?.error?.message||body?.error||body?.message||'').slice(0,500),toolkit,toolVersion:info.version||'',needsConnectedAccount:response.status===401||response.status===403||response.status===422};
   }catch(error){return{ok:false,error:signal?.aborted?'aborted_by_emergency_stop':String(error?.message||error).slice(0,300)}}
 }
 
@@ -66,7 +78,7 @@ async function resolveToolInfo(toolSlug,key,signal){
     const response=await fetch(`https://backend.composio.dev/api/v3.1/tools/${encodeURIComponent(toolSlug)}?toolkit_versions=latest`,{headers:{'x-api-key':key,accept:'application/json'},signal:withTimeout(12000,signal)});
     if(!response.ok)return{toolkit:'',version:''};
     const body=await response.json().catch(()=>({}));
-    const version=String(body?.version||'').trim();
+    const version=String(body?.version||body?.toolkit?.version||body?.toolkit_version||'').trim();
     return{toolkit:String(body?.toolkit?.slug||'').trim().toUpperCase(),version:/^\d{8}_\d{2}$/.test(version)?version:''};
   }catch{return{toolkit:'',version:''}}
 }
@@ -82,4 +94,49 @@ async function resolveConnectedAccountId(toolkit,key,signal){
   const active=(Array.isArray(body?.items)?body.items:[]).filter(row=>String(row?.status||'').toUpperCase()==='ACTIVE'&&!row?.is_disabled);
   if(active.length===1)return String(active[0]?.id||'');
   return'';
+}
+
+function extractGmailSendFields(args){
+  const value=args&&typeof args==='object'?args:{};
+  const recipient=String(value.recipient_email||value.to||value.to_email||value.email_address||'').trim();
+  const to=Array.isArray(value.to)?String(value.to[0]||'').trim():recipient;
+  const subject=String(value.subject||'').replace(/[\r\n]+/g,' ').trim().slice(0,500);
+  const body=String(value.body||value.message_body||value.body_text||value.plain_text||value.content||value.message||value.text||'');
+  const cleanTo=String(to||recipient).replace(/[\r\n]+/g,'').trim();
+  if(!/^[^<>\s@]+@[^<>\s@]+\.[^<>\s@]+$/.test(cleanTo)||!subject||!body)return null;
+  return{to:cleanTo,subject,body};
+}
+
+async function gmailProxySend({key,account,mail,signal}){
+  const raw=buildRawGmailMessage(mail);
+  try{
+    const response=await fetch('https://backend.composio.dev/api/v3.1/tools/execute/proxy',{
+      method:'POST',headers:{'content-type':'application/json','x-api-key':key,accept:'application/json'},
+      body:JSON.stringify({connected_account_id:account,endpoint:'/gmail/v1/users/me/messages/send',method:'POST',body:{raw}}),
+      signal:withTimeout(45000,signal)
+    });
+    const body=await response.json().catch(()=>({}));
+    if(!response.ok){
+      const detail=String(body?.error?.message||body?.error||body?.message||body?.data?.error?.message||'').slice(0,500);
+      return{ok:false,error:`composio_gmail_proxy_http_${response.status}`,detail,needsConnectedAccount:response.status===401||response.status===403||/scope|auth|credential|permission/i.test(detail)};
+    }
+    const data=body?.data??body;
+    const gmailId=String(data?.id||data?.message?.id||'');
+    if(!gmailId)return{ok:false,error:'composio_gmail_proxy_malformed_success',detail:'Gmail proxy returned success without a message id',needsConnectedAccount:false};
+    return{ok:true,data,logId:body?.log_id||body?.logId||''};
+  }catch(error){return{ok:false,error:signal?.aborted?'aborted_by_emergency_stop':String(error?.message||error).slice(0,300),detail:'',needsConnectedAccount:false};}
+}
+
+function buildRawGmailMessage({to,subject,body}){
+  const encodedSubject=/^[\x20-\x7E]*$/.test(subject)?subject:`=?UTF-8?B?${Buffer.from(subject,'utf8').toString('base64')}?=`;
+  const message=[
+    `To: ${to}`,
+    `Subject: ${encodedSubject}`,
+    'MIME-Version: 1.0',
+    'Content-Type: text/plain; charset=UTF-8',
+    'Content-Transfer-Encoding: 8bit',
+    '',
+    String(body||'')
+  ].join('\r\n');
+  return Buffer.from(message,'utf8').toString('base64url');
 }
