@@ -73,3 +73,48 @@
   font-size: 12px;
   overflow-wrap: anywhere;
 }
+
+/* Owner-facing Mission Control: keep only daily controls visible. */
+#autonomos-retry-transient,
+#autonomos-inspect-blockers,
+#autonomos-live-self-test,
+#autonomos-reconcile-payments {
+  display: none !important;
+}
+
+/* Running is a status, not a second Start button. */
+#autonomos-runtime-badge.running,
+#autonomos-runtime-badge.working {
+  font-size: 0 !important;
+}
+#autonomos-runtime-badge.running::after,
+#autonomos-runtime-badge.working::after {
+  content: "● 24/7 ПРАЦЮЄ";
+  font-size: 13px;
+  font-weight: 800;
+}
+#autonomos-runtime-badge.running ~ #autonomos-start,
+#autonomos-runtime-badge.working ~ #autonomos-start {
+  display: none !important;
+}
+
+/* Technical legacy counters are kept in DOM for diagnostics, but hidden from owner view. */
+.autonomos-v7-metrics article:has(#auto-ready),
+.autonomos-v7-metrics article:has(#auto-new),
+.autonomos-v7-metrics article:has(#auto-agents),
+.autonomos-v7-metrics article:has(#auto-retry),
+.autonomos-v7-metrics article:has(#auto-policy-hold),
+.autonomos-v7-metrics article:has(#auto-system-blocked),
+.autonomos-v7-metrics article:has(#auto-graveyard) {
+  display: none !important;
+}
+
+.autonomos-command-panel,
+.autonomos-t2000-card,
+section[aria-label="AgentHansa and TaskBounty"] {
+  display: none !important;
+}
+
+.global-work-feed {
+  margin-top: 14px;
+}
