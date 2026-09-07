@@ -15,7 +15,6 @@ try{
   registry.markPermanent(job,{owner:'market',reasonCode:'market_job_no_longer_available',reason:'already claimed'});
   assert.equal(registry.blockReason(job)?.status,'graveyard');
 
-  // Restart + mutable marketplace metadata must never resurrect the same external job ID.
   const restarted=new JobRegistry({store,maxRecords:1000});
   assert.equal(restarted.blockReason(job)?.status,'graveyard');
   const changed={...job,title:'Paid research — expanded scope',budgetUsd:120,deadline:'2026-09-12T12:00:00Z'};
@@ -23,20 +22,17 @@ try{
   assert.equal(restarted.get(changed).status,'graveyard');
   assert.equal(restarted.blockReason(changed)?.status,'graveyard');
 
-  // Our failures are held separately from permanent market/policy tombstones.
   const ours={source:'dealwork',externalId:'job-2',title:'Build API',description:'Build and test API',budgetUsd:100,currency:'USD',claimMode:'automatic'};
   restarted.observe(ours);
   restarted.markSystemBlocked(ours,{reasonCode:'execution_or_capability_failure',reason:'llm_empty_response',attempts:3,capabilityVersion:'abc'});
   assert.equal(restarted.blockReason(ours)?.status,'system_blocked');
   assert.equal(restarted.summary().systemBlocked,1);
-  // A real execution/QA failure is NOT released merely because a later static preflight
-  // happens to look executable under the same capability catalog version.
+  // Execution/QA failure can never be auto-released by a static capability-version bump.
   assert.equal(restarted.releaseSystemBlocked(ours,{capabilityVersion:'abc'}).released,false);
+  assert.equal(restarted.releaseSystemBlocked(ours,{capabilityVersion:'different-version'}).released,false);
   assert.equal(restarted.blockReason(ours)?.status,'system_blocked');
 
-  // A pre-claim capability/auth block is different: a fresh live preflight has already
-  // proved the job executable, so reconnecting credentials/tools must be allowed to clear
-  // the stale registry hold even when the static capability version string is unchanged.
+  // Fresh pre-claim capability/auth holds are reversible after a successful live preflight.
   const stalePreflight={source:'t2000',externalId:'open-reconnected',title:'Research job',description:'Research current sources',budgetUsd:0.5,currency:'USDC',claimMode:'automatic_mcp'};
   restarted.observe(stalePreflight);
   restarted.markSystemBlocked(stalePreflight,{reasonCode:'preflight_or_internal_capability_hold',reason:'connector was temporarily unavailable',capabilityVersion:'same-v1'});
@@ -51,6 +47,28 @@ try{
   assert.equal(restarted.releaseSystemBlocked(staleAuth,{capabilityVersion:'same-v1'}).released,true);
   assert.equal(restarted.get(staleAuth)?.status,'new');
 
+  // Once a marketplace side effect happened, ownership is sticky forever. Even if the
+  // later failure happens to be classified as a normally-reversible auth/preflight hold,
+  // the normal discovery loop must not get another chance to claim it.
+  const owned={source:'t2000',externalId:'already-claimed',title:'Claimed task',description:'Do work',budgetUsd:0.5,currency:'USDC',claimMode:'automatic_mcp'};
+  restarted.observe(owned);
+  restarted.setState(owned,'claimed',{jobId:'owned-market-job'});
+  assert.equal(restarted.get(owned)?.everOwned,true);
+  restarted.markSystemBlocked(owned,{reasonCode:'connector_credentials_or_auth_failure',reason:'token expired after claim',capabilityVersion:'v1'});
+  assert.equal(restarted.releaseSystemBlocked(owned,{capabilityVersion:'v2'}).released,false);
+  assert.equal(restarted.blockReason(owned)?.status,'system_blocked');
+
+  // Durable dispatch itself is only a lease, not an irreversible marketplace side effect.
+  // Its callback must be able to release the lease and continue toward the first claim.
+  const dispatched={source:'t2000',externalId:'dispatch-only',title:'Fresh task',description:'Do research',budgetUsd:0.5,currency:'USDC',claimMode:'automatic_mcp'};
+  restarted.observe(dispatched);
+  restarted.markDispatchPending(dispatched,{provider:'trigger',runId:'run-1',leaseId:'lease-1'});
+  assert.equal(restarted.get(dispatched)?.everOwned,false);
+  assert.equal(restarted.blockReason(dispatched)?.status,'dispatch_pending');
+  assert.equal(restarted.releaseDispatchPending(dispatched,{leaseId:'lease-1'}).released,true);
+  assert.equal(restarted.get(dispatched)?.everOwned,false);
+  assert.equal(restarted.blockReason(dispatched),null);
+
   // Transient claim retry can be released, execution-owned retry cannot be reclaimed.
   const transient={source:'dealwork',externalId:'job-3',title:'Research',description:'Research',budgetUsd:60,currency:'USD',claimMode:'automatic'};
   restarted.observe(transient);
@@ -63,9 +81,8 @@ try{
   assert.equal(restarted.blockReason(transient)?.status,'retry_execution_owned');
   restarted.releaseTransientRetries();
   assert.equal(restarted.blockReason(transient)?.status,'retry_execution_owned');
+  assert.equal(restarted.get(transient)?.everOwned,true);
 
-  // Legacy migration keeps completed/claimed jobs permanently out of discovery and
-  // classifies our old execution failures into System Blocked rather than Graveyard.
   const migrationStore=new AutonomOSStore(path.join(root,'migration'));
   const migrationRegistry=new JobRegistry({store:migrationStore});
   const migration=migrationRegistry.migrateLegacy({
@@ -77,10 +94,9 @@ try{
   });
   assert.equal(migration.tombstoned,0);assert.equal(migration.systemBlocked,1);
   assert.equal(migrationRegistry.blockReason({source:'dealwork',externalId:'done-1'})?.status,'delivered');
+  assert.equal(migrationRegistry.get({source:'dealwork',externalId:'done-1'})?.everOwned,true);
   assert.equal(migrationRegistry.blockReason({source:'superteam',externalId:'ours-1'})?.status,'system_blocked');
 
-  // v7.6 production repair removes old x402 discovery pollution and rescues Dealwork
-  // buyer-funding/configuration failures from permanent Graveyard into timed Market Hold.
   const repairStore=new AutonomOSStore(path.join(root,'repair-v76'));
   const repairRegistry=new JobRegistry({store:repairStore});
   const x402={source:'x402-bazaar',externalId:'https://buyer.example/tool',title:'Buyer API',budgetUsd:0.001,currency:'USDC'};
@@ -94,12 +110,11 @@ try{
   assert.equal(repairRegistry.get(unfunded)?.reasonCode,'buyer_funding_unavailable');
   assert.equal(repairRegistry.blockReason(unfunded)?.status,'policy_hold');
 
-  // Authoritative settlement must override stale tombstones: once the marketplace
-  // proves the job paid, the registry can never rediscover it as Graveyard.
   const paid={source:'t2000',externalId:'paid-1',title:'Settled proof',budgetUsd:0.5,currency:'USDC'};
   repairRegistry.observe(paid);repairRegistry.markPermanent(paid,{owner:'market',reasonCode:'stale_failure',reason:'legacy stale classification'});
   repairRegistry.markPaid(paid,{transactionId:'tx-paid-1',amountUsd:0.5,currency:'USDC'});
   assert.equal(repairRegistry.get(paid)?.status,'paid');
+  assert.equal(repairRegistry.get(paid)?.everOwned,true);
   assert.equal(repairRegistry.blockReason(paid)?.status,'paid');
   const paidRestarted=new JobRegistry({store:repairStore});
   assert.equal(paidRestarted.get(paid)?.status,'paid','paid state must survive restart without a stale tombstone overriding it');
