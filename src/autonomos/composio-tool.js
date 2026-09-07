@@ -9,7 +9,7 @@ export async function composioSearch({query='',toolkit='',limit=12}={},env=proce
     const response=await fetch(`https://backend.composio.dev/api/v3.1/tools?${qs}`,{headers:{'x-api-key':key,accept:'application/json'},signal:withTimeout(20000,signal)});
     const body=await response.json().catch(()=>({}));
     if(!response.ok)return{ok:false,error:`composio_http_${response.status}`,detail:String(body?.error?.message||body?.message||'').slice(0,400)};
-    const items=(Array.isArray(body?.items)?body.items:[]).filter(item=>isAllowed(item?.slug,item?.toolkit?.slug,env)).slice(0,20).map(item=>({slug:item.slug,name:item.name||'',description:String(item.description||item.human_description||'').slice(0,600),toolkit:item.toolkit?.slug||'',requiresAuth:item.no_auth===false,inputParameters:item.input_parameters||{}}));
+    const items=(Array.isArray(body?.items)?body.items:[]).filter(item=>isAllowed(item?.slug,item?.toolkit?.slug,env)).slice(0,20).map(item=>({slug:item.slug,name:item.name||'',description:String(item.description||item.human_description||'').slice(0,600),toolkit:item.toolkit?.slug||'',requiresAuth:item.no_auth===false,inputParameters:item.input_parameters||{},version:String(item.version||'')}));
     return{ok:true,items,nextCursor:body?.next_cursor||'',totalItems:Number(body?.total_items||items.length)};
   }catch(error){return{ok:false,error:signal?.aborted?'aborted_by_emergency_stop':String(error?.message||error).slice(0,300)}}
 }
@@ -22,21 +22,24 @@ export async function composioExecute({toolSlug,arguments:args={},connectedAccou
   const inferredToolkit=detectToolkit(slug,env);
   if(!isAllowed(slug,inferredToolkit,env))return{ok:false,error:'composio_tool_blocked_by_financial_destructive_or_allowlist_policy'};
   try{
-    // Do not guess the toolkit from the tool slug when Composio can tell us exactly.
-    // This matters for multi-part toolkit slugs such as NETLIFY_MCP.
-    const toolkit=(await resolveToolToolkit(slug,key,signal))||inferredToolkit;
+    // Resolve the exact current definition first. Composio's direct execution endpoint
+    // requires a concrete tool version for manual execution; sending the literal string
+    // "latest" can return HTTP 400 even though catalog lookup accepts toolkit_versions=latest.
+    const info=await resolveToolInfo(slug,key,signal);
+    const toolkit=info.toolkit||inferredToolkit;
     if(!isAllowed(slug,toolkit,env))return{ok:false,error:'composio_tool_blocked_by_financial_destructive_or_allowlist_policy'};
     const accountMap=parseJson(env.AUTONOMOS_COMPOSIO_ACCOUNTS_JSON,{});
     let account=String(connectedAccountId||accountMap[toolkit]||accountMap[toolkit.toLowerCase()]||'');
     if(!account&&toolkit)account=await resolveConnectedAccountId(toolkit,key,signal);
+    const payload={arguments:args||{},...(info.version?{version:info.version}:{}),...(account?{connected_account_id:account}:{}),...(userId?{user_id:String(userId)}:{})};
     const response=await fetch(`https://backend.composio.dev/api/v3.1/tools/execute/${encodeURIComponent(slug)}`,{
       method:'POST',headers:{'content-type':'application/json','x-api-key':key},
-      body:JSON.stringify({arguments:args||{},version:'latest',...(account?{connected_account_id:account}:{}),...(userId?{user_id:String(userId)}:{})}),
+      body:JSON.stringify(payload),
       signal:withTimeout(45000,signal)
     });
     const body=await response.json().catch(()=>({}));
-    if(!response.ok||body?.successful===false)return{ok:false,error:`composio_http_${response.status}`,detail:String(body?.error?.message||body?.error||body?.message||'').slice(0,500),toolkit,needsConnectedAccount:response.status===401||response.status===403||response.status===422};
-    return{ok:true,data:body?.data??body,logId:body?.log_id||body?.logId||'',toolkit};
+    if(!response.ok||body?.successful===false)return{ok:false,error:`composio_http_${response.status}`,detail:String(body?.error?.message||body?.error||body?.message||'').slice(0,500),toolkit,toolVersion:info.version||'',needsConnectedAccount:response.status===401||response.status===403||response.status===422};
+    return{ok:true,data:body?.data??body,logId:body?.log_id||body?.logId||'',toolkit,toolVersion:info.version||''};
   }catch(error){return{ok:false,error:signal?.aborted?'aborted_by_emergency_stop':String(error?.message||error).slice(0,300)}}
 }
 
@@ -51,7 +54,6 @@ function detectToolkit(slug,env){
   const known=[...csv(env.AUTONOMOS_COMPOSIO_ALLOW_TOOLKITS),...csv(env.AUTONOMOS_COMPOSIO_DENY_TOOLKITS),...DEFAULT_DENY_TOOLKITS].sort((a,b)=>b.length-a.length);
   const hit=known.find(x=>upper===x||upper.startsWith(`${x}_`));if(hit)return hit;
   const parts=upper.split('_');
-  // Common two-word toolkit slugs must not collapse to GOOGLE or MICROSOFT.
   if(['GOOGLE','MICROSOFT'].includes(parts[0])&&parts[1])return `${parts[0]}_${parts[1]}`;
   return parts[0]||'';
 }
@@ -59,16 +61,15 @@ function csv(v){return String(v||'').split(',').map(x=>x.trim().toUpperCase()).f
 function parseJson(value,fallback){try{return JSON.parse(String(value||''))}catch{return fallback}}
 function withTimeout(ms,signal){return signal?AbortSignal.any([AbortSignal.timeout(ms),signal]):AbortSignal.timeout(ms)}
 
-
-async function resolveToolToolkit(toolSlug,key,signal){
+async function resolveToolInfo(toolSlug,key,signal){
   try{
     const response=await fetch(`https://backend.composio.dev/api/v3.1/tools/${encodeURIComponent(toolSlug)}?toolkit_versions=latest`,{headers:{'x-api-key':key,accept:'application/json'},signal:withTimeout(12000,signal)});
-    if(!response.ok)return'';
+    if(!response.ok)return{toolkit:'',version:''};
     const body=await response.json().catch(()=>({}));
-    return String(body?.toolkit?.slug||'').trim().toUpperCase();
-  }catch{return''}
+    const version=String(body?.version||'').trim();
+    return{toolkit:String(body?.toolkit?.slug||'').trim().toUpperCase(),version:/^\d{8}_\d{2}$/.test(version)?version:''};
+  }catch{return{toolkit:'',version:''}}
 }
-
 
 async function resolveConnectedAccountId(toolkit,key,signal){
   const qs=new URLSearchParams();
@@ -80,7 +81,5 @@ async function resolveConnectedAccountId(toolkit,key,signal){
   const body=await response.json().catch(()=>({}));
   const active=(Array.isArray(body?.items)?body.items:[]).filter(row=>String(row?.status||'').toUpperCase()==='ACTIVE'&&!row?.is_disabled);
   if(active.length===1)return String(active[0]?.id||'');
-  // When multiple accounts are connected, force explicit owner mapping instead of
-  // silently picking a potentially wrong Gmail/GitHub/Slack identity.
   return'';
 }
