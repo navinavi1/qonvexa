@@ -3,6 +3,7 @@ import { LeanInternetHunter } from '../src/autonomos/lean-internet-hunter.js';
 import { RevenueGlobalWorkHunter } from '../src/autonomos/revenue-global-work-hunter.js';
 import { ReliableGlobalLeadActioner } from '../src/autonomos/reliable-global-lead-actioner.js';
 import { RevenueLeadActioner } from '../src/autonomos/revenue-lead-actioner.js';
+import { GmailJobMonitor } from '../src/autonomos/gmail-job-monitor.js';
 import { migrateGlobalActionerState } from '../src/autonomos/global-actioner-migrations.js';
 import { TaskForceVerifier } from '../src/autonomos/taskforce-verifier.js';
 import { TaskForceWorker } from '../src/autonomos/taskforce-worker.js';
@@ -33,6 +34,8 @@ const browserActioner=enabled(process.env.AUTONOMOS_GLOBAL_ACTIONER_ENABLED,'fal
   ? new ReliableGlobalLeadActioner({env:process.env,storageDir:process.env.STORAGE_DIR,logger:console}) : null;
 const browserlessActioner=enabled(process.env.AUTONOMOS_BROWSERLESS_ACTIONER_ENABLED,'true')
   ? new RevenueLeadActioner({env:process.env,storageDir:process.env.STORAGE_DIR,logger:console}) : null;
+const gmailJobMonitor=browserlessActioner&&enabled(process.env.AUTONOMOS_GMAIL_JOB_MONITOR_ENABLED,'true')
+  ? new GmailJobMonitor({actioner:browserlessActioner,env:process.env,logger:console}) : null;
 const taskForceVerifier=new TaskForceVerifier({env:process.env,storageDir:process.env.STORAGE_DIR,logger:console});
 const taskForceWorker=new TaskForceWorker({env:process.env,storageDir:process.env.STORAGE_DIR,logger:console});
 const globalFeedPublisher=new GlobalFeedPublisher({env:process.env,storageDir:process.env.STORAGE_DIR,logger:console});
@@ -41,11 +44,12 @@ internetHunter?.start();
 globalHunter.start();
 browserActioner?.start();
 browserlessActioner?.start();
+gmailJobMonitor?.start();
 taskForceVerifier.start();
 if(enabled(process.env.AUTONOMOS_TASKFORCE_WORKER_ENABLED,'true'))taskForceWorker.start();
 globalFeedPublisher.start();
 
-const stop=()=>{internetHunter?.stop();globalHunter.stop();browserActioner?.stop();browserlessActioner?.stop();taskForceVerifier.stop();taskForceWorker.stop();globalFeedPublisher.stop();};
+const stop=()=>{internetHunter?.stop();globalHunter.stop();browserActioner?.stop();browserlessActioner?.stop();gmailJobMonitor?.stop();taskForceVerifier.stop();taskForceWorker.stop();globalFeedPublisher.stop();};
 process.on('SIGTERM',stop);
 process.on('SIGINT',stop);
 
