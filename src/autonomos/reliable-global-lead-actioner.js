@@ -4,6 +4,9 @@ const FRESH_APPLY_TERMINAL=new Set([
   'application_uncertain','accepted_repair_exhausted','account_or_email_verification_required'
 ]);
 
+let browserbaseBlockedUntil=0;
+let browserbaseBlockReason='';
+
 export class ReliableGlobalLeadActioner extends GlobalLeadActioner{
   shouldInspect(lead){
     const status=String(this.state?.actions?.[lead?.id]?.status||'');
@@ -14,6 +17,10 @@ export class ReliableGlobalLeadActioner extends GlobalLeadActioner{
   async openSession(url,host){
     const apiKey=String(this.env.BROWSERBASE_API_KEY||'').trim();
     if(!apiKey)throw new Error('browserbase_not_configured');
+    if(browserbaseBlockedUntil>Date.now()){
+      const seconds=Math.max(1,Math.ceil((browserbaseBlockedUntil-Date.now())/1000));
+      throw new Error(`browser_session_unavailable:circuit_open:${browserbaseBlockReason||'provider_cooldown'}:${seconds}s`);
+    }
     const retries=Math.max(1,Math.min(5,Number(this.env.AUTONOMOS_BROWSER_SESSION_RETRIES||3)));
     const {browserbase,Stagehand}=await import('@browserbasehq/stagehand');
     let lastError;
@@ -29,6 +36,7 @@ export class ReliableGlobalLeadActioner extends GlobalLeadActioner{
         const secrets=this.read(this.secretFile,{accounts:{}});const cookies=secrets?.accounts?.[host]?.cookies;
         if(Array.isArray(cookies)&&cookies.length){try{await browser.context.addCookies(cookies);}catch{}}
         await withTimeout(page.goto(String(url),{waitUntil:'domcontentloaded'}),35_000,'page_navigation_timeout');
+        browserbaseBlockedUntil=0;browserbaseBlockReason='';
         if(attempt>1)this.event('browser_session_recovered',{host,attempt});
         return{browser,stagehand,page,sessionId};
       }catch(error){
@@ -36,6 +44,18 @@ export class ReliableGlobalLeadActioner extends GlobalLeadActioner{
         const detail=sanitizeBrowserError(error);
         try{await stagehand?.close();}catch{}
         try{await browser?.close();}catch{}
+        if(detail.status===402){
+          const blockMs=Math.max(60*60_000,Math.min(24*60*60_000,Number(this.env.AUTONOMOS_BROWSERBASE_402_COOLDOWN_MS||12*60*60_000)));
+          browserbaseBlockedUntil=Date.now()+blockMs;
+          browserbaseBlockReason='browserbase_quota_or_plan_exhausted';
+          this.event('browser_provider_circuit_open',{provider:'browserbase',status:402,until:new Date(browserbaseBlockedUntil).toISOString(),reason:browserbaseBlockReason});
+          break;
+        }
+        if(detail.status===429){
+          const blockMs=Math.max(60_000,Math.min(15*60_000,(detail.retryAfterSeconds||60)*1000));
+          browserbaseBlockedUntil=Math.max(browserbaseBlockedUntil,Date.now()+blockMs);
+          browserbaseBlockReason='browserbase_rate_limited';
+        }
         if(attempt<retries&&detail.retryable){
           this.event('browser_session_retry',{host,attempt,status:detail.status,retryAfterSeconds:detail.retryAfterSeconds,error:detail.message});
           await sleep(Math.max(1200,Math.min(60_000,(detail.retryAfterSeconds||attempt*2)*1000)));
