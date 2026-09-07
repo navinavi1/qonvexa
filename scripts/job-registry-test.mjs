@@ -29,6 +29,27 @@ try{
   restarted.markSystemBlocked(ours,{reasonCode:'execution_or_capability_failure',reason:'llm_empty_response',attempts:3,capabilityVersion:'abc'});
   assert.equal(restarted.blockReason(ours)?.status,'system_blocked');
   assert.equal(restarted.summary().systemBlocked,1);
+  // A real execution/QA failure is NOT released merely because a later static preflight
+  // happens to look executable under the same capability catalog version.
+  assert.equal(restarted.releaseSystemBlocked(ours,{capabilityVersion:'abc'}).released,false);
+  assert.equal(restarted.blockReason(ours)?.status,'system_blocked');
+
+  // A pre-claim capability/auth block is different: a fresh live preflight has already
+  // proved the job executable, so reconnecting credentials/tools must be allowed to clear
+  // the stale registry hold even when the static capability version string is unchanged.
+  const stalePreflight={source:'t2000',externalId:'open-reconnected',title:'Research job',description:'Research current sources',budgetUsd:0.5,currency:'USDC',claimMode:'automatic_mcp'};
+  restarted.observe(stalePreflight);
+  restarted.markSystemBlocked(stalePreflight,{reasonCode:'preflight_or_internal_capability_hold',reason:'connector was temporarily unavailable',capabilityVersion:'same-v1'});
+  const liveRelease=restarted.releaseSystemBlocked(stalePreflight,{capabilityVersion:'same-v1'});
+  assert.equal(liveRelease.released,true);
+  assert.equal(restarted.get(stalePreflight)?.status,'new');
+  assert.equal(restarted.get(stalePreflight)?.reasonCode,'live_preflight_revalidated');
+
+  const staleAuth={source:'t2000',externalId:'open-reauthed',title:'Research job 2',description:'Research current sources',budgetUsd:0.5,currency:'USDC',claimMode:'automatic_mcp'};
+  restarted.observe(staleAuth);
+  restarted.markSystemBlocked(staleAuth,{reasonCode:'connector_credentials_or_auth_failure',reason:'oauth expired before claim',capabilityVersion:'same-v1'});
+  assert.equal(restarted.releaseSystemBlocked(staleAuth,{capabilityVersion:'same-v1'}).released,true);
+  assert.equal(restarted.get(staleAuth)?.status,'new');
 
   // Transient claim retry can be released, execution-owned retry cannot be reclaimed.
   const transient={source:'dealwork',externalId:'job-3',title:'Research',description:'Research',budgetUsd:60,currency:'USD',claimMode:'automatic'};
