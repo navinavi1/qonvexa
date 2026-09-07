@@ -73,7 +73,7 @@ const DIRECT_ROUTE_QUERIES=[
 ];
 
 const ACTIVE_APPLICATION_STATUSES=new Set(['PENDING','APPLIED','ACCEPTED','IN_PROGRESS','WORKING','SUBMITTED','PAID_OR_APPROVED']);
-const TERMINAL_APPLICATION_STATUSES=new Set(['REJECTED']);
+const TERMINAL_APPLICATION_STATUSES=new Set(['REJECTED','NOT_ACCEPTING']);
 
 export class RevenueGlobalWorkHunter extends GlobalWorkHunter{
   async searchWorldwide(){
@@ -101,13 +101,9 @@ export class RevenueGlobalWorkHunter extends GlobalWorkHunter{
     return{...broad,newLeads:Number(broad?.newLeads||0)+directNewLeads,directNewLeads,directQueryPool:DIRECT_ROUTE_QUERIES.length};
   }
 
-  // Parent logic treated any historical application record as permanent, including a
-  // transient apply_failed row. It also gave no reason why five live tasks repeatedly
-  // produced "applied: 0". This version retries only safe, known failed applications after
-  // backoff and reports the exact eligibility funnel.
   async pollTaskForce(credential){
     const headers={accept:'application/json','x-api-key':credential.apiKey,authorization:credential.apiKey,'user-agent':'AutonomOS-RevenueHunter/3.0'};
-    const stats={open:0,applied:0,eligible:0,alreadyApplied:0,blockedCapability:0,belowFloor:0,retryDeferred:0,applyFailed:0};
+    const stats={open:0,applied:0,eligible:0,alreadyApplied:0,blockedCapability:0,belowFloor:0,retryDeferred:0,applyFailed:0,notAccepting:0};
     try{
       const r=await fetch('https://task-force.app/api/agent/tasks?status=ACTIVE&limit=100',{headers,signal:AbortSignal.timeout(15000)});
       const data=await safeJson(r);
@@ -136,8 +132,12 @@ export class RevenueGlobalWorkHunter extends GlobalWorkHunter{
         }
         const result=await this.applyTaskForce(task,capability,credential);
         if(result.ok){stats.applied++;continue;}
-        stats.applyFailed++;
         const failed=this.state.taskforce.applications[key];
+        if(failed&&/task is not accepting applications|not accepting applications/i.test(String(failed.error||''))){
+          failed.status='not_accepting';failed.archivedAt=new Date().toISOString();delete failed.nextRetryAt;stats.notAccepting++;
+          this.event('taskforce_listing_not_accepting',{taskId:key});continue;
+        }
+        stats.applyFailed++;
         if(failed&&String(failed.status||'').toLowerCase()==='apply_failed')failed.nextRetryAt=new Date(Date.now()+retryMs).toISOString();
       }
       this.persist();
@@ -151,9 +151,6 @@ function classifyTaskForRevenue(task,context){
   const first=classifyOpportunity(task,context);
   const missing=Array.isArray(first?.missingTools)?first.missingTools.map(String):[];
   if(first.executable||missing.length!==1||missing[0]!=='design_media_tool'||looksLikeRealMediaTask(task))return first;
-  // Marketplace chrome frequently lists "graphic design" alongside unrelated translation,
-  // writing and research tasks. Re-run against the actual task title/category only; true
-  // media jobs still remain blocked when no media capability exists.
   return classifyOpportunity({...task,description:`${String(task?.title||'')} ${String(task?.category||'')}`},context);
 }
 function looksLikeRealMediaTask(task){
