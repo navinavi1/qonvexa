@@ -1,7 +1,7 @@
 import 'dotenv/config';
 import { InternetHunter } from '../src/autonomos/internet-hunter.js';
 import { GlobalWorkHunter } from '../src/autonomos/global-work-hunter.js';
-import { GlobalLeadActioner } from '../src/autonomos/global-lead-actioner.js';
+import { ReliableGlobalLeadActioner } from '../src/autonomos/reliable-global-lead-actioner.js';
 import { migrateGlobalActionerState } from '../src/autonomos/global-actioner-migrations.js';
 import { TaskForceVerifier } from '../src/autonomos/taskforce-verifier.js';
 import { TaskForceWorker } from '../src/autonomos/taskforce-worker.js';
@@ -19,7 +19,7 @@ migrateGlobalActionerState({env:process.env,storageDir:process.env.STORAGE_DIR,l
 
 const hunter=new InternetHunter({env:process.env,storageDir:process.env.STORAGE_DIR,logger:console});
 const globalHunter=new GlobalWorkHunter({env:process.env,storageDir:process.env.STORAGE_DIR,logger:console});
-const globalLeadActioner=new GlobalLeadActioner({env:process.env,storageDir:process.env.STORAGE_DIR,logger:console});
+const globalLeadActioner=new ReliableGlobalLeadActioner({env:process.env,storageDir:process.env.STORAGE_DIR,logger:console});
 const taskForceVerifier=new TaskForceVerifier({env:process.env,storageDir:process.env.STORAGE_DIR,logger:console});
 const taskForceWorker=new TaskForceWorker({env:process.env,storageDir:process.env.STORAGE_DIR,logger:console});
 const globalFeedPublisher=new GlobalFeedPublisher({env:process.env,storageDir:process.env.STORAGE_DIR,logger:console});
