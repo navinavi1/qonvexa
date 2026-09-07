@@ -35,6 +35,7 @@ export class GlobalFeedPublisher{
           title:String(lead?.title||'Paid digital work').slice(0,220),source,url:safeUrl(lead?.url),category:String(lead?.category||'general-digital'),
           amountUsd:num(action?.payout?.amountUsd??lead?.amountUsd),currency:String(action?.payout?.currency||lead?.payoutCurrency||'UNKNOWN').toUpperCase(),
           bucket,status:actionState||(lead?.applyReady?'ready':'new'),firstSeenAt:String(lead?.firstSeenAt||''),lastSeenAt:String(action?.updatedAt||lead?.lastSeenAt||''),
+          appliedAt:String(action?.appliedAt||''),acceptedAt:String(action?.acceptedAt||''),submittedAt:String(action?.submittedAt||''),
           reason:String(action?.reason||action?.error||lead?.blocker||'').slice(0,220),cryptoPayout:Boolean(lead?.cryptoPayout),payoutVerified:Boolean(lead?.payoutVerified),
           attempts:Number(action?.attempts||0),applicationUrl:safeUrl(action?.applicationUrl)
         });
@@ -43,17 +44,18 @@ export class GlobalFeedPublisher{
         const task=hunter?.taskforce?.tasks?.[key]||{};const worker=taskforceWorker?.tasks?.[key]||{};
         const appStatus=String(app?.status||'').toUpperCase();const workerStatus=String(worker?.status||'');
         const bucket=taskforceBucket(appStatus,workerStatus);
-        rows.push({id:`taskforce:${key}`,title:String(task?.title||app?.title||'TaskForce task').slice(0,220),source:'taskforce',url:safeUrl(task?.url),category:String(task?.category||app?.skill||worker?.skill||'digital'),amountUsd:num(task?.budgetUsd||app?.budgetUsd),currency:'USDC',bucket,status:workerStatus||appStatus.toLowerCase(),firstSeenAt:String(app?.appliedAt||task?.observedAt||''),lastSeenAt:String(worker?.updatedAt||app?.updatedAt||app?.appliedAt||task?.observedAt||''),reason:String(worker?.submitError||worker?.qaReasons?.join?.('; ')||app?.error||'').slice(0,220),cryptoPayout:true,payoutVerified:true});
+        rows.push({id:`taskforce:${key}`,title:String(task?.title||app?.title||'TaskForce task').slice(0,220),source:'taskforce',url:safeUrl(task?.url),category:String(task?.category||app?.skill||worker?.skill||'digital'),amountUsd:num(task?.budgetUsd||app?.budgetUsd),currency:'USDC',bucket,status:workerStatus||appStatus.toLowerCase(),firstSeenAt:String(task?.observedAt||app?.appliedAt||''),lastSeenAt:String(worker?.updatedAt||app?.updatedAt||app?.appliedAt||task?.observedAt||''),appliedAt:String(app?.appliedAt||''),acceptedAt:String(worker?.acceptedAt||''),submittedAt:String(worker?.submittedAt||''),reason:String(worker?.submitError||worker?.qaReasons?.join?.('; ')||app?.error||'').slice(0,220),cryptoPayout:true,payoutVerified:true});
       }
       for(const row of Object.values(registry||{})){
         const source=String(row?.source||'').toLowerCase();if(!source||disabled.has(source))continue;
         const id=`registry:${row.identity||`${source}:${row.externalId||''}`}`;if(seen.has(id))continue;
         const status=String(row?.status||'new');
         const bucket=['dispatch_pending','bid_submitted','claimed','executing','qa'].includes(status)?'working':['delivered','completed'].includes(status)?'done':['paid','settled'].includes(status)?'paid':['archived','graveyard','stale_check','policy_hold','not_eligible','system_blocked','capability_hold','manual_attention','rejected','expired','cancelled'].includes(status)?'archive':status==='ready'?'ready':'new';
-        rows.push({id,title:String(row?.title||row?.externalId||'Marketplace job').slice(0,220),source,url:safeUrl(row?.url),category:'marketplace',amountUsd:num(row?.budgetUsd),currency:String(row?.currency||'USD').toUpperCase(),bucket,status,firstSeenAt:String(row?.firstSeenAt||''),lastSeenAt:String(row?.lastSeenAt||row?.lastStateAt||''),reason:String(row?.reason||row?.reasonCode||'').slice(0,220),cryptoPayout:['USDC','USDT','ETH','BTC','SOL','DAI'].includes(String(row?.currency||'').toUpperCase()),payoutVerified:false});
+        rows.push({id,title:String(row?.title||row?.externalId||'Marketplace job').slice(0,220),source,url:safeUrl(row?.url),category:'marketplace',amountUsd:num(row?.budgetUsd),currency:String(row?.currency||'USD').toUpperCase(),bucket,status,firstSeenAt:String(row?.firstSeenAt||row?.createdAt||row?.lastSeenAt||''),lastSeenAt:String(row?.lastSeenAt||row?.lastStateAt||''),appliedAt:String(row?.bidSubmittedAt||row?.claimedAt||''),acceptedAt:String(row?.claimedAt||''),submittedAt:String(row?.deliveredAt||''),reason:String(row?.reason||row?.reasonCode||'').slice(0,220),cryptoPayout:['USDC','USDT','ETH','BTC','SOL','DAI'].includes(String(row?.currency||'').toUpperCase()),payoutVerified:false});
       }
-      const order={working:0,ready:1,new:2,done:3,paid:4,archive:9};
-      rows.sort((a,b)=>(order[a.bucket]??5)-(order[b.bucket]??5)||Date.parse(b.lastSeenAt||b.firstSeenAt||0)-Date.parse(a.lastSeenAt||a.firstSeenAt||0));
+      // Stable owner-facing order: a job's position is based on when it first appeared, not
+      // on every scan touching lastSeenAt. This prevents the live table from jumping around.
+      rows.sort((a,b)=>time(b.firstSeenAt||b.appliedAt||b.lastSeenAt)-time(a.firstSeenAt||a.appliedAt||a.lastSeenAt)||String(a.id).localeCompare(String(b.id)));
       const counts={};for(const row of rows)counts[row.bucket]=(counts[row.bucket]||0)+1;
       const payload={generatedAt:new Date().toISOString(),scope:'worldwide',intervalSeconds:30,total:rows.length,counts,actioner:actioner?.stats||{},rows:rows.slice(0,1200)};
       fs.writeFileSync(this.publicFile,JSON.stringify(payload),{encoding:'utf8',mode:0o644});
@@ -61,9 +63,9 @@ export class GlobalFeedPublisher{
   }
 }
 function webActionBucket(status,lead){
-  if(['applied','applied_email','application_uncertain','account_or_email_verification_required','native_api_route'].includes(status))return'ready';
-  if(['inspecting_direct','email_send_in_progress','accepted','accepted_waiting_treasury','accepted_needs_capability','executing','submission_uncertain'].includes(status))return'working';
-  if(status==='submitted')return'done';if(status==='paid')return'paid';
+  if(['applied','applied_email','application_uncertain','account_or_email_verification_required','native_api_route','email_rate_limited'].includes(status))return'applied';
+  if(['inspecting_direct','email_send_in_progress','accepted','accepted_email','accepted_waiting_treasury','accepted_needs_capability','executing','executing_email','delivery_email_in_progress','submission_uncertain'].includes(status))return'working';
+  if(['submitted','submitted_email'].includes(status))return'done';if(status==='paid')return'paid';
   if(['archived','human_gate','ai_prohibited','physical_or_employment','paid_registration_required','capability_blocked','accepted_repair_exhausted','no_direct_route'].includes(status))return'archive';
   if(['needs_capability','payout_unverified','registration_email_missing','inspect_or_apply_failed','direct_fetch_failed','direct_action_failed','email_channel_unavailable'].includes(status))return'new';
   return lead?.applyReady?'ready':'new';
@@ -73,8 +75,10 @@ function taskforceBucket(appStatus,workerStatus){
   if(['submitted'].includes(workerStatus)||appStatus==='SUBMITTED')return'done';
   if(['preparing','executing','submission_uncertain','waiting_agent_treasury'].includes(workerStatus)||['ACCEPTED','IN_PROGRESS','WORKING','SUBMISSION_REJECTED'].includes(appStatus))return'working';
   if(['rejected_after_repairs','blocked_capability','repair_exhausted','submit_failed'].includes(workerStatus)||['REJECTED','APPLY_FAILED'].includes(appStatus))return'archive';
+  if(['PENDING','APPLIED'].includes(appStatus))return'applied';
   return'ready';
 }
 function readJson(file,fallback){try{return JSON.parse(fs.readFileSync(file,'utf8'));}catch{return fallback}}
 function safeUrl(value){const v=String(value||'');return /^https?:\/\//i.test(v)?v:''}
 function num(value){const n=Number(value||0);return Number.isFinite(n)?n:0}
+function time(value){const n=Date.parse(String(value||''));return Number.isFinite(n)?n:0}
