@@ -4,6 +4,10 @@ import { tavilySearch } from './tavily-tool.js';
 
 const AGGREGATOR_HOST=/(^|\.)(indeed\.com|ziprecruiter\.com|dailyremote\.com|remoterocketship\.com|remoteleads\.io|euremotejobs\.com|weworkremotely\.com|nodesk\.co)$/i;
 const MAX_FETCH_BYTES=1_500_000;
+const TEXTUAL_SKILLS=new Set(['translation','copywriting','web-research','data-transform','document-generation','code-analysis','app-automation','general-digital']);
+const MEDIA_TERM=/\b(?:logo design|podcast cover|cover art|illustration|brand identity|graphic design|figma design|canva design|video edit(?:ing)?|motion graphics|3d render(?:ing)?)\b/ig;
+const BAD_ROUTE_TLD=/\.(?:png|jpe?g|gif|svg|webp|ico|css|js|map)$/i;
+const BAD_ROUTE_DOMAIN=/^(?:example\.(?:com|org|net)|2x\.png|localhost)$/i;
 
 export class SearchFirstLeadActioner extends BrowserlessLeadActioner{
   shouldBrowserlessInspect(lead){
@@ -38,36 +42,30 @@ export class SearchFirstLeadActioner extends BrowserlessLeadActioner{
       const payout=this.resolvePayout(lead,evidenceText);
       if(!payout.paid){this.setAction(id,{status:'payout_unverified',nextRetryAt:new Date(Date.now()+6*60*60_000).toISOString()});return;}
 
-      let routes=[
-        ...discoverEmailRoutes(page.html,page.finalUrl||lead.url),
-        ...discoverEmailRoutes(searchFallback.html||'',lead.url)
-      ];
+      // Only trust emails parsed from fetched pages. Search snippets are discovery hints and
+      // can contain example addresses or image asset names such as avatar@2x.png.
+      let routes=[...discoverEmailRoutes(page.html,page.finalUrl||lead.url)];
       const candidateUrls=[...discoverApplyLinks(page.html,page.finalUrl||lead.url),...(searchFallback.urls||[])];
-      for(const url of unique(candidateUrls).filter(url=>hostname(url)!==host||!AGGREGATOR_HOST.test(host)).slice(0,5)){
+      for(const url of unique(candidateUrls).filter(url=>hostname(url)!==host||!AGGREGATOR_HOST.test(host)).slice(0,6)){
         const follow=await fetchPage(url);
         if(follow.ok)routes.push(...discoverEmailRoutes(follow.html,follow.finalUrl||url));
-        if(routes.length>=3)break;
+        if(routes.filter(validRoute).length>=3)break;
       }
-      // If the original listing/company pages still expose no route, explicitly search for
-      // a PUBLIC job-application contact. We do not scrape personal emails or guess
-      // addresses: only emails returned in a job/apply/proposal context are admitted by
-      // discoverEmailRoutes().
-      if(!routes.length){
+      if(!routes.filter(validRoute).length){
         const contactSearch=await searchForExplicitApplicationContact(lead,host,this.env);
         if(contactSearch.ok){
-          routes.push(...discoverEmailRoutes(contactSearch.html||'',lead.url));
-          for(const url of (contactSearch.urls||[]).slice(0,4)){
+          for(const url of (contactSearch.urls||[]).slice(0,6)){
             const follow=await fetchPage(url);
             if(follow.ok)routes.push(...discoverEmailRoutes(follow.html,follow.finalUrl||url));
-            if(routes.length>=3)break;
+            if(routes.filter(validRoute).length>=3)break;
           }
         }
       }
-      routes=rankRoutes(routes);
+      routes=rankRoutes(routes.filter(validRoute));
       const route=routes[0];
       if(!route){
-        const reason=page.ok?'no explicit direct application email found':'aggregator/direct page blocked; search fallback found no explicit application email';
-        this.setAction(id,{status:'no_direct_route',reason,nextRetryAt:new Date(Date.now()+12*60*60_000).toISOString(),payout,skill:capability.skill,searchFallbackUsed:Boolean(searchFallback.ok),directFetchError:page.error||''});
+        const reason=page.ok?'no verified direct application email found':'aggregator/direct page blocked; search fallback found no verified application email';
+        this.setAction(id,{status:'no_direct_route',reason,nextRetryAt:new Date(Date.now()+6*60*60_000).toISOString(),payout,skill:capability.skill,contactSearchAttempted:true,searchFallbackUsed:Boolean(searchFallback.ok),directFetchError:page.error||''});
         this.event('lead_no_direct_route',{id,host,searchFallbackUsed:Boolean(searchFallback.ok),directFetchError:page.error||''});return;
       }
 
@@ -83,20 +81,29 @@ export class SearchFirstLeadActioner extends BrowserlessLeadActioner{
   }
 }
 
-// Search snippets often contain marketplace navigation such as "Writing · Graphic Design ·
-// Translation". That chrome used to make an ordinary translation/research lead require the
-// unavailable design_media_tool. First classify the rich snippet; if DESIGN is the only
-// blocker and the actual lead title/category is not a media job, re-check the true job scope.
 function classifyLeadCapability(lead,context){
   const rich=`${String(lead?.title||'')}\n${String(lead?.snippet||'')}`.slice(0,6000);
   const first=classifyOpportunity(toCapabilityOpportunity(lead,rich),{...context,hasBrowserTool:false});
   const missing=Array.isArray(first?.missingTools)?first.missingTools.map(String):[];
-  if(first.executable||missing.length!==1||missing[0]!=='design_media_tool'||looksLikeRealMediaLead(lead))return first;
-  const narrow=`${String(lead?.category||'')}\n${String(lead?.title||'')}`.slice(0,1800);
-  return classifyOpportunity(toCapabilityOpportunity(lead,narrow),{...context,hasBrowserTool:false});
+  if(first.executable||missing.length!==1||missing[0]!=='design_media_tool'||!TEXTUAL_SKILLS.has(String(first.skill||''))||looksLikeRealMediaLead(lead))return first;
+  // Strip cross-category marketplace navigation such as "Writing | Graphic Design |
+  // Translation" before the second classification. Actual media projects are caught above.
+  const cleanedTitle=String(lead?.title||'').replace(MEDIA_TERM,' ').replace(/\s+/g,' ').trim();
+  const narrow=`${String(lead?.category||'')}\n${cleanedTitle}`.slice(0,1800);
+  return classifyOpportunity(toCapabilityOpportunity({...lead,title:cleanedTitle},narrow),{...context,hasBrowserTool:false});
 }
 function toCapabilityOpportunity(lead,description){return{source:'global-web',externalId:String(lead?.id||''),title:String(lead?.title||'Paid digital work'),description,category:String(lead?.category||'general-digital'),budgetUsd:Number(lead?.amountUsd||0),currency:String(lead?.payoutCurrency||'USD'),network:lead?.cryptoPayout?'crypto':'fiat',escrowed:Boolean(lead?.payoutVerified),claimMode:'competitive_submission',status:'open',url:String(lead?.url||''),skills:[]};}
-function looksLikeRealMediaLead(lead){const scope=`${String(lead?.category||'')} ${String(lead?.title||'')}`.toLowerCase();return /\b(graphic[- ]design|logo|illustration|figma|canva|video edit|motion graphics|3d render|podcast cover|cover art|ui\/?ux|website design)\b/i.test(scope);}
+function looksLikeRealMediaLead(lead){
+  const category=String(lead?.category||'').toLowerCase();if(/^(?:graphic-design|ui-ux|video|audio|design)$/.test(category))return true;
+  const title=String(lead?.title||'').toLowerCase();
+  return /\b(?:design|create|make|edit|produce|render)\b.{0,35}\b(?:logo|illustration|brand identity|figma|canva|video|motion graphics|3d|cover art)\b|\b(?:logo|graphic|figma|video|motion|3d)\s+(?:designer|editor|artist|project|needed|wanted)\b/i.test(title);
+}
+function validRoute(row){
+  const email=String(row?.email||'').trim().toLowerCase();const parts=email.split('@');if(parts.length!==2)return false;
+  const [local,domain]=parts;if(!local||!domain||BAD_ROUTE_DOMAIN.test(domain)||BAD_ROUTE_TLD.test(domain))return false;
+  if(/^(?:test|example|sample|demo|user|name|email)$/i.test(local))return false;
+  return /^[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}$/i.test(email);
+}
 
 async function searchForOriginalApplication(lead,host,env){
   const title=cleanTitle(lead?.title);
@@ -109,29 +116,26 @@ async function searchForExplicitApplicationContact(lead,host,env){
   const title=cleanTitle(lead?.title);
   const sourceHint=companyHint(lead,host);
   const category=String(lead?.category||'freelance').replace(/[^a-z0-9 -]/gi,' ').slice(0,60);
-  // The terms are deliberately role mailboxes, not people-search patterns.
   const queries=[
     `"${title}" ${sourceHint} ${category} "apply by email" OR "send proposal" OR "application email" -site:${host}`,
     `"${title}" ${sourceHint} (jobs@ OR careers@ OR hiring@ OR talent@ OR freelance@ OR projects@) -site:${host}`,
     `${sourceHint} ${category} freelancer contractor "send your proposal" email -site:${host}`
   ];
-  let text='',html='',urls=[];let ok=false;
+  let text='',urls=[];let ok=false;
   for(const query of queries){
     const result=await searchBundle(query,env);
-    if(!result.ok)continue;ok=true;text+=`\n${result.text}`;html+=`\n${result.html}`;urls.push(...result.urls);
-    if(discoverEmailRoutes(html,lead?.url||'').length)break;
+    if(!result.ok)continue;ok=true;text+=`\n${result.text}`;urls.push(...result.urls);
   }
-  return{ok,text:text.slice(0,35_000),html:html.slice(0,90_000),urls:unique(urls).slice(0,12)};
+  return{ok,text:text.slice(0,35_000),urls:unique(urls).slice(0,16)};
 }
 
 async function searchBundle(query,env){
   const result=await tavilySearch(query,env);
-  if(!result.ok)return{ok:false,text:'',html:'',urls:[],error:String(result.error||'search_failed')};
+  if(!result.ok)return{ok:false,text:'',urls:[],error:String(result.error||'search_failed')};
   const rows=(result.results||[]).slice(0,8);
   const text=rows.map(row=>`${row.title||''} ${row.snippet||''}`).join('\n').slice(0,25_000);
-  const html=rows.map(row=>`<section><a href="${escapeAttr(row.url||'')}">${escapeHtml(row.title||'')}</a><p>${escapeHtml(row.snippet||'')}</p></section>`).join('\n');
   const urls=rows.map(row=>String(row.url||'')).filter(url=>/^https?:\/\//i.test(url));
-  return{ok:true,text,html,urls};
+  return{ok:true,text,urls};
 }
 
 async function fetchPage(url){
@@ -157,5 +161,3 @@ function now(){return new Date().toISOString();}
 function backoffMs(attempt){return Math.min(12*60*60_000,Math.max(10*60_000,10*60_000*Math.pow(2,Math.min(6,Math.max(0,Number(attempt||1)-1)))));}
 function stripHtml(value){return decodeEntities(String(value||'').replace(/<script\b[\s\S]*?<\/script>/gi,' ').replace(/<style\b[\s\S]*?<\/style>/gi,' ').replace(/<[^>]+>/g,' ').replace(/\s+/g,' ')).trim();}
 function decodeEntities(value){return String(value||'').replace(/&nbsp;/gi,' ').replace(/&amp;/gi,'&').replace(/&lt;/gi,'<').replace(/&gt;/gi,'>').replace(/&quot;/gi,'"').replace(/&#39;/gi,"'");}
-function escapeHtml(value){return String(value||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
-function escapeAttr(value){return escapeHtml(value).replace(/'/g,'&#39;');}
