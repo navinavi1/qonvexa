@@ -2,7 +2,7 @@ import 'dotenv/config';
 import { LeanInternetHunter } from '../src/autonomos/lean-internet-hunter.js';
 import { RevenueGlobalWorkHunter } from '../src/autonomos/revenue-global-work-hunter.js';
 import { ReliableGlobalLeadActioner } from '../src/autonomos/reliable-global-lead-actioner.js';
-import { SearchFirstLeadActioner } from '../src/autonomos/search-first-lead-actioner.js';
+import { RevenueLeadActioner } from '../src/autonomos/revenue-lead-actioner.js';
 import { migrateGlobalActionerState } from '../src/autonomos/global-actioner-migrations.js';
 import { TaskForceVerifier } from '../src/autonomos/taskforce-verifier.js';
 import { TaskForceWorker } from '../src/autonomos/taskforce-worker.js';
@@ -28,7 +28,7 @@ const globalHunter=new RevenueGlobalWorkHunter({env:process.env,storageDir:proce
 const browserActioner=enabled(process.env.AUTONOMOS_GLOBAL_ACTIONER_ENABLED,'false')
   ? new ReliableGlobalLeadActioner({env:process.env,storageDir:process.env.STORAGE_DIR,logger:console}) : null;
 const browserlessActioner=enabled(process.env.AUTONOMOS_BROWSERLESS_ACTIONER_ENABLED,'true')
-  ? new SearchFirstLeadActioner({env:process.env,storageDir:process.env.STORAGE_DIR,logger:console}) : null;
+  ? new RevenueLeadActioner({env:process.env,storageDir:process.env.STORAGE_DIR,logger:console}) : null;
 const taskForceVerifier=new TaskForceVerifier({env:process.env,storageDir:process.env.STORAGE_DIR,logger:console});
 const taskForceWorker=new TaskForceWorker({env:process.env,storageDir:process.env.STORAGE_DIR,logger:console});
 const globalFeedPublisher=new GlobalFeedPublisher({env:process.env,storageDir:process.env.STORAGE_DIR,logger:console});
