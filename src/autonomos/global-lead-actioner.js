@@ -69,7 +69,7 @@ export class GlobalLeadActioner {
     const action=this.state.actions[lead.id];
     if(!action)return true;
     const status=String(action.status||'');
-    if(['archived','human_gate','ai_prohibited','physical_or_employment','paid_registration_required','capability_blocked','applied','accepted','executing','submitted','paid'].includes(status))return false;
+    if(['archived','human_gate','ai_prohibited','physical_or_employment','paid_registration_required','capability_blocked','applied','application_uncertain','account_or_email_verification_required','accepted','executing','accepted_repair_exhausted','submitted','paid'].includes(status))return false;
     const next=Date.parse(String(action.nextRetryAt||0));
     return !Number.isFinite(next)||next<=Date.now();
   }
@@ -92,7 +92,11 @@ export class GlobalLeadActioner {
       this.state.stats.inspected=Number(this.state.stats.inspected||0)+1;
       const disposition=this.inspectPage(initial,lead);
       if(disposition){this.archive(id,disposition.status,disposition.reason);return;}
-      const capability=classifyOpportunity(this.toOpportunity(lead,initial),this.capabilityContext());
+      // Capability must describe the job itself, not marketplace menus/footers such as
+      // “buy services” or unrelated category links like “graphic design”. The full live
+      // page is still used for status, payout and protected-gate checks.
+      const capabilityText=`${String(lead.title||'')}\n${String(lead.snippet||'')}`.slice(0,6000);
+      const capability=classifyOpportunity(this.toOpportunity(lead,capabilityText),this.capabilityContext());
       if(!capability.executable){
         this.setAction(id,{status:'needs_capability',missingTools:capability.missingTools||[],skill:capability.skill,nextRetryAt:new Date(Date.now()+6*60*60_000).toISOString()});
         this.event('lead_needs_capability',{id,host,skill:capability.skill,missingTools:capability.missingTools||[]});return;
@@ -115,11 +119,11 @@ export class GlobalLeadActioner {
         this.state.stats.applied=Number(this.state.stats.applied||0)+1;this.event('lead_applied',{id,host,title:String(lead.title||'').slice(0,120),amountUsd:payout.amountUsd,currency:payout.currency,skill:capability.skill});return;
       }
       if(/sign in|log in|verify your email|check your email|activation link/i.test(after)){
-        this.setAction(id,{status:'account_or_email_verification_required',nextRetryAt:new Date(Date.now()+12*60*60_000).toISOString(),applicationUrl:url});return;
+        this.setAction(id,{status:'account_or_email_verification_required',nextCheckAt:new Date(Date.now()+12*60*60_000).toISOString(),applicationUrl:url});return;
       }
       // An application POST may have reached the site even when the UI result is ambiguous.
       // Never blindly resubmit. Revisit later using saved cookies first.
-      this.setAction(id,{status:'application_uncertain',applicationUrl:url,nextRetryAt:new Date(Date.now()+24*60*60_000).toISOString(),lastResult:safeActionResult(action).slice(0,500)});
+      this.setAction(id,{status:'application_uncertain',applicationUrl:url,nextCheckAt:new Date(Date.now()+30*60_000).toISOString(),lastResult:safeActionResult(action).slice(0,500)});
       this.event('lead_application_uncertain',{id,host});
     }catch(error){
       this.setAction(id,{status:'inspect_or_apply_failed',error:safeError(error),nextRetryAt:new Date(Date.now()+backoffMs(this.state.actions[id]?.attempts||1)).toISOString()});
@@ -187,7 +191,10 @@ export class GlobalLeadActioner {
     const id=String(lead.id),prior=this.state.actions[id]||{};
     if(['executing','submitted','paid'].includes(String(prior.status||'')))return;
     const opportunity=this.toOpportunity(lead,pageContent);opportunity.claimMode='already_assigned';opportunity.status='active';opportunity.description=String(pageContent||lead.snippet||'').slice(0,14000);
-    const capability=classifyOpportunity(opportunity,this.capabilityContext());
+    // Use job-specific discovery text for capability gating; execution still receives the
+    // accepted work page itself. This prevents marketplace chrome from inventing missing tools.
+    const capabilityInput={...opportunity,description:`${String(lead.title||'')}\n${String(lead.snippet||'')}`.slice(0,6000)};
+    const capability=classifyOpportunity(capabilityInput,this.capabilityContext());
     if(!capability.executable){this.setAction(id,{status:'accepted_needs_capability',missingTools:capability.missingTools||[],skill:capability.skill,nextCheckAt:new Date(Date.now()+2*60*60_000).toISOString()});return;}
     const config=this.currentConfig();const ledger=this.store.readNdjson('ledger.ndjson',-1);const treasury=computeEarnedSpendBudgetUsd(ledger,config);
     if(treasury<=0.000001){this.setAction(id,{status:'accepted_waiting_treasury',nextCheckAt:new Date(Date.now()+30*60_000).toISOString()});return;}
@@ -243,5 +250,10 @@ function safeError(error){return String(error?.message||error||'').slice(0,300);
 function safeActionResult(value){try{return JSON.stringify(value?.data??value?.result??value).slice(0,2000);}catch{return String(value||'').slice(0,2000);}}
 function backoffMs(attempt){return Math.min(24*60*60_000,Math.max(15*60_000,15*60_000*Math.pow(2,Math.min(6,Math.max(0,Number(attempt||1)-1)))));}
 function sleep(ms){return new Promise(resolve=>setTimeout(resolve,ms));}
-async function pageText(page){try{return String(await page.locator('body').innerText({timeout:8000})).slice(0,30000);}catch{return'';}}
+async function pageText(page){
+  for(const selector of ['main','article','[role="main"]','body']){
+    try{const text=String(await page.locator(selector).first().innerText({timeout:5000})).trim();if(text.length>=80)return text.slice(0,30000);}catch{}
+  }
+  return'';
+}
 async function pool(items,limit,worker){let index=0;const runners=Array.from({length:Math.min(limit,items.length)},async()=>{while(index<items.length){const item=items[index++];await worker(item);}});await Promise.allSettled(runners);}
