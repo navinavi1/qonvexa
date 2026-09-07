@@ -1,4 +1,5 @@
 import { SearchFirstLeadActioner } from './search-first-lead-actioner.js';
+import { composioExecute } from './composio-tool.js';
 
 export class RevenueLeadActioner extends SearchFirstLeadActioner{
   priority(lead){
@@ -9,9 +10,8 @@ export class RevenueLeadActioner extends SearchFirstLeadActioner{
   }
 
   // Applying for work must never queue behind a paid model call. Execution can use the
-  // full LLM/tool stack after acceptance; the first contact only needs a truthful,
-  // job-specific statement of capability. This keeps the application funnel fast and
-  // deterministic while still avoiding fake experience/identity claims.
+  // full LLM/tool stack after acceptance; first contact only needs a truthful job-specific
+  // statement of capability.
   async makeProposal(lead,_text,capability,payout){
     const title=clean(String(lead?.title||'the project')).slice(0,180);
     const skill=String(capability?.skill||lead?.category||'digital').toLowerCase();
@@ -34,7 +34,32 @@ export class RevenueLeadActioner extends SearchFirstLeadActioner{
       this.event('email_application_rate_limited',{hour,hourCap,day,dayCap});
       return;
     }
-    return super.sendApplicationEmailOnce(args);
+
+    const {id,host,lead,route,subject,body,proposal,payout,capability}=args||{};
+    const prior=this.state.actions?.[id]||{};
+    if(['email_send_in_progress','applied_email','application_uncertain'].includes(String(prior.status||'')))return;
+    this.setAction(id,{status:'email_send_in_progress',recipient:route.email,applicationUrl:lead.url,proposal:String(proposal||'').slice(0,1800),payout,skill:capability.skill,emailStartedAt:new Date().toISOString(),nextRetryAt:''});
+
+    // GMAIL_SEND_EMAIL is Composio's canonical current Gmail action. Calling it directly
+    // removes the catalog-search/schema-discovery request from every application and uses
+    // the documented recipient_email/subject/body shape.
+    const result=await composioExecute({
+      toolSlug:'GMAIL_SEND_EMAIL',
+      arguments:{recipient_email:String(route.email||''),subject:String(subject||'').slice(0,240),body:String(body||'').slice(0,7000)}
+    },this.env);
+    if(result.ok){
+      this.setAction(id,{status:'applied_email',appliedAt:new Date().toISOString(),emailLogId:String(result.logId||''),recipient:route.email,reason:'targeted application sent to explicit public application contact',nextCheckAt:new Date(Date.now()+30*60_000).toISOString()});
+      this.state.stats.applied=Number(this.state.stats.applied||0)+1;
+      this.event('lead_applied_email',{id,host,recipient:maskEmail(route.email),title:String(lead.title||'').slice(0,120),amountUsd:payout.amountUsd,currency:payout.currency,skill:capability.skill});return;
+    }
+    if(result.needsConnectedAccount||/connected.?account|auth|unauthor|forbidden/i.test(`${result.error||''} ${result.detail||''}`)){
+      this.setAction(id,{status:'email_channel_unavailable',reason:String(result.detail||result.error||'gmail_not_connected').slice(0,240),nextRetryAt:new Date(Date.now()+60*60_000).toISOString()});
+      this.event('email_channel_unavailable',{id,host,error:String(result.error||'gmail_not_connected').slice(0,120)});return;
+    }
+    // An outbound send is non-idempotent. If Composio/Gmail returns an ambiguous failure,
+    // do not blindly resend the same job application.
+    this.setAction(id,{status:'application_uncertain',reason:`email send outcome uncertain: ${String(result.detail||result.error||'unknown').slice(0,220)}`,recipient:route.email,nextCheckAt:new Date(Date.now()+60*60_000).toISOString()});
+    this.event('lead_email_application_uncertain',{id,host,error:String(result.error||'unknown').slice(0,120)});
   }
 }
 
@@ -49,3 +74,4 @@ function proposalLine(skill){
   return 'We can complete the digital deliverable with the appropriate research, code, data, content and automation tools available to the agent team';
 }
 function clean(value){return String(value||'').replace(/[\r\n\t]+/g,' ').replace(/\s+/g,' ').trim();}
+function maskEmail(email){const [local,domain]=String(email||'').split('@');return local&&domain?`${local.slice(0,2)}***@${domain}`:'redacted';}
