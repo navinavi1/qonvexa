@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-const DURABLE_DISPATCH_MAX_AGE_MS=15*60_000;
+const DURABLE_DISPATCH_MAX_AGE_MS=2*60_000;
 
 export function pruneTerminalInFlightJobs(value){
   if(!value||Array.isArray(value)||typeof value!=='object')return value;
@@ -13,10 +13,10 @@ export function pruneTerminalInFlightJobs(value){
   return value;
 }
 
-// Trigger/Temporal dispatch is only a transport reservation, not a marketplace claim.
-// A lost callback used to hold work for six hours. On restart, release a reservation older
-// than 15 minutes. The callback carries a unique leaseId; after redispatch an old callback
-// becomes stale and releaseDispatchPending() ignores it before any marketplace side effect.
+// Durable dispatch is only a transport reservation, not a marketplace claim. If no worker
+// callback arrives within two minutes, release the pre-claim lease. The callback carries a
+// unique leaseId; after redispatch an old callback becomes stale and releaseDispatchPending()
+// ignores it before any marketplace side effect. everOwned rows are never reset here.
 export function releaseStaleDispatchReservations(value,{now=Date.now(),maxAgeMs=DURABLE_DISPATCH_MAX_AGE_MS}={}){
   if(!value||Array.isArray(value)||typeof value!=='object')return value;
   for(const [identity,row] of Object.entries(value)){
