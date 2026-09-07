@@ -21,6 +21,37 @@ export function executionEvidenceSummary(deliverable={}){
   }
   return {contentChars:String(deliverable?.content||'').length,toolCount:calls.length,tools,failures};
 }
+
+function buildRevenueSourceDiagnostics(state={},marketRows=[]){
+  const bySource=new Map();
+  const get=source=>{
+    const id=code(source);
+    if(!bySource.has(id))bySource.set(id,{source:id,discovered:0,sampled:0,executable:0,candidates:0,maxPayoutUsd:0,blockers:{}});
+    return bySource.get(id);
+  };
+  const legacyIds=['clawlancer','t2000','dealwork','workprotocol','superteam'];
+  for(const source of legacyIds){
+    const row=get(source);const health=state.connectorHealth?.[source]||{};const lifecycle=state.marketplaceLifecycle?.[source]||{};
+    row.discovered=Math.max(row.discovered,Number(health.count||health.openCount||health.signals||0));
+    row.healthy=health.ok===true;row.workAutoReady=Boolean(lifecycle.workAutoReady);row.fullAutoReady=Boolean(lifecycle.fullAutoReady);row.cashoutState=code(lifecycle.cashoutState||'unknown');
+  }
+  for(const opportunity of Array.isArray(state.opportunityEconomics)?state.opportunityEconomics:[]){
+    const row=get(opportunity.source);row.sampled++;
+    if(opportunity.preflight?.ok)row.executable++;
+    if(opportunity.candidacy?.isCandidate)row.candidates++;
+    row.maxPayoutUsd=Math.max(row.maxPayoutUsd,Number(opportunity.budgetUsd||0));
+    for(const reason of opportunity.candidacy?.reasons||[])add(row.blockers,reason);
+  }
+  for(const market of marketRows){
+    const row=get(market.source);row.discovered=Math.max(row.discovered,Number(market.signals||0));row.healthy=Boolean(market.healthy);row.authenticated=Boolean(market.authenticated);
+    row.sampled+=Object.values(market.statuses||{}).reduce((n,v)=>n+Number(v||0),0);
+    row.candidates+=Number(market.statuses?.eligible||0);
+    for(const [reason,count] of Object.entries(market.blockers||{}))row.blockers[code(reason)]=(row.blockers[code(reason)]||0)+Number(count||0);
+  }
+  return [...bySource.values()].filter(row=>row.discovered||row.sampled||row.candidates||Object.keys(row.blockers).length)
+    .sort((a,b)=>b.candidates-a.candidates||b.maxPayoutUsd-a.maxPayoutUsd||b.discovered-a.discovered||a.source.localeCompare(b.source));
+}
+
 export function executionDiagnostics({config={},state={},registry=[],inFlight=[],newMarkets=[],capabilities={}}={}){
   const statuses={},failures={},recovery={},recoveryFailures={};
   for(const row of registry){add(statuses,row.status);if(row.reasonCode&&['system_blocked','retry','policy_hold'].includes(row.status))add(failures,row.reasonCode);}
@@ -41,11 +72,12 @@ export function executionDiagnostics({config={},state={},registry=[],inFlight=[]
       canary:canary?code(canary.status):'none',statuses,blockers,missingTools};
   });
   const tools=Object.fromEntries(Object.entries(capabilities).filter(([key,value])=>typeof value==='boolean'&&/^(has|llm)/.test(key)));
+  const revenueSources=buildRevenueSourceDiagnostics(state,markets);
   return {enabled:Boolean(config.enabled),killSwitch:Boolean(config.killSwitch),autoClaimJobs:Boolean(config.autoClaimJobs),autoCompetitiveSubmissions:Boolean(config.autoCompetitiveSubmissions),
     zeroSpendMode:Boolean(config.zeroSpendMode),earnedFundsOnly:Boolean(config.earnedFundsOnly),allowExternalSpending:Boolean(config.allowExternalSpending),
     seedSpendBudgetUsd:Number(config.seedSpendBudgetUsd||0),availableSpendUsd:Number(state.earnedSpendBudgetUsd||0),
     maxPaidProcurementUsd:Number(config.maxPaidProcurementUsd||0),minJobPayoutUsd:Number(config.minJobPayoutUsd||0),
-    readiness:code(state.earningReadiness?.code),blockers:state.marketFunnel?.blockers||{},registry:statuses,failures,recovery,recoveryFailures,tools,markets};
+    readiness:code(state.earningReadiness?.code),blockers:state.marketFunnel?.blockers||{},registry:statuses,failures,recovery,recoveryFailures,tools,markets,revenueSources};
 }
 
 export function logExecutionEvent(logger,type,detail={}){
