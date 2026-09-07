@@ -2,12 +2,17 @@ import { SearchFirstLeadActioner } from './search-first-lead-actioner.js';
 import { composioExecute } from './composio-tool.js';
 
 const EXPLICIT_LISTING_INTENT=/\b(job|jobs|project|projects|hiring|hire|hiring for|looking for|seeking|wanted|needed|required|contract|contractor|bounty|task|tasks|apply|application|opening|vacancy|freelance (?:role|work|job)|paid (?:work|task|project))\b/i;
+const GENERIC_OR_CONTENT_TITLE=/\b(how to|guide|tutorial|tips?|template|templates|course|courses|best\s+.+\s+freelancers?|top\s+.+\s+freelancers?|hire\s+.+\s+freelancers?|find\s+.+\s+freelance jobs|freelance jobs and leads|work from home careers|project proposals?|score freelance clients|marketplace for freelancers?|services? for freelancers?)\b/i;
+const GENERIC_COUNT_TITLE=/^\s*\d+\s+(?:remote\s+)?(?:jobs|vacancies|openings|freelance jobs)\b/i;
+const SPECIFIC_ROLE_OR_REQUEST=/\b(request for proposals|\brfp\b|hiring|seeking|looking for|wanted|needed|required|opening|vacanc(?:y|ies)|contractor|freelance\s+(?:developer|writer|translator|designer|researcher|tester|engineer|assistant|specialist|consultant)|developer|engineer|writer|translator|designer|researcher|tester|quality assurance|\bqa\b|analyst|assistant|specialist|consultant|manager|moderator|copywriter|editor|proofreader|data entry|automation)\b/i;
+const JOB_URL_HINT=/\/(?:jobs?|projects?|gigs?|bount(?:y|ies)|careers?|opportunities|openings|vacancies)(?:\/|\?|$)/i;
+const DIRECT_APPLICATION_HINT=/apply by email|send (?:your )?proposal|email (?:your )?proposal|freelancer wanted|contractor needed|request for proposals|\brfp\b/i;
 
 export class RevenueLeadActioner extends SearchFirstLeadActioner{
   priority(lead){
     let score=super.priority(lead);
     if(lead?.directRouteHint)score+=120;
-    if(/apply by email|send (?:your )?proposal|email (?:your )?proposal|freelancer wanted|contractor needed/i.test(String(lead?.discoveredBy||'')))score+=80;
+    if(DIRECT_APPLICATION_HINT.test(String(lead?.discoveredBy||'')))score+=80;
     return score;
   }
 
@@ -25,9 +30,9 @@ export class RevenueLeadActioner extends SearchFirstLeadActioner{
   async sendApplicationEmailOnce(args){
     const {id,host,lead,route,subject,body,proposal,payout,capability}=args||{};
     const listingText=`${String(lead?.title||'')} ${String(lead?.snippet||'')}`;
-    if(!EXPLICIT_LISTING_INTENT.test(listingText)){
-      if(id)this.setAction(id,{status:'archived',reason:'not an explicit work listing; outbound application suppressed'});
-      this.event('lead_application_suppressed',{id,host,reason:'not_explicit_work_listing'});
+    if(!isSpecificWorkListing(lead)||!EXPLICIT_LISTING_INTENT.test(listingText)){
+      if(id)this.setAction(id,{status:'archived',reason:'not a specific paid work listing; outbound application suppressed'});
+      this.event('lead_application_suppressed',{id,host,reason:'not_specific_work_listing'});
       return;
     }
     const floor=Math.max(0,Number(this.env.AUTONOMOS_GLOBAL_MIN_JOB_PAYOUT_USD||this.env.AUTONOMOS_MIN_JOB_PAYOUT_USD||0.5));
@@ -40,13 +45,16 @@ export class RevenueLeadActioner extends SearchFirstLeadActioner{
 
     const now=Date.now();
     const events=Array.isArray(this.state?.events)?this.state.events:[];
+    // This is a provider/reputation pacing guard, not a business cap. Production can use
+    // the upper bound so every qualified listing is eventually attempted without blasting
+    // hundreds of messages in a single minute.
     const hourCap=Math.max(1,Math.min(100,Number(this.env.AUTONOMOS_EMAIL_APPLICATIONS_PER_HOUR||20)));
     const dayCap=Math.max(hourCap,Math.min(500,Number(this.env.AUTONOMOS_EMAIL_APPLICATIONS_PER_DAY||120)));
     const sentAt=events.filter(row=>String(row?.type||'')==='lead_applied_email').map(row=>Date.parse(String(row?.at||0))).filter(Number.isFinite);
     const hour=sentAt.filter(ts=>now-ts<60*60_000).length;
     const day=sentAt.filter(ts=>now-ts<24*60*60_000).length;
     if(hour>=hourCap||day>=dayCap){
-      if(id)this.setAction(id,{status:'email_rate_limited',reason:`email application channel protected: ${hour}/${hourCap} last hour, ${day}/${dayCap} last 24h`,nextRetryAt:new Date(now+60*60_000).toISOString()});
+      if(id)this.setAction(id,{status:'email_rate_limited',reason:`qualified application queued by email pacing: ${hour}/${hourCap} last hour, ${day}/${dayCap} last 24h`,nextRetryAt:new Date(now+15*60_000).toISOString()});
       this.event('email_application_rate_limited',{hour,hourCap,day,dayCap});
       return;
     }
@@ -78,6 +86,18 @@ export class RevenueLeadActioner extends SearchFirstLeadActioner{
   }
 }
 
+function isSpecificWorkListing(lead){
+  const title=clean(lead?.title).toLowerCase();
+  const snippet=clean(lead?.snippet).toLowerCase();
+  const discoveredBy=clean(lead?.discoveredBy).toLowerCase();
+  const url=String(lead?.url||'');
+  if(!title)return false;
+  if(GENERIC_OR_CONTENT_TITLE.test(title)||GENERIC_COUNT_TITLE.test(title))return false;
+  if(SPECIFIC_ROLE_OR_REQUEST.test(title))return true;
+  if(JOB_URL_HINT.test(url)&&EXPLICIT_LISTING_INTENT.test(`${title} ${snippet}`))return true;
+  if(DIRECT_APPLICATION_HINT.test(discoveredBy)&&/\b(project|contract|task|bounty|paid work|freelance work)\b/i.test(`${title} ${snippet}`))return true;
+  return false;
+}
 function proposalLine(skill){
   if(skill==='translation')return 'We can translate/localize the supplied material, preserve meaning and terminology, then run a consistency and completeness check';
   if(skill==='copywriting')return 'We can produce the requested copy to the supplied brief, structure it for the target audience, and perform a final clarity/accuracy edit';
