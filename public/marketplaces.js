@@ -132,7 +132,7 @@ async function marketplaceRequest(card, action, body = {}) {
     marketplaceFeedback.set(card.dataset.market,feedback.textContent);
   } catch (error) {
     feedback.textContent = error.message;
-    marketplaceFeedback.set(card.dataset.market,error.message);
+    marketplaceFeedback.set(card.dataset.market,error.message;
   } finally {
     buttons.forEach((b, i) => (b.disabled = prior[i]));
     delete card.dataset.request;
@@ -172,3 +172,50 @@ document.addEventListener("click", (event) => {
   if (button)
     marketplaceRequest(button.closest("[data-market]"), button.dataset.action);
 });
+
+// Simplified owner-facing Mission Control: one global list, six operational lanes.
+let globalFeedData={rows:[],counts:{},generatedAt:''};
+let globalFeedFilter='live';
+function htmlEsc(v){return String(v??'').replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':'&quot;',"'":"&#39;"})[c]);}
+function ensureGlobalFeedPanel(){
+  const legacy=document.querySelector('.autonomos-command-panel');
+  if(!legacy)return;
+  legacy.style.display='none';
+  document.querySelector('.autonomos-t2000-card')?.style.setProperty('display','none');
+  const legacyMarkets=document.querySelector('section[aria-label="AgentHansa and TaskBounty"]');
+  if(legacyMarkets)legacyMarkets.style.display='none';
+  if(document.getElementById('autonomos-global-work-feed'))return;
+  const panel=document.createElement('section');
+  panel.id='autonomos-global-work-feed';panel.className='admin-panel autonomos-panel global-work-feed';
+  panel.innerHTML=`<div class="admin-panel-head"><div><small>WORLDWIDE · LIVE</small><h2>All jobs</h2><p class="settings-note">New work appears at the top. Rejected, stale and low-value work is quarantined and never enters the agents' fresh-work queue.</p></div><div id="global-feed-meta"></div></div><div class="global-feed-tabs" role="tablist">${[['live','Live'],['ready','Ready'],['working','Working'],['done','Done'],['paid','Paid'],['archive','Archive']].map(([k,l])=>`<button class="admin-secondary global-feed-tab${k==='live'?' active':''}" data-global-feed="${k}" type="button">${l} <b data-global-count="${k}">0</b></button>`).join('')}</div><div class="autonomos-job-toolbar"><input id="global-feed-search" type="search" placeholder="Search every job, market or category…"></div><div class="autonomos-job-table-wrap"><table class="autonomos-job-table"><thead><tr><th>Job</th><th>Source</th><th>Category</th><th>Payout</th><th>Status</th><th>Seen</th></tr></thead><tbody id="global-feed-body"></tbody></table></div>`;
+  legacy.parentNode.insertBefore(panel,legacy);
+  if(!document.getElementById('global-feed-style')){
+    const style=document.createElement('style');style.id='global-feed-style';style.textContent=`.global-feed-tabs{display:flex;gap:.5rem;flex-wrap:wrap;margin:1rem 0}.global-feed-tab.active{outline:2px solid currentColor}.global-feed-tab b{margin-left:.35rem}.global-work-feed{border:1px solid rgba(120,140,255,.28)}#global-feed-meta{font-size:.82rem;opacity:.8}.global-feed-archive{opacity:.48}.global-feed-working{font-weight:600}`;document.head.appendChild(style);
+  }
+  panel.addEventListener('click',e=>{const b=e.target.closest('[data-global-feed]');if(!b)return;globalFeedFilter=b.dataset.globalFeed;panel.querySelectorAll('.global-feed-tab').forEach(x=>x.classList.toggle('active',x===b));renderGlobalFeed();});
+  panel.querySelector('#global-feed-search')?.addEventListener('input',renderGlobalFeed);
+}
+async function loadGlobalFeed(){
+  ensureGlobalFeedPanel();
+  try{const r=await fetch(`/autonomos-global-feed.json?t=${Date.now()}`,{cache:'no-store'});if(r.ok)globalFeedData=await r.json();}catch{}
+  renderGlobalFeed();
+}
+function renderGlobalFeed(){
+  const body=document.getElementById('global-feed-body');if(!body)return;
+  const search=String(document.getElementById('global-feed-search')?.value||'').trim().toLowerCase();
+  const rows=Array.isArray(globalFeedData.rows)?globalFeedData.rows:[];
+  const visible=rows.filter(row=>{
+    if(globalFeedFilter==='live'&&row.bucket==='archive')return false;
+    if(globalFeedFilter!=='live'&&row.bucket!==globalFeedFilter)return false;
+    if(!search)return true;
+    return `${row.title} ${row.source} ${row.category} ${row.status}`.toLowerCase().includes(search);
+  }).slice(0,300);
+  body.innerHTML=visible.length?visible.map(row=>`<tr class="global-feed-${htmlEsc(row.bucket)}"><td>${row.url?`<a href="${htmlEsc(row.url)}" target="_blank" rel="noopener noreferrer">${htmlEsc(row.title)}</a>`:htmlEsc(row.title)}</td><td>${htmlEsc(row.source)}</td><td>${htmlEsc(row.category)}</td><td>${Number(row.amountUsd||0)>0?`$${Number(row.amountUsd).toFixed(2)} ${htmlEsc(row.currency||'')}`:htmlEsc(row.currency||'—')}</td><td>${htmlEsc(row.status||row.bucket)}</td><td>${htmlEsc(row.lastSeenAt?new Date(row.lastSeenAt).toLocaleString():'—')}</td></tr>`).join(''):'<tr><td colspan="6">No jobs in this lane.</td></tr>';
+  const c=globalFeedData.counts||{};
+  const live=rows.filter(r=>r.bucket!=='archive').length;
+  for(const el of document.querySelectorAll('[data-global-count]')){const key=el.dataset.globalCount;el.textContent=key==='live'?live:Number(c[key]||0);}
+  const meta=document.getElementById('global-feed-meta');if(meta)meta.textContent=`${rows.length} tracked · ${live} live · refreshed ${globalFeedData.generatedAt?new Date(globalFeedData.generatedAt).toLocaleTimeString():'—'}`;
+}
+document.addEventListener('DOMContentLoaded',loadGlobalFeed);
+document.addEventListener('marketplace-updated',loadGlobalFeed);
+setInterval(loadGlobalFeed,10000);
