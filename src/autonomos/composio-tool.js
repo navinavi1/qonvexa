@@ -9,12 +9,12 @@ export async function composioSearch({query='',toolkit='',limit=12}={},env=proce
     const response=await fetch(`https://backend.composio.dev/api/v3.1/tools?${qs}`,{headers:{'x-api-key':key,accept:'application/json'},signal:withTimeout(20000,signal)});
     const body=await response.json().catch(()=>({}));
     if(!response.ok)return{ok:false,error:`composio_http_${response.status}`,detail:String(body?.error?.message||body?.message||'').slice(0,400)};
-    const items=(Array.isArray(body?.items)?body.items:[]).filter(item=>isAllowed(item?.slug,item?.toolkit?.slug,env)).slice(0,20).map(item=>({slug:item.slug,name:item.name||'',description:String(item.description||item.human_description||'').slice(0,600),toolkit:item.toolkit?.slug||'',requiresAuth:item.no_auth===false,inputParameters:item.input_parameters||{},version:String(item.version||'')}));
+    const items=(Array.isArray(body?.items)?body.items:[]).filter(item=>isAllowed(item?.slug,item?.toolkit?.slug,env)).slice(0,20).map(item=>({slug:item.slug,name:item.name||'',description:String(item.description||item.human_description||'').slice(0,600),toolkit:item.toolkit?.slug||'',requiresAuth:item.no_auth===false,inputParameters:item.input_parameters||{},version:String(item.version||item.toolkit_version||item.toolkit?.version||'')}));
     return{ok:true,items,nextCursor:body?.next_cursor||'',totalItems:Number(body?.total_items||items.length)};
   }catch(error){return{ok:false,error:signal?.aborted?'aborted_by_emergency_stop':String(error?.message||error).slice(0,300)}}
 }
 
-export async function composioExecute({toolSlug,arguments:args={},connectedAccountId='',userId=''}={},env=process.env,signal){
+export async function composioExecute({toolSlug,arguments:args={},connectedAccountId='',userId='',toolVersion=''}={},env=process.env,signal){
   const key=String(env.COMPOSIO_API_KEY||'').trim();
   if(!key)return{ok:false,error:'composio_api_key_missing'};
   const slug=String(toolSlug||'').trim().toUpperCase();
@@ -25,33 +25,31 @@ export async function composioExecute({toolSlug,arguments:args={},connectedAccou
     const info=await resolveToolInfo(slug,key,signal);
     const toolkit=info.toolkit||inferredToolkit;
     if(!isAllowed(slug,toolkit,env))return{ok:false,error:'composio_tool_blocked_by_financial_destructive_or_allowlist_policy'};
+    const version=validVersion(toolVersion)||validVersion(info.version)||await resolveCatalogVersion(slug,toolkit,key,signal);
     const accountMap=parseJson(env.AUTONOMOS_COMPOSIO_ACCOUNTS_JSON,{});
     let account=String(connectedAccountId||accountMap[toolkit]||accountMap[toolkit.toLowerCase()]||'');
     if(!account&&toolkit)account=await resolveConnectedAccountId(toolkit,key,signal);
-    const payload={arguments:args||{},...(info.version?{version:info.version}:{}),...(account?{connected_account_id:account}:{}),...(userId?{user_id:String(userId)}:{})};
+    const payload={arguments:args||{},...(version?{version}:{}),...(account?{connected_account_id:account}:{}),...(userId?{user_id:String(userId)}:{})};
     const response=await fetch(`https://backend.composio.dev/api/v3.1/tools/execute/${encodeURIComponent(slug)}`,{
       method:'POST',headers:{'content-type':'application/json','x-api-key':key},
       body:JSON.stringify(payload),
       signal:withTimeout(45000,signal)
     });
     const body=await response.json().catch(()=>({}));
-    if(response.ok&&body?.successful!==false)return{ok:true,data:body?.data??body,logId:body?.log_id||body?.logId||'',toolkit,toolVersion:info.version||''};
+    if(response.ok&&body?.successful!==false)return{ok:true,data:body?.data??body,logId:body?.log_id||body?.logId||'',toolkit,toolVersion:version||''};
 
-    // GMAIL_SEND_EMAIL has changed argument shape across toolkit versions. A fast HTTP 400
-    // is a request-validation failure, not an ambiguous Gmail send. Fall back to Composio's
-    // authenticated proxy and call Gmail's native users.messages.send endpoint directly.
-    // This keeps OAuth credentials inside Composio while removing schema drift from the
-    // revenue application path. Never proxy after timeouts/5xx/uncertain writes.
+    // A synchronous HTTP 400 is input validation and happens before Gmail can send.
+    // Only in that safe case do we use Composio's authenticated Gmail proxy fallback.
     if(slug==='GMAIL_SEND_EMAIL'&&response.status===400&&account){
       const mail=extractGmailSendFields(args);
       if(mail){
         const proxied=await gmailProxySend({key,account,mail,signal});
-        if(proxied.ok)return{ok:true,data:proxied.data,logId:proxied.logId||'',toolkit:'GMAIL',toolVersion:info.version||'',fallback:'gmail_proxy'};
-        return{ok:false,error:proxied.error,detail:proxied.detail||'',toolkit:'GMAIL',toolVersion:info.version||'',needsConnectedAccount:proxied.needsConnectedAccount};
+        if(proxied.ok)return{ok:true,data:proxied.data,logId:proxied.logId||'',toolkit:'GMAIL',toolVersion:version||'',fallback:'gmail_proxy'};
+        return{ok:false,error:proxied.error,detail:proxied.detail||'',toolkit:'GMAIL',toolVersion:version||'',needsConnectedAccount:proxied.needsConnectedAccount};
       }
     }
 
-    return{ok:false,error:`composio_http_${response.status}`,detail:String(body?.error?.message||body?.error||body?.message||'').slice(0,500),toolkit,toolVersion:info.version||'',needsConnectedAccount:response.status===401||response.status===403||response.status===422};
+    return{ok:false,error:`composio_http_${response.status}`,detail:String(body?.error?.message||body?.error||body?.message||'').slice(0,500),toolkit,toolVersion:version||'',needsConnectedAccount:response.status===401||response.status===403||response.status===422};
   }catch(error){return{ok:false,error:signal?.aborted?'aborted_by_emergency_stop':String(error?.message||error).slice(0,300)}}
 }
 
@@ -72,15 +70,27 @@ function detectToolkit(slug,env){
 function csv(v){return String(v||'').split(',').map(x=>x.trim().toUpperCase()).filter(Boolean)}
 function parseJson(value,fallback){try{return JSON.parse(String(value||''))}catch{return fallback}}
 function withTimeout(ms,signal){return signal?AbortSignal.any([AbortSignal.timeout(ms),signal]):AbortSignal.timeout(ms)}
+function validVersion(value){const v=String(value||'').trim();return /^\d{8}_\d{2}$/.test(v)?v:'';}
 
 async function resolveToolInfo(toolSlug,key,signal){
   try{
     const response=await fetch(`https://backend.composio.dev/api/v3.1/tools/${encodeURIComponent(toolSlug)}?toolkit_versions=latest`,{headers:{'x-api-key':key,accept:'application/json'},signal:withTimeout(12000,signal)});
     if(!response.ok)return{toolkit:'',version:''};
     const body=await response.json().catch(()=>({}));
-    const version=String(body?.version||body?.toolkit?.version||body?.toolkit_version||'').trim();
-    return{toolkit:String(body?.toolkit?.slug||'').trim().toUpperCase(),version:/^\d{8}_\d{2}$/.test(version)?version:''};
+    return{toolkit:String(body?.toolkit?.slug||'').trim().toUpperCase(),version:validVersion(body?.version||body?.toolkit?.version||body?.toolkit_version)};
   }catch{return{toolkit:'',version:''}}
+}
+
+async function resolveCatalogVersion(toolSlug,toolkit,key,signal){
+  try{
+    const qs=new URLSearchParams({query:toolSlug,include_deprecated:'false',toolkit_versions:'latest',limit:'10'});
+    if(toolkit)qs.set('toolkit_slug',String(toolkit).toLowerCase());
+    const response=await fetch(`https://backend.composio.dev/api/v3.1/tools?${qs}`,{headers:{'x-api-key':key,accept:'application/json'},signal:withTimeout(12000,signal)});
+    if(!response.ok)return'';
+    const body=await response.json().catch(()=>({}));
+    const item=(Array.isArray(body?.items)?body.items:[]).find(row=>String(row?.slug||'').toUpperCase()===toolSlug);
+    return validVersion(item?.version||item?.toolkit_version||item?.toolkit?.version);
+  }catch{return'';}
 }
 
 async function resolveConnectedAccountId(toolkit,key,signal){
@@ -98,8 +108,8 @@ async function resolveConnectedAccountId(toolkit,key,signal){
 
 function extractGmailSendFields(args){
   const value=args&&typeof args==='object'?args:{};
-  const recipient=String(value.recipient_email||value.to||value.to_email||value.email_address||'').trim();
-  const to=Array.isArray(value.to)?String(value.to[0]||'').trim():recipient;
+  const recipient=String(value.recipient_email||value.to_email||value.email_address||'').trim();
+  const to=Array.isArray(value.to)?String(value.to[0]||'').trim():String(value.to||recipient).trim();
   const subject=String(value.subject||'').replace(/[\r\n]+/g,' ').trim().slice(0,500);
   const body=String(value.body||value.message_body||value.body_text||value.plain_text||value.content||value.message||value.text||'');
   const cleanTo=String(to||recipient).replace(/[\r\n]+/g,'').trim();
@@ -120,10 +130,17 @@ async function gmailProxySend({key,account,mail,signal}){
       const detail=String(body?.error?.message||body?.error||body?.message||body?.data?.error?.message||'').slice(0,500);
       return{ok:false,error:`composio_gmail_proxy_http_${response.status}`,detail,needsConnectedAccount:response.status===401||response.status===403||/scope|auth|credential|permission/i.test(detail)};
     }
+    const upstreamStatus=Number(body?.status||200);
+    if(upstreamStatus>=400){
+      const detail=String(body?.data?.error?.message||body?.data?.message||body?.message||'').slice(0,500);
+      return{ok:false,error:`gmail_upstream_http_${upstreamStatus}`,detail,needsConnectedAccount:upstreamStatus===401||upstreamStatus===403||/scope|auth|credential|permission/i.test(detail)};
+    }
     const data=body?.data??body;
-    const gmailId=String(data?.id||data?.message?.id||'');
-    if(!gmailId)return{ok:false,error:'composio_gmail_proxy_malformed_success',detail:'Gmail proxy returned success without a message id',needsConnectedAccount:false};
-    return{ok:true,data,logId:body?.log_id||body?.logId||''};
+    const wrappers=[data,data?.response_data,data?.responseData,data?.data,data?.response,data?.body];
+    const gmail=wrappers.find(row=>row&&typeof row==='object'&&String(row.id||row.message?.id||''));
+    const gmailId=String(gmail?.id||gmail?.message?.id||'');
+    if(!gmailId)return{ok:false,error:'composio_gmail_proxy_malformed_success',detail:`proxy_status_${upstreamStatus}`,needsConnectedAccount:false};
+    return{ok:true,data:gmail,logId:body?.log_id||body?.logId||''};
   }catch(error){return{ok:false,error:signal?.aborted?'aborted_by_emergency_stop':String(error?.message||error).slice(0,300),detail:'',needsConnectedAccount:false};}
 }
 
