@@ -34,7 +34,7 @@ export class GlobalFeedPublisher{
           id,
           title:String(lead?.title||'Paid digital work').slice(0,220),source,url:safeUrl(lead?.url),category:String(lead?.category||'general-digital'),
           amountUsd:num(action?.payout?.amountUsd??lead?.amountUsd),currency:String(action?.payout?.currency||lead?.payoutCurrency||'UNKNOWN').toUpperCase(),
-          bucket,status:actionState||lead?.applyReady?'ready':'new',firstSeenAt:String(lead?.firstSeenAt||''),lastSeenAt:String(action?.updatedAt||lead?.lastSeenAt||''),
+          bucket,status:actionState||(lead?.applyReady?'ready':'new'),firstSeenAt:String(lead?.firstSeenAt||''),lastSeenAt:String(action?.updatedAt||lead?.lastSeenAt||''),
           reason:String(action?.reason||action?.error||lead?.blocker||'').slice(0,220),cryptoPayout:Boolean(lead?.cryptoPayout),payoutVerified:Boolean(lead?.payoutVerified),
           attempts:Number(action?.attempts||0),applicationUrl:safeUrl(action?.applicationUrl)
         });
