@@ -1,32 +1,38 @@
 export const DEFAULT_AUTONOMOS_CONFIG = Object.freeze({
   enabled: false,
   killSwitch: false,
-  genesisObjective: 'Maximize sustainable net revenue by providing legitimate digital services to humans and autonomous agents.',
-  // Live earning mode: permit bounded work spend from earned/seed budget. Emergency Stop and
-  // explicit policy gates can still force zero spend at runtime.
+  genesisObjective: 'Maximize sustainable net revenue by completing legitimate digital work, preserving owner capital, and reinvesting a bounded agent treasury.',
+  survivalMode: true,
+  ownerRevenuePercent: 50,
+  agentTreasuryPercent: 50,
+  completionReservePercentOfPayout: 15,
+  completionReserveMultiplier: 0.5,
+  noAbandonAcceptedJobs: true,
+  emergencyFinishMode: true,
+  skillAcquisitionMode: true,
   zeroSpendMode: false,
   earnedFundsOnly: true,
   seedSpendBudgetUsd: 3,
   allowExternalSpending: false,
   minMarginPercent: 20,
-  reservePercent: 85,
-  growthPercent: 10,
-  experimentPercent: 5,
+  // Backward-compatible accounting fields. In survival mode reserve = owner share,
+  // growth + experiment = the agent-treasury share.
+  reservePercent: 50,
+  growthPercent: 35,
+  experimentPercent: 15,
   heartbeatSeconds: 60,
   fastClaimPollSeconds: 15,
-  maxChildren: 20,
+  maxChildren: 50,
   childSpawnConcurrencyThreshold: 3,
   childTtlMinutes: 180,
-  maxPaidProcurementUsd: 3,
-  maxApiCostPercentOfPayout: 35,
-  maxJobsPerCycle: 6,
-  maxConcurrentJobs: 4,
+  maxPaidProcurementUsd: 10,
+  maxApiCostPercentOfPayout: 60,
+  maxJobsPerCycle: 10,
+  maxConcurrentJobs: 6,
   platformGeneration: 8,
-  earningProfileVersion: 15,
+  earningProfileVersion: 16,
   autoClaimJobs: true,
   autoCompetitiveSubmissions: false,
-  // Commissioning lane: prove the autonomous execution path on small, fully-escrowed
-  // crypto jobs before scaling up. This is intentionally limited to crypto-native sources.
   commissioningMode: true,
   commissioningMinPayoutUsd: 0.5,
   cryptoOnlyEarnings: true,
@@ -45,22 +51,19 @@ export const DEFAULT_AUTONOMOS_CONFIG = Object.freeze({
 });
 
 export function normalizeConfig(raw = {}) {
-  // Environment values are an explicit deployment override, but persisted config still wins
-  // when the caller has intentionally set a value in the admin plane.
   const env=process.env;
   const envOverrides={};
   if(env.AUTONOMOS_ZERO_SPEND_MODE!==undefined) envOverrides.zeroSpendMode=/^(1|true|yes|on)$/i.test(String(env.AUTONOMOS_ZERO_SPEND_MODE));
   if(env.AUTONOMOS_EARNED_FUNDS_ONLY!==undefined) envOverrides.earnedFundsOnly=/^(1|true|yes|on)$/i.test(String(env.AUTONOMOS_EARNED_FUNDS_ONLY));
   if(env.AUTONOMOS_MAX_PAID_PROCUREMENT_USD!==undefined) envOverrides.maxPaidProcurementUsd=Number(env.AUTONOMOS_MAX_PAID_PROCUREMENT_USD);
+  if(env.AUTONOMOS_SURVIVAL_MODE!==undefined) envOverrides.survivalMode=/^(1|true|yes|on)$/i.test(String(env.AUTONOMOS_SURVIVAL_MODE));
   const mergedRaw={...envOverrides,...raw};
   const legacy = !Object.prototype.hasOwnProperty.call(mergedRaw, 'platformGeneration');
   const previousGeneration = Number(mergedRaw.platformGeneration || (legacy ? 0 : 3));
+  const previousProfile = Number(mergedRaw.earningProfileVersion || 15);
   const cfg = { ...DEFAULT_AUTONOMOS_CONFIG, ...mergedRaw };
-  if (legacy && Number(raw.maxJobsPerCycle) === 2) cfg.maxJobsPerCycle = 6;
-  // Generation 8 implements the owner's explicit '$0.50 and above' earning floor.
-  // $0.50 is a minimum, never a target or preferred price. Higher-value work is ranked
-  // by expected value/success probability and is preferred when it is equally executable.
-  // Generation 6 previously relaxed the old $25 discovery floor to $10.
+
+  if (legacy && Number(raw.maxJobsPerCycle) === 2) cfg.maxJobsPerCycle = 10;
   if (previousGeneration < 6) {
     if (raw.minJobPayoutUsd === undefined || Number(raw.minJobPayoutUsd) === 25) cfg.minJobPayoutUsd = 10;
     if (raw.clawlancerMinJobPayoutUsd === undefined || Number(raw.clawlancerMinJobPayoutUsd) === 25) cfg.clawlancerMinJobPayoutUsd = 10;
@@ -70,49 +73,76 @@ export function normalizeConfig(raw = {}) {
     if (raw.t2000PriorityOpenJobPayoutUsd === undefined || Number(raw.t2000PriorityOpenJobPayoutUsd) === 65) cfg.t2000PriorityOpenJobPayoutUsd = 25;
     if (raw.t2000PremiumOpenJobPayoutUsd === undefined || Number(raw.t2000PremiumOpenJobPayoutUsd) === 100) cfg.t2000PremiumOpenJobPayoutUsd = 50;
     if (raw.minMarginPercent === undefined || Number(raw.minMarginPercent) === 35) cfg.minMarginPercent = 20;
-    if (raw.maxApiCostPercentOfPayout === undefined || Number(raw.maxApiCostPercentOfPayout) === 25) cfg.maxApiCostPercentOfPayout = 35;
   }
   if (previousGeneration < 7) {
-    if (raw.maxChildren === undefined || Number(raw.maxChildren) === 12) cfg.maxChildren = 20;
     if (raw.commissioningMode === undefined) cfg.commissioningMode = true;
     if (raw.commissioningMinPayoutUsd === undefined) cfg.commissioningMinPayoutUsd = 0.5;
     if (raw.cryptoOnlyEarnings === undefined) cfg.cryptoOnlyEarnings = true;
   }
-
   if (previousGeneration < 8) {
-    // v7 shipped with $10 normal floors and a separate $0.50 commissioning lane. The
-    // production owner explicitly wants all legitimate executable work from $0.50 up.
-    // Migrate the known v7 defaults only; preserve any genuinely custom floor.
     if (raw.minJobPayoutUsd === undefined || Number(cfg.minJobPayoutUsd) === 10) cfg.minJobPayoutUsd = 0.5;
     if (raw.clawlancerMinJobPayoutUsd === undefined || Number(cfg.clawlancerMinJobPayoutUsd) === 10) cfg.clawlancerMinJobPayoutUsd = 0.5;
     if (raw.dealworkMinJobPayoutUsd === undefined || Number(cfg.dealworkMinJobPayoutUsd) === 10) cfg.dealworkMinJobPayoutUsd = 0.5;
     if (raw.superteamMinJobPayoutUsd === undefined || Number(cfg.superteamMinJobPayoutUsd) === 10) cfg.superteamMinJobPayoutUsd = 0.5;
     if (raw.t2000MinOpenJobPayoutUsd === undefined || Number(cfg.t2000MinOpenJobPayoutUsd) === 10) cfg.t2000MinOpenJobPayoutUsd = 0.5;
   }
+
+  // Profile 16 is the Survival Swarm migration. Only replace known v15 defaults;
+  // deliberate custom limits survive the migration.
+  if(previousProfile < 16){
+    if(raw.maxChildren===undefined || Number(raw.maxChildren)===20) cfg.maxChildren=50;
+    if(raw.maxConcurrentJobs===undefined || Number(raw.maxConcurrentJobs)===4) cfg.maxConcurrentJobs=6;
+    if(raw.maxJobsPerCycle===undefined || Number(raw.maxJobsPerCycle)===6) cfg.maxJobsPerCycle=10;
+    if(raw.maxApiCostPercentOfPayout===undefined || Number(raw.maxApiCostPercentOfPayout)===35) cfg.maxApiCostPercentOfPayout=60;
+    if(raw.maxPaidProcurementUsd===undefined || Number(raw.maxPaidProcurementUsd)===3) cfg.maxPaidProcurementUsd=10;
+  }
+
   cfg.platformGeneration = 8;
+  cfg.earningProfileVersion = 16;
   cfg.enabled = Boolean(cfg.enabled);
   cfg.killSwitch = Boolean(cfg.killSwitch);
+  cfg.survivalMode = cfg.survivalMode !== false;
+  cfg.noAbandonAcceptedJobs = cfg.noAbandonAcceptedJobs !== false;
+  cfg.emergencyFinishMode = cfg.emergencyFinishMode !== false;
+  cfg.skillAcquisitionMode = cfg.skillAcquisitionMode !== false;
   cfg.zeroSpendMode = cfg.zeroSpendMode !== false;
   cfg.earnedFundsOnly = cfg.earnedFundsOnly !== false;
   cfg.seedSpendBudgetUsd = clampNumber(cfg.seedSpendBudgetUsd, 0, 50, 3);
   cfg.allowExternalSpending = Boolean(cfg.allowExternalSpending) && !cfg.zeroSpendMode;
   cfg.minMarginPercent = clampNumber(cfg.minMarginPercent, 0, 95, 20);
-  cfg.reservePercent = clampNumber(cfg.reservePercent, 0, 100, 85);
-  cfg.growthPercent = clampNumber(cfg.growthPercent, 0, 100, 10);
-  cfg.experimentPercent = clampNumber(cfg.experimentPercent, 0, 100, 5);
-  const split = cfg.reservePercent + cfg.growthPercent + cfg.experimentPercent;
-  if (split <= 0) {
-    cfg.reservePercent = 85; cfg.growthPercent = 10; cfg.experimentPercent = 5;
+
+  cfg.ownerRevenuePercent=clampNumber(cfg.ownerRevenuePercent,0,100,50);
+  cfg.agentTreasuryPercent=clampNumber(cfg.agentTreasuryPercent,0,100,50);
+  const revenueSplit=cfg.ownerRevenuePercent+cfg.agentTreasuryPercent;
+  if(revenueSplit<=0){cfg.ownerRevenuePercent=50;cfg.agentTreasuryPercent=50;}
+  else if(Math.abs(revenueSplit-100)>0.0001){
+    cfg.ownerRevenuePercent=100*cfg.ownerRevenuePercent/revenueSplit;
+    cfg.agentTreasuryPercent=100-cfg.ownerRevenuePercent;
   }
+  cfg.completionReservePercentOfPayout=clampNumber(cfg.completionReservePercentOfPayout,0,50,15);
+  cfg.completionReserveMultiplier=clampNumber(cfg.completionReserveMultiplier,0,3,0.5);
+
+  // Existing ledger/spend code uses reserve vs growth+experiment. Survival mode makes
+  // those legacy fields an exact projection of the requested 50/50 split.
+  if(cfg.survivalMode){
+    cfg.reservePercent=cfg.ownerRevenuePercent;
+    cfg.growthPercent=cfg.agentTreasuryPercent*0.70;
+    cfg.experimentPercent=cfg.agentTreasuryPercent*0.30;
+  }else{
+    cfg.reservePercent=clampNumber(cfg.reservePercent,0,100,85);
+    cfg.growthPercent=clampNumber(cfg.growthPercent,0,100,10);
+    cfg.experimentPercent=clampNumber(cfg.experimentPercent,0,100,5);
+  }
+
   cfg.heartbeatSeconds = Math.round(clampNumber(cfg.heartbeatSeconds, 30, 3600, 60));
   cfg.fastClaimPollSeconds = Math.round(clampNumber(cfg.fastClaimPollSeconds, 10, cfg.heartbeatSeconds, 15));
-  cfg.maxChildren = Math.round(clampNumber(cfg.maxChildren, 0, 100, 20));
+  cfg.maxChildren = Math.round(clampNumber(cfg.maxChildren, 1, 100, 50));
   cfg.childSpawnConcurrencyThreshold = Math.round(clampNumber(cfg.childSpawnConcurrencyThreshold, 2, 50, 3));
   cfg.childTtlMinutes = Math.round(clampNumber(cfg.childTtlMinutes, 5, 1440, 180));
-  cfg.maxPaidProcurementUsd = clampNumber(cfg.maxPaidProcurementUsd, 0, 100000, 0);
-  cfg.maxApiCostPercentOfPayout = clampNumber(cfg.maxApiCostPercentOfPayout, 0, 80, 35);
-  cfg.maxJobsPerCycle = Math.round(clampNumber(cfg.maxJobsPerCycle, 1, 50, 6));
-  cfg.maxConcurrentJobs = Math.round(clampNumber(cfg.maxConcurrentJobs, 1, 20, 4));
+  cfg.maxPaidProcurementUsd = clampNumber(cfg.maxPaidProcurementUsd, 0, 100000, 10);
+  cfg.maxApiCostPercentOfPayout = clampNumber(cfg.maxApiCostPercentOfPayout, 0, 80, 60);
+  cfg.maxJobsPerCycle = Math.round(clampNumber(cfg.maxJobsPerCycle, 1, 50, 10));
+  cfg.maxConcurrentJobs = Math.round(clampNumber(cfg.maxConcurrentJobs, 1, 20, 6));
   cfg.autoClaimJobs = cfg.autoClaimJobs !== false;
   cfg.autoCompetitiveSubmissions = Boolean(cfg.autoCompetitiveSubmissions);
   cfg.commissioningMode = cfg.commissioningMode !== false;
@@ -125,12 +155,11 @@ export function normalizeConfig(raw = {}) {
   cfg.dealworkMinJobPayoutUsd = clampNumber(cfg.dealworkMinJobPayoutUsd, cfg.minJobPayoutUsd, 100000, Math.max(0.5,cfg.minJobPayoutUsd));
   cfg.superteamMinJobPayoutUsd = clampNumber(cfg.superteamMinJobPayoutUsd, cfg.minJobPayoutUsd, 100000, Math.max(0.5,cfg.minJobPayoutUsd));
   cfg.t2000MinOpenJobPayoutUsd = clampNumber(cfg.t2000MinOpenJobPayoutUsd, 0, 100000, 0.5);
-  cfg.t2000PriorityOpenJobPayoutUsd = clampNumber(cfg.t2000PriorityOpenJobPayoutUsd, cfg.t2000MinOpenJobPayoutUsd, 100000, Math.max(25, cfg.t2000MinOpenJobPayoutUsd));
-  cfg.t2000PremiumOpenJobPayoutUsd = clampNumber(cfg.t2000PremiumOpenJobPayoutUsd, cfg.t2000PriorityOpenJobPayoutUsd, 100000, Math.max(50, cfg.t2000PriorityOpenJobPayoutUsd));
+  cfg.t2000PriorityOpenJobPayoutUsd = clampNumber(cfg.t2000PriorityOpenJobPayoutUsd, cfg.t2000MinOpenJobPayoutUsd, 100000, Math.max(25,cfg.t2000MinOpenJobPayoutUsd));
+  cfg.t2000PremiumOpenJobPayoutUsd = clampNumber(cfg.t2000PremiumOpenJobPayoutUsd, cfg.t2000PriorityOpenJobPayoutUsd, 100000, Math.max(50,cfg.t2000PriorityOpenJobPayoutUsd));
   cfg.autoReplication = cfg.autoReplication !== false;
-  cfg.genesisObjective = String(cfg.genesisObjective || DEFAULT_AUTONOMOS_CONFIG.genesisObjective).trim().slice(0, 1000);
-  cfg.treasuryAsset = ['USDC','USDT','ETH','BTC','SOL'].includes(String(cfg.treasuryAsset).toUpperCase())
-    ? String(cfg.treasuryAsset).toUpperCase() : 'USDC';
+  cfg.genesisObjective = String(cfg.genesisObjective || DEFAULT_AUTONOMOS_CONFIG.genesisObjective).trim().slice(0,1000);
+  cfg.treasuryAsset = ['USDC','USDT','ETH','BTC','SOL'].includes(String(cfg.treasuryAsset).toUpperCase()) ? String(cfg.treasuryAsset).toUpperCase() : 'USDC';
   cfg.updatedAt = new Date().toISOString();
   return cfg;
 }
@@ -141,38 +170,27 @@ export function validateAction(action = {}, config = {}) {
   if (action.kind === 'spend') {
     const amount = Number(action.amountUsd || 0);
     if (config.zeroSpendMode) return { allowed:false, reason:'zero_spend_mode' };
-    // P0 fix: this used to require allowExternalSpending===true for ANY spend at all,
-    // which contradicted the admin UI's own documented precedence text ("Earned-funds-only
-    // (default) caps spend to money AutonomOS has actually already earned... Unrestricted
-    // only applies once both of the above are off") — meaning earnedFundsOnly was always
-    // supposed to be usable on its own, without also flipping the scarier "unrestricted
-    // spending" toggle. That mismatch was the real reason a correctly-configured
-    // Earned-funds-only setup still couldn't spend a cent on Firecrawl/E2B.
     if (!config.earnedFundsOnly && !config.allowExternalSpending) return { allowed:false, reason:'external_spending_disabled' };
     if (!Number.isFinite(amount) || amount <= 0) return { allowed:false, reason:'invalid_amount' };
     if (amount > Number(config.maxPaidProcurementUsd || 0)) return { allowed:false, reason:'above_spend_limit' };
   }
-  if (action.kind === 'wallet_export' || action.kind === 'private_key_access') {
-    return { allowed:false, reason:'secret_access_forbidden' };
-  }
+  // Survival autonomy never means custody of the owner's secrets. Agents may route to
+  // verified public addresses, but never request/export seed phrases or private keys.
+  if (action.kind === 'wallet_export' || action.kind === 'private_key_access') return { allowed:false, reason:'secret_access_forbidden' };
   return { allowed:true, reason:'policy_pass' };
 }
 
-
 export function isDemoOrTestOpportunity(op = {}) {
   const raw = op?.raw && typeof op.raw === 'object' ? op.raw : {};
-  if ([raw.is_demo, raw.isDemo, raw.demo, raw.is_test, raw.isTest, raw.sandbox].some(v => v === true || String(v).toLowerCase() === 'true')) return true;
-  const envMarker = String(op?.environment || op?.env || op?.networkType || op?.mode || raw.environment || raw.env || raw.network_type || raw.mode || '').toLowerCase();
-  if (['demo','test','testing','sandbox','testnet','devnet'].includes(envMarker)) return true;
-  const status = String(op?.status || raw.status || '').toLowerCase();
-  if (['demo','test','testing','sandbox','sample'].includes(status)) return true;
-  const tags = [...(Array.isArray(op?.tags) ? op.tags : []), ...(Array.isArray(raw.tags) ? raw.tags : [])].map(v=>String(v).toLowerCase().trim());
-  if (tags.some(v=>['demo','test-job','test_listing','test-listing','sandbox','sample','example','testnet','devnet'].includes(v))) return true;
-  const title = String(op?.title || raw.title || '').trim();
+  if ([raw.is_demo,raw.isDemo,raw.demo,raw.is_test,raw.isTest,raw.sandbox].some(v=>v===true||String(v).toLowerCase()==='true')) return true;
+  const envMarker=String(op?.environment||op?.env||op?.networkType||op?.mode||raw.environment||raw.env||raw.network_type||raw.mode||'').toLowerCase();
+  if(['demo','test','testing','sandbox','testnet','devnet'].includes(envMarker))return true;
+  const status=String(op?.status||raw.status||'').toLowerCase();
+  if(['demo','test','testing','sandbox','sample'].includes(status))return true;
+  const tags=[...(Array.isArray(op?.tags)?op.tags:[]),...(Array.isArray(raw.tags)?raw.tags:[])].map(v=>String(v).toLowerCase().trim());
+  if(tags.some(v=>['demo','test-job','test_listing','test-listing','sandbox','sample','example','testnet','devnet'].includes(v)))return true;
+  const title=String(op?.title||raw.title||'').trim();
   return /^(?:\[(?:demo|test|sample|sandbox)\]|(?:demo|sample|sandbox)\s+(?:job|task|listing)\b|test\s+(?:job|listing)\b)/i.test(title);
 }
 
-function clampNumber(value, min, max, fallback) {
-  const number = Number(value);
-  return Number.isFinite(number) ? Math.min(max, Math.max(min, number)) : fallback;
-}
+function clampNumber(value,min,max,fallback){const number=Number(value);return Number.isFinite(number)?Math.min(max,Math.max(min,number)):fallback;}
