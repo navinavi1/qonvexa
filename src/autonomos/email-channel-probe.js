@@ -10,10 +10,11 @@ export async function probeRuntimeEmailChannel({env=process.env,logger=console}=
     if(active.length!==1){const result={ok:true,ready:false,activeAccounts:active.length,reason:active.length===0?'gmail_not_connected':'multiple_gmail_accounts_require_explicit_mapping'};log(logger,result);return result;}
 
     const accountId=String(active[0]?.id||'');
-    const [details,requirements,apiProbe]=await Promise.all([
+    const [details,requirements,apiProbe,recentFailure]=await Promise.all([
       getAccountDetails(accountId,key),
       getSendRequirements(key),
-      probeGmailApi(accountId,key)
+      probeGmailApi(accountId,key),
+      getRecentGmailFailure(key)
     ]);
     if(!details.ok){const result={ok:false,ready:false,activeAccounts:1,reason:details.reason};log(logger,result);return result;}
     if(!requirements.ok){const result={ok:false,ready:false,activeAccounts:1,reason:requirements.reason};log(logger,result);return result;}
@@ -37,6 +38,7 @@ export async function probeRuntimeEmailChannel({env=process.env,logger=console}=
       missingScopes:missing,
       gmailApiReadStatus:apiProbe.status||0,
       gmailApiReadReason:apiProbe.reason||'',
+      recentSendFailure:recentFailure.reason||'',
       reason
     };
     log(logger,result);return result;
@@ -88,6 +90,35 @@ async function probeGmailApi(accountId,key){
   }catch(error){return{ok:false,status:0,reason:String(error?.name||'network').toLowerCase()};}
 }
 
+async function getRecentGmailFailure(key){
+  try{
+    const now=Date.now();
+    const response=await fetch('https://backend.composio.dev/api/v3.1/logs/tool_execution',{
+      method:'POST',headers:{'x-api-key':key,accept:'application/json','content-type':'application/json'},
+      body:JSON.stringify({limit:10,time_range:{from:now-2*60*60_000,to:now},filters:[{field:'tool_slug',operator:'==',value:'GMAIL_SEND_EMAIL'},{field:'status',operator:'==',value:'failed'}]}),
+      signal:AbortSignal.timeout(12_000)
+    });
+    const body=await response.json().catch(()=>({}));
+    if(!response.ok)return{ok:false,reason:`gmail_log_query_http_${response.status}`};
+    const logs=Array.isArray(body?.logs)?body.logs:[];
+    const latest=logs.sort((a,b)=>Date.parse(String(b?.timestamp||0))-Date.parse(String(a?.timestamp||0)))[0];
+    if(!latest)return{ok:true,reason:'none'};
+    return{ok:true,reason:classifyExecutionMessage(latest?.message)};
+  }catch(error){return{ok:false,reason:`gmail_log_query_${String(error?.name||'network').toLowerCase()}`};}
+}
+
+function classifyExecutionMessage(value){
+  const text=String(value||'').toLowerCase();
+  if(/at least one of.*recipient|recipient.*required|invalid recipient/.test(text))return'recipient_validation';
+  if(/version/.test(text)&&/(invalid|missing|required|not found|unsupported)/.test(text))return'tool_version_validation';
+  if(/insufficient.*scope|scope.*insufficient/.test(text))return'insufficient_scope';
+  if(/gmail api has not been used|api.*disabled|accessnotconfigured/.test(text))return'gmail_api_disabled';
+  if(/connected account|connection/.test(text)&&/(missing|not found|inactive|invalid)/.test(text))return'connected_account_validation';
+  if(/argument|schema|validation|required field|bad request/.test(text))return'tool_argument_validation';
+  if(/rate|quota/.test(text))return'rate_or_quota';
+  if(/permission|forbidden|denied/.test(text))return'permission_denied';
+  return text?`other_${shortHash(text)}`:'unknown';
+}
 function safeReason(body){
   const source=body?.data?.error||body?.error||body?.data||{};
   const status=String(source?.status||source?.code||body?.status_reason||'').trim();
@@ -98,6 +129,7 @@ function safeReason(body){
   if(/forbidden|permission|denied/.test(message))return'permission_denied';
   return status.replace(/[^a-z0-9_.-]/gi,'_').slice(0,80)||'';
 }
+function shortHash(value){let h=2166136261;for(const c of String(value)){h^=c.charCodeAt(0);h=Math.imul(h,16777619);}return(h>>>0).toString(16).padStart(8,'0');}
 function array(value){return Array.isArray(value)?value.map(String):[];}
 function normalizeScope(value){return String(value||'').trim();}
 function scopeSatisfied(required,requested){
