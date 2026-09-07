@@ -7,10 +7,8 @@ const POLICY_HOLD_STATUSES=new Set(['policy_hold','not_eligible']);
 // These blocks are created before a marketplace side effect is allowed. The only runtime
 // caller of releaseSystemBlocked() invokes it after a fresh live capability preflight has
 // already returned executable=true. Therefore these two reasons may safely be released
-// even when the static capability catalog version did not change (for example, credentials
-// were reconnected or a transient tool/auth condition recovered). Execution/QA/claimed
-// failures are deliberately excluded so this can never resurrect owned work or duplicate
-// an external effect.
+// when credentials/tools recover. Execution/QA/claimed failures are deliberately excluded
+// so a later deploy/capability-version bump can never resurrect owned work or double-claim.
 const LIVE_REVALIDATABLE_SYSTEM_REASONS=new Set(['preflight_or_internal_capability_hold','connector_credentials_or_auth_failure']);
 
 export class JobRegistry {
@@ -19,9 +17,6 @@ export class JobRegistry {
     this.store=store;
     this.maxRecords=Math.max(1000,Number(maxRecords||12000));
     this.records=store.readJson('job-registry.json',{});
-    // Tombstones are intentionally stored separately and are NEVER pruned with the
-    // operational registry. They are keyed by marketplace + external job id, not by a
-    // mutable content fingerprint, so changing a title/deadline cannot resurrect a dead job.
     this.tombstones=store.readJson('job-tombstones.json',{});
   }
 
@@ -44,10 +39,7 @@ export class JobRegistry {
     }
     if(row.fingerprint!==fingerprint){
       const previous={fingerprint:row.fingerprint,status:row.status,terminal:Boolean(row.terminal),reasonCode:row.reasonCode||'',closedAt:row.closedAt||row.lastSeenAt||''};
-      // Only non-terminal/non-owned/non-system-blocked rows may become a new content
-      // version. Permanent tombstones are already handled above. Claimed/system-blocked
-      // jobs remain owned/blocked despite mutable marketplace metadata.
-      if(!row.terminal&&!['stale_check','archived','retry'].includes(row.status)&&!OWNED_STATUSES.has(String(row.status||''))&&!SYSTEM_BLOCKED_STATUSES.has(String(row.status||''))){
+      if(!row.terminal&&!row.everOwned&&!['stale_check','archived','retry'].includes(row.status)&&!OWNED_STATUSES.has(String(row.status||''))&&!SYSTEM_BLOCKED_STATUSES.has(String(row.status||''))){
         row={...row,fingerprint,version:Number(row.version||1)+1,status:'new',failureOwner:'',reasonCode:'',reason:'',retryAfter:'',attempts:0,lastSeenAt:now,seenCount:Number(row.seenCount||0)+1,previousVersions:[...(row.previousVersions||[]).slice(-8),previous]};
       }else row={...row,fingerprint,lastSeenAt:now,seenCount:Number(row.seenCount||0)+1,previousVersions:[...(row.previousVersions||[]).slice(-8),previous]};
     }else row={...row,lastSeenAt:now,seenCount:Number(row.seenCount||0)+1};
@@ -96,16 +88,13 @@ export class JobRegistry {
     if(tombstone)return {blocked:true,status:'graveyard',reasonCode:tombstone.reasonCode||'permanent_tombstone',reason:tombstone.reason||'',failureOwner:tombstone.failureOwner||'market'};
     const row=this.get(identity);if(!row)return null;
     if(SYSTEM_BLOCKED_STATUSES.has(String(row.status||'')))return {blocked:true,status:'system_blocked',reasonCode:row.reasonCode||'system_blocked',reason:row.reason||'',failureOwner:'our_system'};
-    // Policy Hold is normally re-evaluated from live marketplace/policy facts every scan.
-    // A timed hold (e.g. buyer has $0 balance) is different: do not hammer the same claim
-    // endpoint every 15 seconds; wait until retryAfter, then allow a fresh preflight.
     if(POLICY_HOLD_STATUSES.has(String(row.status||''))&&row.retryAfter&&Date.parse(row.retryAfter)>Date.now())return {blocked:true,status:'policy_hold',reasonCode:row.reasonCode||'policy_hold',reason:row.reason||'',failureOwner:row.failureOwner||'policy'};
     if(row.status==='dispatch_pending'){
       if(row.retryAfter&&Date.parse(row.retryAfter)<=Date.now())return null;
       return {blocked:true,status:'dispatch_pending',reasonCode:row.reasonCode||'durable_dispatch_pending',reason:row.reason||'',failureOwner:'our_system'};
     }
     if(['stale_check','archived'].includes(row.status))return {blocked:true,status:row.status,reasonCode:row.reasonCode,reason:'Awaiting authoritative live listing confirmation',failureOwner:'market'};
-    if(row.terminal||OWNED_STATUSES.has(String(row.status||'')))return {blocked:true,status:row.status,reasonCode:row.reasonCode||`job_registry_${row.status}`,reason:row.reason||'',failureOwner:row.failureOwner||''};
+    if(row.terminal||row.everOwned||OWNED_STATUSES.has(String(row.status||'')))return {blocked:true,status:row.status,reasonCode:row.reasonCode||`job_registry_${row.status}`,reason:row.reason||'',failureOwner:row.failureOwner||'our_system'};
     if(row.status==='retry'&&row.retryPhase==='execution')return {blocked:true,status:'retry_execution_owned',reasonCode:row.reasonCode||'execution_retry_owned',reason:row.reason||'',failureOwner:row.failureOwner||'our_system'};
     if(row.retryAfter&&Date.parse(row.retryAfter)>Date.now())return {blocked:true,status:'retry_wait',reasonCode:'retry_backoff',reason:`Retry after ${row.retryAfter}`,failureOwner:row.failureOwner||'transient'};
     return null;
@@ -116,19 +105,17 @@ export class JobRegistry {
     let row=this.records[identity]||this.observe(opportunity);
     if(this.tombstones[identity] && status!=='graveyard')return {...row};
     if(['paid','settled','completed','delivered'].includes(row.status)&&!TERMINAL_STATUSES.has(status))return {...row};
-    row={...row,status:String(status||row.status||'new'),lastStateAt:now,lastSeenAt:row.lastSeenAt||now,...safeDetail(detail)};
+    const nextStatus=String(status||row.status||'new');
+    row={...row,status:nextStatus,everOwned:Boolean(row.everOwned)||OWNED_STATUSES.has(nextStatus),lastStateAt:now,lastSeenAt:row.lastSeenAt||now,...safeDetail(detail)};
     row.terminal=TERMINAL_STATUSES.has(row.status);
     this.records[identity]=row;this.persist();return {...row};
   }
 
   markPaid(opportunity,{transactionId='',amountUsd=0,currency='',paidAt=''}={}){
     const identity=typeof opportunity==='string'?opportunity:jobIdentity(opportunity);const now=String(paidAt||new Date().toISOString());
-    // An authoritative marketplace settlement wins over any stale local tombstone. A paid
-    // job must never be rediscovered as Graveyard on the next scan merely because an old
-    // failure classification survived from a prior runtime generation.
     if(this.tombstones[identity]){delete this.tombstones[identity];this.store.writeJson('job-tombstones.json',this.tombstones);}
     const existing=this.records[identity]||(typeof opportunity==='string'?{identity,source:identity.split(':')[0],externalId:identity.slice(identity.indexOf(':')+1),firstSeenAt:now,lastSeenAt:now,seenCount:1}:this.observe(opportunity));
-    this.records[identity]={...existing,status:'paid',terminal:true,failureOwner:'',reasonCode:'marketplace_payment_settled',reason:'',retryAfter:'',transactionId:String(transactionId||''),amountUsd:Number(amountUsd||0),currency:String(currency||existing.currency||''),paidAt:now,lastStateAt:now};
+    this.records[identity]={...existing,status:'paid',everOwned:true,terminal:true,failureOwner:'',reasonCode:'marketplace_payment_settled',reason:'',retryAfter:'',transactionId:String(transactionId||''),amountUsd:Number(amountUsd||0),currency:String(currency||existing.currency||''),paidAt:now,lastStateAt:now};
     this.persist();return {...this.records[identity]};
   }
 
@@ -143,19 +130,15 @@ export class JobRegistry {
 
   markPolicyHold(opportunity,{reasonCode='policy_hold',reason='',owner='policy',retryAfter=''}={}){
     const identity=jobIdentity(opportunity);const row=this.records[identity]||this.observe(opportunity);const now=new Date().toISOString();
-    if(this.tombstones[identity]||row.terminal)return {...row};
+    if(this.tombstones[identity]||row.terminal||row.everOwned)return {...row};
     this.records[identity]={...row,status:'policy_hold',terminal:false,failureOwner:String(owner||'policy'),reasonCode:String(reasonCode).slice(0,120),reason:String(reason).slice(0,500),retryAfter:String(retryAfter||''),lastStateAt:now};
     this.persist();return {...this.records[identity]};
   }
 
   repairV76LegacyPollution(){
     let removedSignals=0,rescuedDealwork=0;const now=new Date().toISOString();
-    for(const identity of Object.keys(this.records)){
-      if(identity.startsWith('x402-bazaar:')){delete this.records[identity];removedSignals++;}
-    }
-    for(const identity of Object.keys(this.tombstones)){
-      if(identity.startsWith('x402-bazaar:')){delete this.tombstones[identity];removedSignals++;}
-    }
+    for(const identity of Object.keys(this.records))if(identity.startsWith('x402-bazaar:')){delete this.records[identity];removedSignals++;}
+    for(const identity of Object.keys(this.tombstones))if(identity.startsWith('x402-bazaar:')){delete this.tombstones[identity];removedSignals++;}
     for(const [identity,tomb] of Object.entries({...this.tombstones})){
       if(!identity.startsWith('dealwork:'))continue;
       const text=`${tomb?.reasonCode||''} ${tomb?.reason||''}`;
@@ -199,7 +182,7 @@ export class JobRegistry {
       delete this.tombstones[identity];
       const old=this.records[identity]||{identity,source:tomb.source,externalId:tomb.externalId};
       const status=legacy?legacy[1]:'system_blocked';
-      this.records[identity]={...old,status,terminal:TERMINAL_STATUSES.has(status),closedAt:'',retryAfter:'',reasonCode:legacy?tomb.reasonCode:'repaired_internal_failure',failureOwner:legacy?'':'our_system'};
+      this.records[identity]={...old,status,everOwned:Boolean(old.everOwned)||Boolean(legacy),terminal:TERMINAL_STATUSES.has(status),closedAt:'',retryAfter:'',reasonCode:legacy?tomb.reasonCode:'repaired_internal_failure',failureOwner:legacy?'':'our_system'};
       repaired++;
     }
     if(repaired){this.store.writeJson('job-tombstones.json',this.tombstones);this.persist();}
@@ -216,21 +199,18 @@ export class JobRegistry {
   releaseSystemBlocked(opportunity,{capabilityVersion=''}={}){
     const identity=jobIdentity(opportunity);const row=this.records[identity];
     if(!row||!SYSTEM_BLOCKED_STATUSES.has(String(row.status||'')))return {ok:true,released:false};
-    if(row.terminal||OWNED_STATUSES.has(String(row.status||'')))return {ok:true,released:false};
-    const nextVersion=String(capabilityVersion||'');
-    const versionChanged=Boolean(nextVersion&&nextVersion!==String(row.capabilityVersion||''));
+    if(row.terminal||row.everOwned||OWNED_STATUSES.has(String(row.status||'')))return {ok:true,released:false};
     const liveRevalidated=row.failureOwner==='our_system'&&LIVE_REVALIDATABLE_SYSTEM_REASONS.has(String(row.reasonCode||''));
-    if(!versionChanged&&!liveRevalidated)return {ok:true,released:false};
-    const reasonCode=versionChanged?'capability_version_changed':'live_preflight_revalidated';
-    const reason=versionChanged?'Execution capability changed; job released for a fresh preflight.':'Fresh live preflight is executable; stale preflight/auth block released.';
-    this.records[identity]={...row,status:'new',failureOwner:'',reasonCode,reason,attempts:0,retryAfter:'',capabilityVersion:nextVersion||String(row.capabilityVersion||''),lastStateAt:new Date().toISOString()};
+    if(!liveRevalidated)return {ok:true,released:false};
+    const nextVersion=String(capabilityVersion||row.capabilityVersion||'');
+    this.records[identity]={...row,status:'new',failureOwner:'',reasonCode:'live_preflight_revalidated',reason:'Fresh live preflight is executable; stale preflight/auth block released.',attempts:0,retryAfter:'',capabilityVersion:nextVersion,lastStateAt:new Date().toISOString()};
     this.persist();return {ok:true,released:true};
   }
 
   markDispatchPending(opportunity,{provider='durable',runId='',leaseId='',retryAfter=''}={}){
     const identity=jobIdentity(opportunity);const row=this.records[identity]||this.observe(opportunity);const now=new Date().toISOString();
-    if(this.tombstones[identity]||row.terminal)return {...row};
-    this.records[identity]={...row,status:'dispatch_pending',terminal:false,failureOwner:'our_system',reasonCode:'durable_dispatch_pending',reason:`Dispatched to ${String(provider||'durable')}; awaiting worker callback.`,dispatchProvider:String(provider||'durable'),dispatchRunId:String(runId||''),dispatchLeaseId:String(leaseId||''),retryAfter:String(retryAfter||new Date(Date.now()+6*60*60_000).toISOString()),lastStateAt:now};
+    if(this.tombstones[identity]||row.terminal||row.everOwned)return {...row};
+    this.records[identity]={...row,status:'dispatch_pending',everOwned:true,terminal:false,failureOwner:'our_system',reasonCode:'durable_dispatch_pending',reason:`Dispatched to ${String(provider||'durable')}; awaiting worker callback.`,dispatchProvider:String(provider||'durable'),dispatchRunId:String(runId||''),dispatchLeaseId:String(leaseId||''),retryAfter:String(retryAfter||new Date(Date.now()+6*60*60_000).toISOString()),lastStateAt:now};
     this.persist();return {...this.records[identity]};
   }
 
@@ -239,14 +219,16 @@ export class JobRegistry {
     if(!row||row.status!=='dispatch_pending')return {ok:true,released:false};
     const expected=String(row.dispatchLeaseId||'');const supplied=String(leaseId||'');
     if(expected&&expected!==supplied)return {ok:true,released:false,stale:true,expectedLeaseId:expected};
-    this.records[identity]={...row,status:'new',failureOwner:'',reasonCode:'durable_worker_callback_received',reason:'Durable worker callback received; performing fresh pre-claim validation.',retryAfter:'',dispatchLeaseId:'',lastStateAt:new Date().toISOString()};
+    // Keep ownership sticky. Callback can proceed inside the durable execution path, but
+    // the opportunity must never become claimable by the normal discovery loop again.
+    this.records[identity]={...row,status:'new',everOwned:true,failureOwner:'',reasonCode:'durable_worker_callback_received',reason:'Durable worker callback received; performing fresh pre-claim validation inside owned execution.',retryAfter:'',dispatchLeaseId:'',lastStateAt:new Date().toISOString()};
     this.persist();return {ok:true,released:true};
   }
 
   markRetry(opportunity,{owner='transient',reasonCode='retry_pending',reason='',attempts=1,retryAfter='',phase='claim'}={}){
     const row=this.records[jobIdentity(opportunity)]||this.observe(opportunity);
     if(this.tombstones[row.identity]||row.terminal)return {...row};
-    this.records[row.identity]={...row,status:'retry',terminal:false,failureOwner:String(owner),reasonCode:String(reasonCode).slice(0,120),reason:String(reason).slice(0,500),attempts:Number(attempts||1),retryAfter:String(retryAfter||''),retryPhase:String(phase||'claim'),lastStateAt:new Date().toISOString()};
+    this.records[row.identity]={...row,status:'retry',everOwned:Boolean(row.everOwned)||phase==='execution',terminal:false,failureOwner:String(owner),reasonCode:String(reasonCode).slice(0,120),reason:String(reason).slice(0,500),attempts:Number(attempts||1),retryAfter:String(retryAfter||''),retryPhase:String(phase||'claim'),lastStateAt:new Date().toISOString()};
     this.persist();return {...this.records[row.identity]};
   }
 
@@ -254,7 +236,7 @@ export class JobRegistry {
     let released=0;const now=new Date().toISOString();
     for(const [identity,row] of Object.entries(this.records)){
       if(row?.status!=='retry'||row?.failureOwner!=='transient'||row?.terminal)continue;
-      this.records[identity]=row.retryPhase==='execution'?{...row,retryAfter:'',reasonCode:'operator_retry_transient_execution',reason:'Transient execution retry released by operator.',lastStateAt:now}:{...row,status:'new',retryAfter:'',retryPhase:'',reasonCode:'operator_retry_transient_claim',reason:'Transient claim retry released by operator.',lastStateAt:now};released++;
+      this.records[identity]=row.retryPhase==='execution'?{...row,retryAfter:'',everOwned:true,reasonCode:'operator_retry_transient_execution',reason:'Transient execution retry released by operator.',lastStateAt:now}:{...row,status:'new',retryAfter:'',retryPhase:'',reasonCode:'operator_retry_transient_claim',reason:'Transient claim retry released by operator.',lastStateAt:now};released++;
     }
     if(released)this.persist();return {ok:true,released};
   }
@@ -295,7 +277,7 @@ export class JobRegistry {
   persist(){
     const entries=Object.entries(this.records);
     if(entries.length>this.maxRecords){
-      const removable=entries.filter(([,r])=>!r.terminal&&!OWNED_STATUSES.has(String(r.status||''))&&!SYSTEM_BLOCKED_STATUSES.has(String(r.status||''))).sort((a,b)=>Date.parse(a[1].lastSeenAt||0)-Date.parse(b[1].lastSeenAt||0));
+      const removable=entries.filter(([,r])=>!r.terminal&&!r.everOwned&&!OWNED_STATUSES.has(String(r.status||''))&&!SYSTEM_BLOCKED_STATUSES.has(String(r.status||''))).sort((a,b)=>Date.parse(a[1].lastSeenAt||0)-Date.parse(b[1].lastSeenAt||0));
       const drop=new Set(removable.slice(0,Math.max(0,entries.length-this.maxRecords)).map(([id])=>id));
       this.records=Object.fromEntries(entries.filter(([id])=>!drop.has(id)));
     }
@@ -303,7 +285,7 @@ export class JobRegistry {
   }
 }
 
-function baseRow(opportunity,identity,fingerprint,now){return refreshMetadata({identity,source:String(opportunity?.source||''),externalId:String(opportunity?.externalId||''),fingerprint,version:1,status:'new',terminal:false,firstSeenAt:now,lastSeenAt:now,seenCount:1},opportunity);}
+function baseRow(opportunity,identity,fingerprint,now){return refreshMetadata({identity,source:String(opportunity?.source||''),externalId:String(opportunity?.externalId||''),fingerprint,version:1,status:'new',everOwned:false,terminal:false,firstSeenAt:now,lastSeenAt:now,seenCount:1},opportunity);}
 function refreshMetadata(row,opportunity){return {...row,title:String(opportunity?.title||row.title||'').slice(0,300),budgetUsd:Number(opportunity?.budgetUsd??row.budgetUsd??0),currency:String(opportunity?.currency||row.currency||''),claimMode:String(opportunity?.claimMode||row.claimMode||''),deadline:String(opportunity?.deadline||row.deadline||''),url:String(opportunity?.url||row.url||'')};}
 function legacyOpportunity(row={}){return {source:String(row.source||'unknown'),externalId:String(row.externalId||row.id||''),title:String(row.title||''),budgetUsd:Number(row.budgetUsd||0),currency:String(row.currency||''),claimMode:String(row.claimMode||''),deadline:String(row.deadline||''),description:String(row.description||'')};}
 export function jobIdentity(opportunity={}){return `${String(opportunity.source||'unknown')}:${String(opportunity.externalId||'')}`;}
