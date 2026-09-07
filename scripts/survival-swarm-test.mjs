@@ -6,6 +6,7 @@ import { allocateRevenue, computeEarnedSpendBudgetUsd, evaluateOpportunity } fro
 import { paymentDestinations, selectPayoutRoute, planRevenueSplit } from '../src/autonomos/payment-router.js';
 import { releaseStaleDispatchReservations } from '../src/autonomos/store.js';
 import { TaskAgentRuntime } from '../src/autonomos/task-agent-runtime.js';
+import { estimateOutcomeProbability } from '../src/autonomos/outcome-model.js';
 
 const cfg=normalizeConfig({platformGeneration:8,earningProfileVersion:15,maxChildren:20,maxConcurrentJobs:4,maxJobsPerCycle:6,maxApiCostPercentOfPayout:35,maxPaidProcurementUsd:3,enabled:true,zeroSpendMode:false,earnedFundsOnly:true});
 assert.equal(cfg.survivalMode,true);
@@ -17,7 +18,7 @@ assert.equal(cfg.maxChildren,50);
 assert.equal(cfg.maxConcurrentJobs,6);
 assert.equal(cfg.maxJobsPerCycle,10);
 assert.equal(cfg.maxApiCostPercentOfPayout,60);
-assert.equal(cfg.maxPaidProcurementUsd,10);
+assert.equal(cfg.maxPaidProcurementUsd,Number(process.env.AUTONOMOS_MAX_PAID_PROCUREMENT_USD||10));
 assert.equal(cfg.noAbandonAcceptedJobs,true);
 assert.equal(cfg.emergencyFinishMode,true);
 assert.equal(cfg.skillAcquisitionMode,true);
@@ -42,6 +43,25 @@ const insufficient=evaluateOpportunity({expectedRevenueUsd:20,successProbability
 assert.equal(insufficient.allowed,false);
 assert.equal(insufficient.reason,'blocked_by_earned_funds_cap');
 
+// An already-assigned T2000 row that we claimed/failed before is a recovery obligation,
+// not a fresh commissioning candidate. Its scheduler probability must lose to fresh work.
+const priorOwned=estimateOutcomeProbability(
+  {source:'t2000',externalId:'owned-1',claimMode:'already_assigned',escrowed:true},
+  {executable:true,missingTools:[]},
+  [
+    {id:'internal-owned-1',source:'t2000',externalId:'owned-1',status:'claimed'},
+    {id:'internal-owned-1',source:'t2000',externalId:'owned-1',status:'manual_attention'}
+  ]
+);
+const fresh=estimateOutcomeProbability(
+  {source:'t2000',externalId:'fresh-1',claimMode:'automatic',escrowed:true},
+  {executable:true,missingTools:[]},
+  []
+);
+assert.equal(priorOwned.ownedRecoveryOnly,true);
+assert.equal(priorOwned.probability,0.005);
+assert.ok(fresh.probability>priorOwned.probability,'fresh T2000 work must outrank owned recovery in commissioning');
+
 const env={AUTONOMOS_OWNER_WALLET:'0x1111111111111111111111111111111111111111',AUTONOMOS_PHANTOM_WALLET:'11111111111111111111111111111111'};
 const destinations=paymentDestinations(env);
 assert.equal(destinations.crypto.wallets.evm.id,'rabby');
@@ -58,7 +78,7 @@ const splitPlan=planRevenueSplit({amountUsd:40,currency:'USDC',network:'base',ma
 assert.equal(splitPlan.ownerUsd,20);assert.equal(splitPlan.treasuryUsd,20);assert.equal(splitPlan.destination.wallet,'rabby');
 
 const registry={'t2000:lost':{identity:'t2000:lost',source:'t2000',externalId:'lost',status:'dispatch_pending',everOwned:false,lastStateAt:'2026-09-07T12:00:00.000Z',retryAfter:'2099-01-01T00:00:00Z',dispatchLeaseId:'old'}};
-releaseStaleDispatchReservations(registry,{now:Date.parse('2026-09-07T12:16:00.000Z')});
+releaseStaleDispatchReservations(registry,{now:Date.parse('2026-09-07T12:03:00.000Z')});
 assert.equal(registry['t2000:lost'].status,'new');
 assert.equal(registry['t2000:lost'].reasonCode,'durable_dispatch_lease_expired');
 const owned={'t2000:owned':{status:'dispatch_pending',everOwned:true,lastStateAt:'2026-09-07T12:00:00.000Z'}};
