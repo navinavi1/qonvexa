@@ -1,6 +1,8 @@
 import { SearchFirstLeadActioner } from './search-first-lead-actioner.js';
 import { composioExecute } from './composio-tool.js';
 
+const EXPLICIT_LISTING_INTENT=/\b(job|jobs|project|projects|hiring|hire|hiring for|looking for|seeking|wanted|needed|required|contract|contractor|bounty|task|tasks|apply|application|opening|vacancy|freelance (?:role|work|job)|paid (?:work|task|project))\b/i;
+
 export class RevenueLeadActioner extends SearchFirstLeadActioner{
   priority(lead){
     let score=super.priority(lead);
@@ -21,6 +23,21 @@ export class RevenueLeadActioner extends SearchFirstLeadActioner{
   }
 
   async sendApplicationEmailOnce(args){
+    const {id,host,lead,route,subject,body,proposal,payout,capability}=args||{};
+    const listingText=`${String(lead?.title||'')} ${String(lead?.snippet||'')}`;
+    if(!EXPLICIT_LISTING_INTENT.test(listingText)){
+      if(id)this.setAction(id,{status:'archived',reason:'not an explicit work listing; outbound application suppressed'});
+      this.event('lead_application_suppressed',{id,host,reason:'not_explicit_work_listing'});
+      return;
+    }
+    const floor=Math.max(0,Number(this.env.AUTONOMOS_GLOBAL_MIN_JOB_PAYOUT_USD||this.env.AUTONOMOS_MIN_JOB_PAYOUT_USD||0.5));
+    const allowUnpriced=/^(1|true|yes|on)$/i.test(String(this.env.AUTONOMOS_ALLOW_UNPRICED_PAID_LEADS||'false'));
+    if(Number(payout?.amountUsd||0)<floor&&!allowUnpriced){
+      if(id)this.setAction(id,{status:'payout_unverified',reason:`priced payout below verification floor (${Number(payout?.amountUsd||0)} < ${floor})`,nextRetryAt:new Date(Date.now()+12*60*60_000).toISOString()});
+      this.event('lead_application_suppressed',{id,host,reason:'payout_not_priced_above_floor',amountUsd:Number(payout?.amountUsd||0),floor});
+      return;
+    }
+
     const now=Date.now();
     const events=Array.isArray(this.state?.events)?this.state.events:[];
     const hourCap=Math.max(1,Math.min(100,Number(this.env.AUTONOMOS_EMAIL_APPLICATIONS_PER_HOUR||20)));
@@ -29,13 +46,11 @@ export class RevenueLeadActioner extends SearchFirstLeadActioner{
     const hour=sentAt.filter(ts=>now-ts<60*60_000).length;
     const day=sentAt.filter(ts=>now-ts<24*60*60_000).length;
     if(hour>=hourCap||day>=dayCap){
-      const id=String(args?.id||'');
       if(id)this.setAction(id,{status:'email_rate_limited',reason:`email application channel protected: ${hour}/${hourCap} last hour, ${day}/${dayCap} last 24h`,nextRetryAt:new Date(now+60*60_000).toISOString()});
       this.event('email_application_rate_limited',{hour,hourCap,day,dayCap});
       return;
     }
 
-    const {id,host,lead,route,subject,body,proposal,payout,capability}=args||{};
     const prior=this.state.actions?.[id]||{};
     if(['email_send_in_progress','applied_email','application_uncertain'].includes(String(prior.status||'')))return;
     this.setAction(id,{status:'email_send_in_progress',recipient:route.email,applicationUrl:lead.url,proposal:String(proposal||'').slice(0,1800),payout,skill:capability.skill,emailStartedAt:new Date().toISOString(),nextRetryAt:''});
