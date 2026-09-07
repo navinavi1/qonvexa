@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { GlobalLeadActioner } from '../src/autonomos/global-lead-actioner.js';
+import { classifyOpportunity } from '../src/autonomos/capabilities.js';
 
 const root=fs.mkdtempSync(path.join(os.tmpdir(),'global-actioner-'));
 const env={STORAGE_DIR:root,AUTONOMOS_REGISTRATION_EMAIL:'agent@example.com',AUTONOMOS_AGENT_NAME:'AutonomOS',SITE_URL:'https://example.com'};
@@ -22,5 +23,14 @@ assert.match(instruction,/Do NOT bypass/i);assert.match(instruction,/Do NOT pay 
 const op=actioner.toOpportunity(lead,'Translate the supplied document accurately.');
 assert.equal(op.source,'global-web');assert.equal(op.externalId,'lead1');assert.equal(op.budgetUsd,50);
 
-console.log('GLOBAL ACTIONER: safety + paid-work gates PASS');
+// Marketplace boilerplate like “buy services” is not a task requirement and must not
+// force a normal translation job into external_procurement. An explicit requirement to
+// buy a paid license for the task still must be blocked.
+const context={llmEnabled:true,hasBrowserTool:true,hasShellTool:true,hasArtifactTool:true,hasAppTool:true,hasWebSearchTool:true};
+const normal=classifyOpportunity({...op,description:'Translate the supplied document accurately. Marketplace: buy services, hire freelancers, purchase work securely.'},context);
+assert.equal(normal.skill,'translation');assert.equal(normal.executable,true);assert.equal(normal.missingTools.includes('external_procurement'),false);
+const procurement=classifyOpportunity({...op,description:'Translate the supplied document. You are required to purchase a paid software license to complete this task.'},context);
+assert.equal(procurement.missingTools.includes('external_procurement'),true);
+
+console.log('GLOBAL ACTIONER: safety + paid-work + procurement gates PASS');
 fs.rmSync(root,{recursive:true,force:true});
