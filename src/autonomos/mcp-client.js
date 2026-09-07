@@ -1,7 +1,7 @@
 export class McpHttpClient {
   constructor({ url, token='', timeoutMs=15000, clientName='AutonomOS', clientVersion='2.0.0', protocolVersion='2025-06-18' }={}) {
     this.url=String(url||''); this.token=String(token||''); this.timeoutMs=timeoutMs;
-    this.clientName=clientName; this.clientVersion=clientVersion; this.protocolVersion=protocolVersion; this.sessionId=''; this.nextId=1;
+    this.clientName=clientName; this.clientVersion=clientVersion; this.protocolVersion=protocolVersion; this.sessionId=''; this.nextId=1;this.toolAliases=new Map();
   }
   async initialize(){
     if(!/^https?:\/\//.test(this.url)) throw new Error('invalid_mcp_url');
@@ -9,8 +9,24 @@ export class McpHttpClient {
     try{await this.notify('notifications/initialized',{})}catch{}
     return result;
   }
-  async listTools(){ const r=await this.rpc('tools/list',{}); return Array.isArray(r?.tools)?r.tools:[]; }
-  async callTool(name,args={}){ return this.rpc('tools/call',{name,arguments:args}); }
+  async listTools(){
+    const r=await this.rpc('tools/list',{}); const tools=Array.isArray(r?.tools)?r.tools:[];
+    this.toolAliases.clear();
+    // t2000's current Passport Connect surface can expose public Open-board rows through
+    // t2000_jobs(role=buyer) -> openings[] instead of the older t2000_job_board tool. Keep
+    // the provider-specific compatibility shim at the MCP boundary so the marketplace
+    // connector does not silently report a healthy-but-empty board after that schema drift.
+    if(isT2000Endpoint(this.url)&&!tools.some(t=>t?.name==='t2000_job_board')&&tools.some(t=>t?.name==='t2000_jobs')){
+      this.toolAliases.set('t2000_job_board',{target:'t2000_jobs',arguments:{role:'buyer'},normalize:'t2000_buyer_openings'});
+      tools.push({name:'t2000_job_board',description:'Compatibility alias for t2000_jobs(role=buyer) openings.',inputSchema:{type:'object',properties:{}}});
+    }
+    return tools;
+  }
+  async callTool(name,args={}){
+    const alias=this.toolAliases.get(name);
+    const result=await this.rpc('tools/call',{name:alias?.target||name,arguments:alias?alias.arguments:args});
+    return alias?.normalize==='t2000_buyer_openings'?normalizeT2000BuyerOpenings(result):result;
+  }
   async rpc(method,params={},opts={}){
     const id=this.nextId++;
     const response=await fetch(this.url,{method:'POST',headers:this.headers(),body:JSON.stringify({jsonrpc:'2.0',id,method,params}),signal:AbortSignal.timeout(this.timeoutMs)});
@@ -25,6 +41,30 @@ export class McpHttpClient {
     if(!response.ok&&response.status!==202&&response.status!==204)throw new Error(`mcp_notify_${response.status}`);
   }
   headers(){return{'content-type':'application/json','accept':'application/json, text/event-stream','user-agent':`${this.clientName}/${this.clientVersion}`,'mcp-protocol-version':this.protocolVersion,...(this.token?{authorization:`Bearer ${this.token}`}:{}) ,...(this.sessionId?{'mcp-session-id':this.sessionId}:{})};}
+}
+
+function isT2000Endpoint(value){
+  try{return new URL(String(value||'')).hostname.toLowerCase()==='mcp.t2000.ai';}catch{return false;}
+}
+
+function normalizeT2000BuyerOpenings(result){
+  if(!result||typeof result!=='object')return result;
+  if(result.structuredContent&&Array.isArray(result.structuredContent.openings)){
+    return {...result,structuredContent:{...result.structuredContent,jobs:result.structuredContent.openings}};
+  }
+  if(Array.isArray(result.openings))return {...result,jobs:result.openings};
+  if(Array.isArray(result.content)){
+    const content=result.content.map(item=>{
+      if(item?.type!=='text'||typeof item.text!=='string')return item;
+      try{
+        const parsed=JSON.parse(item.text);
+        if(Array.isArray(parsed?.openings))return {...item,text:JSON.stringify({...parsed,jobs:parsed.openings})};
+      }catch{}
+      return item;
+    });
+    return {...result,content};
+  }
+  return result;
 }
 
 async function readRpcBody(response){
