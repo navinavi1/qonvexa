@@ -23,7 +23,6 @@ if (/^(1|true|yes|on)$/i.test(String(process.env.AUTONOMOS_PRODUCTION_SWARM_MODE
 installNetworkGuard({env:process.env,logger:console});
 applySourceQuarantine({env:process.env,storageDir:process.env.STORAGE_DIR,logger:console});
 migrateGlobalActionerState({env:process.env,storageDir:process.env.STORAGE_DIR,logger:console});
-probeRuntimeEmailChannel({env:process.env,logger:console}).catch(()=>{});
 
 const internetHunter=enabled(process.env.AUTONOMOS_INTERNET_HUNTER_ENABLED,'true')
   ? new LeanInternetHunter({env:process.env,storageDir:process.env.STORAGE_DIR,logger:console}) : null;
@@ -32,24 +31,57 @@ const globalHunter=new RevenueGlobalWorkHunter({env:process.env,storageDir:proce
 // instantiated at all and therefore cannot block the worldwide earning loop.
 const browserActioner=enabled(process.env.AUTONOMOS_GLOBAL_ACTIONER_ENABLED,'false')
   ? new ReliableGlobalLeadActioner({env:process.env,storageDir:process.env.STORAGE_DIR,logger:console}) : null;
-const browserlessActioner=enabled(process.env.AUTONOMOS_BROWSERLESS_ACTIONER_ENABLED,'true')
-  ? new RevenueLeadActioner({env:process.env,storageDir:process.env.STORAGE_DIR,logger:console}) : null;
-const gmailJobMonitor=browserlessActioner&&enabled(process.env.AUTONOMOS_GMAIL_JOB_MONITOR_ENABLED,'true')
-  ? new GmailJobMonitor({actioner:browserlessActioner,env:process.env,logger:console}) : null;
+const outboundEmailRequested=enabled(process.env.AUTONOMOS_BROWSERLESS_ACTIONER_ENABLED,'true');
+let browserlessActioner=null;
+let gmailJobMonitor=null;
+let emailGateTimer=null;
+let emailGateRunning=false;
 const taskForceVerifier=new TaskForceVerifier({env:process.env,storageDir:process.env.STORAGE_DIR,logger:console});
 const taskForceWorker=new TaskForceWorker({env:process.env,storageDir:process.env.STORAGE_DIR,logger:console});
 const globalFeedPublisher=new GlobalFeedPublisher({env:process.env,storageDir:process.env.STORAGE_DIR,logger:console});
 
+async function ensureRevenueEmailLane(){
+  if(!outboundEmailRequested||browserlessActioner||emailGateRunning)return Boolean(browserlessActioner);
+  emailGateRunning=true;
+  try{
+    const probe=await probeRuntimeEmailChannel({env:process.env,logger:console});
+    if(!probe?.ready){
+      try{console.info('[RevenueEmailGate] '+JSON.stringify({ready:false,reason:String(probe?.reason||'gmail_not_ready'),reconnectRequired:Boolean(probe?.reconnectRequired),reconnectAvailable:Boolean(probe?.reconnectAvailable)}));}catch{}
+      return false;
+    }
+    browserlessActioner=new RevenueLeadActioner({env:process.env,storageDir:process.env.STORAGE_DIR,logger:console});
+    browserlessActioner.start();
+    if(enabled(process.env.AUTONOMOS_GMAIL_JOB_MONITOR_ENABLED,'true')){
+      gmailJobMonitor=new GmailJobMonitor({actioner:browserlessActioner,env:process.env,logger:console});
+      gmailJobMonitor.start();
+    }
+    if(emailGateTimer){clearInterval(emailGateTimer);emailGateTimer=null;}
+    try{console.info('[RevenueEmailGate] '+JSON.stringify({ready:true,started:true,reason:'gmail_send_authorized'}));}catch{}
+    return true;
+  }catch(error){
+    try{console.error('[RevenueEmailGate] '+JSON.stringify({ready:false,error:String(error?.message||error).slice(0,180)}));}catch{}
+    return false;
+  }finally{emailGateRunning=false;}
+}
+
 internetHunter?.start();
 globalHunter.start();
 browserActioner?.start();
-browserlessActioner?.start();
-gmailJobMonitor?.start();
+if(outboundEmailRequested){
+  await ensureRevenueEmailLane();
+  if(!browserlessActioner){
+    const every=Math.max(30_000,Number(process.env.AUTONOMOS_EMAIL_REAUTH_POLL_MS||60_000));
+    emailGateTimer=setInterval(()=>ensureRevenueEmailLane().catch(()=>{}),every);emailGateTimer.unref?.();
+  }
+}
 taskForceVerifier.start();
 if(enabled(process.env.AUTONOMOS_TASKFORCE_WORKER_ENABLED,'true'))taskForceWorker.start();
 globalFeedPublisher.start();
 
-const stop=()=>{internetHunter?.stop();globalHunter.stop();browserActioner?.stop();browserlessActioner?.stop();gmailJobMonitor?.stop();taskForceVerifier.stop();taskForceWorker.stop();globalFeedPublisher.stop();};
+const stop=()=>{
+  internetHunter?.stop();globalHunter.stop();browserActioner?.stop();browserlessActioner?.stop();gmailJobMonitor?.stop();taskForceVerifier.stop();taskForceWorker.stop();globalFeedPublisher.stop();
+  if(emailGateTimer)clearInterval(emailGateTimer);emailGateTimer=null;
+};
 process.on('SIGTERM',stop);
 process.on('SIGINT',stop);
 
