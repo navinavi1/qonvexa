@@ -31,7 +31,10 @@ export function normalizeConfig(raw={}){
   if(env.AUTONOMOS_NO_ABANDON_ACCEPTED_JOBS!==undefined)envOverrides.noAbandonAcceptedJobs=/^(1|true|yes|on)$/i.test(String(env.AUTONOMOS_NO_ABANDON_ACCEPTED_JOBS));
   if(env.AUTONOMOS_EMERGENCY_FINISH_MODE!==undefined)envOverrides.emergencyFinishMode=/^(1|true|yes|on)$/i.test(String(env.AUTONOMOS_EMERGENCY_FINISH_MODE));
   if(env.AUTONOMOS_SKILL_ACQUISITION_MODE!==undefined)envOverrides.skillAcquisitionMode=/^(1|true|yes|on)$/i.test(String(env.AUTONOMOS_SKILL_ACQUISITION_MODE));
-  const mergedRaw={...envOverrides,...raw};
+  // Explicit Render/runtime policy overrides persisted UI state. This is deliberate for
+  // Survival-mode safety/economics controls: a stale config.json must not silently undo
+  // the operator's deployment policy after restart.
+  const mergedRaw={...raw,...envOverrides};
   const legacy=!Object.prototype.hasOwnProperty.call(mergedRaw,'platformGeneration');
   const previousGeneration=Number(mergedRaw.platformGeneration||(legacy?0:3));
   const previousProfile=Number(mergedRaw.earningProfileVersion||15);
@@ -59,8 +62,6 @@ export function normalizeConfig(raw={}){
     if(raw.t2000MinOpenJobPayoutUsd===undefined||Number(cfg.t2000MinOpenJobPayoutUsd)===10)cfg.t2000MinOpenJobPayoutUsd=0.5;
   }
 
-  // Upgrade the CURRENT production profile (v15/gen8) without rewriting deliberately
-  // ancient fixture semantics used to verify old migrations.
   if(previousProfile<16&&previousGeneration>=8){
     if(raw.maxChildren===undefined||Number(raw.maxChildren)===20)cfg.maxChildren=50;
     if(raw.maxConcurrentJobs===undefined||Number(raw.maxConcurrentJobs)===4)cfg.maxConcurrentJobs=6;
