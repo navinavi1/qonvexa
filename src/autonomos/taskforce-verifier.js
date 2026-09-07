@@ -2,6 +2,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createLlmClient } from './llm.js';
 
+const TASKFORCE_BASE='https://www.task-force.app';
+
 export class TaskForceVerifier {
   constructor({env=process.env,storageDir='',logger=console}={}){
     this.env=env;
@@ -40,9 +42,11 @@ export class TaskForceVerifier {
     if(!this.llm.enabled){this.log('verification_waiting',{reason:'llm_not_configured'});return false;}
     const key=String(credential.apiKey||'').trim();
     if(!key)return false;
-    const headers={accept:'application/json',authorization:key,'x-api-key':key,'user-agent':'AutonomOS-TaskForceVerifier/1.0'};
+    // Use the canonical host directly. Redirecting task-force.app -> www.task-force.app
+    // can strip Authorization on a cross-host redirect in fetch implementations.
+    const headers={accept:'application/json',authorization:`Bearer ${key}`,'user-agent':'AutonomOS-TaskForceVerifier/1.1'};
     try{
-      const challengeRes=await fetch('https://task-force.app/api/agent/verify/challenge',{method:'POST',headers,signal:AbortSignal.timeout(15000)});
+      const challengeRes=await fetch(`${TASKFORCE_BASE}/api/agent/verify/challenge`,{method:'POST',headers,redirect:'error',signal:AbortSignal.timeout(15000)});
       const challenge=await safeJson(challengeRes);
       if(!challengeRes.ok){
         const message=publicError(challenge);
@@ -65,7 +69,7 @@ export class TaskForceVerifier {
       if(!solved.ok||!String(solved.text||'').trim()){this.log('solve_failed',{error:String(solved.reason||'empty_answer').slice(0,200)});return false;}
 
       const answer=String(solved.text).trim().slice(0,3000);
-      const submitRes=await fetch('https://task-force.app/api/agent/verify/submit',{method:'POST',headers:{...headers,'content-type':'application/json'},body:JSON.stringify({challengeId,answer}),signal:AbortSignal.timeout(15000)});
+      const submitRes=await fetch(`${TASKFORCE_BASE}/api/agent/verify/submit`,{method:'POST',headers:{...headers,'content-type':'application/json'},redirect:'error',body:JSON.stringify({challengeId,answer}),signal:AbortSignal.timeout(15000)});
       const submitted=await safeJson(submitRes);
       if(!submitRes.ok){this.log('submit_failed',{status:submitRes.status,error:publicError(submitted)});return false;}
       credential.verified=true;
