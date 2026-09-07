@@ -59,7 +59,17 @@ export class ArtifactStore {
     if (body.length > maxBytes) return { ok:false, reason:`artifact_too_large:${body.length}>${maxBytes}` };
     try {
       const { PutObjectCommand } = await import('@aws-sdk/client-s3');
-      await this.client.send(new PutObjectCommand({ Bucket:this.bucket, Key:cleanKey, Body:body, ContentType:String(contentType || 'application/octet-stream') }));
+      const command=()=>new PutObjectCommand({ Bucket:this.bucket, Key:cleanKey, Body:body, ContentType:String(contentType || 'application/octet-stream') });
+      try {
+        await this.client.send(command());
+      } catch (error) {
+        // Retrying PutObject with the exact same bucket/key/body is idempotent for our
+        // artifact contract. Retry only transport/timeout/throttle/5xx failures; auth,
+        // permission and malformed-request failures must surface immediately.
+        if(!isTransientS3Error(error))throw error;
+        await new Promise(resolve=>setTimeout(resolve,Math.max(100,Math.min(2000,Number(this.env.AUTONOMOS_S3_RETRY_DELAY_MS||400)))));
+        await this.client.send(command());
+      }
       const access = await this.getDownloadUrl(cleanKey);
       if(!access.ok||!access.url)return {ok:false,reason:access.reason||'artifact_download_url_unavailable',bucket:this.bucket,key:cleanKey,uploaded:true};
       return { ok:true, bucket:this.bucket, key:cleanKey, bytes:body.length, contentType, url:access.url || '', urlExpiresInSeconds:access.expiresInSeconds || null };
@@ -80,9 +90,8 @@ export class ArtifactStore {
       const { getSignedUrl } = await import('@aws-sdk/s3-request-presigner');
       // Default raised from 24h to the AWS-imposed 7-day ceiling for presigned URLs (a
       // hard SigV4 protocol limit, not something this code can extend further) — some
-      // marketplaces (Superteam Earn) can take days-to-weeks to review a submission, and
-      // a 24-hour link would already be dead long before anyone looks at it. For a link
-      // that never expires, set S3_PUBLIC_BASE_URL instead (preferred above, when set).
+      // marketplaces can take days-to-weeks to review a submission. For a link that never
+      // expires, set S3_PUBLIC_BASE_URL instead (preferred above, when set).
       const expiresIn = Math.max(60, Math.min(7 * 86400, Number(this.env.AUTONOMOS_ARTIFACT_URL_TTL_SECONDS || 7 * 86400)));
       const url = await getSignedUrl(this.client, new GetObjectCommand({ Bucket:this.bucket, Key:cleanKey }), { expiresIn });
       return { ok:true, url, public:false, expiresInSeconds:expiresIn };
@@ -90,6 +99,14 @@ export class ArtifactStore {
       return { ok:false, reason:String(error?.message || error).slice(0,300) };
     }
   }
+}
+
+function isTransientS3Error(error){
+  const status=Number(error?.$metadata?.httpStatusCode||error?.statusCode||0);
+  if(status===408||status===409||status===425||status===429||status>=500)return true;
+  const code=String(error?.name||error?.code||'').toLowerCase();
+  const message=String(error?.message||'').toLowerCase();
+  return /timeout|timedout|throttl|slowdown|requesttimeout|network|econnreset|econnrefused|enotfound|socket|fetch failed|service unavailable/.test(`${code} ${message}`);
 }
 
 function safeKey(value) {
