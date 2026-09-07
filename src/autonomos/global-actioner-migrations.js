@@ -10,11 +10,14 @@ export function migrateGlobalActionerState({env=process.env,storageDir='',logger
   for(const action of Object.values(state?.actions||{})){
     if(String(action?.status||'')!=='needs_capability')continue;
     const missing=Array.isArray(action?.missingTools)?action.missingTools.map(String):[];
-    if(missing.length!==1||missing[0]!=='external_procurement')continue;
+    const skill=String(action?.skill||'').toLowerCase();
+    const procurementFalsePositive=missing.length===1&&missing[0]==='external_procurement';
+    const designChromeFalsePositive=missing.length===1&&missing[0]==='design_media_tool'&&['translation','copywriting','web-research','data-transform','document-generation'].includes(skill);
+    if(!procurementFalsePositive&&!designChromeFalsePositive)continue;
     action.status='retry';
     action.nextRetryAt='';
     action.missingTools=[];
-    action.reason='requeued_after_procurement_classifier_fix';
+    action.reason=procurementFalsePositive?'requeued_after_procurement_classifier_fix':'requeued_after_job_content_classifier_fix';
     action.updatedAt=new Date().toISOString();
     requeued++;
   }
