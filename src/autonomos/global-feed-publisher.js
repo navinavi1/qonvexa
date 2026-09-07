@@ -63,11 +63,13 @@ export class GlobalFeedPublisher{
   }
 }
 function webActionBucket(status,lead){
-  if(['applied','applied_email','application_uncertain','account_or_email_verification_required','native_api_route','email_rate_limited'].includes(status))return'applied';
+  // "applied" means a confirmed application/proposal was actually sent. Queued or
+  // uncertain attempts stay outside this count so the owner-facing number is auditable.
+  if(['applied','applied_email'].includes(status))return'applied';
   if(['inspecting_direct','email_send_in_progress','accepted','accepted_email','accepted_waiting_treasury','accepted_needs_capability','executing','executing_email','delivery_email_in_progress','submission_uncertain'].includes(status))return'working';
   if(['submitted','submitted_email'].includes(status))return'done';if(status==='paid')return'paid';
   if(['archived','human_gate','ai_prohibited','physical_or_employment','paid_registration_required','capability_blocked','accepted_repair_exhausted','no_direct_route'].includes(status))return'archive';
-  if(['needs_capability','payout_unverified','registration_email_missing','inspect_or_apply_failed','direct_fetch_failed','direct_action_failed','email_channel_unavailable'].includes(status))return'new';
+  if(['needs_capability','payout_unverified','registration_email_missing','inspect_or_apply_failed','direct_fetch_failed','direct_action_failed','email_channel_unavailable','email_rate_limited','application_uncertain','account_or_email_verification_required','native_api_route'].includes(status))return'new';
   return lead?.applyReady?'ready':'new';
 }
 function taskforceBucket(appStatus,workerStatus){
