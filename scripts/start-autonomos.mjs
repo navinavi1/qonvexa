@@ -2,6 +2,7 @@ import 'dotenv/config';
 import { InternetHunter } from '../src/autonomos/internet-hunter.js';
 import { GlobalWorkHunter } from '../src/autonomos/global-work-hunter.js';
 import { ReliableGlobalLeadActioner } from '../src/autonomos/reliable-global-lead-actioner.js';
+import { BrowserlessLeadActioner } from '../src/autonomos/browserless-lead-actioner.js';
 import { migrateGlobalActionerState } from '../src/autonomos/global-actioner-migrations.js';
 import { TaskForceVerifier } from '../src/autonomos/taskforce-verifier.js';
 import { TaskForceWorker } from '../src/autonomos/taskforce-worker.js';
@@ -17,22 +18,31 @@ if (/^(1|true|yes|on)$/i.test(String(process.env.AUTONOMOS_PRODUCTION_SWARM_MODE
 applySourceQuarantine({env:process.env,storageDir:process.env.STORAGE_DIR,logger:console});
 migrateGlobalActionerState({env:process.env,storageDir:process.env.STORAGE_DIR,logger:console});
 
-const hunter=new InternetHunter({env:process.env,storageDir:process.env.STORAGE_DIR,logger:console});
+const internetHunter=enabled(process.env.AUTONOMOS_INTERNET_HUNTER_ENABLED,'true')
+  ? new InternetHunter({env:process.env,storageDir:process.env.STORAGE_DIR,logger:console}) : null;
 const globalHunter=new GlobalWorkHunter({env:process.env,storageDir:process.env.STORAGE_DIR,logger:console});
-const globalLeadActioner=new ReliableGlobalLeadActioner({env:process.env,storageDir:process.env.STORAGE_DIR,logger:console});
+// Browser automation is optional only. If Browserbase is exhausted/unconfigured it is not
+// instantiated at all and therefore cannot block the worldwide earning loop.
+const browserActioner=enabled(process.env.AUTONOMOS_GLOBAL_ACTIONER_ENABLED,'false')
+  ? new ReliableGlobalLeadActioner({env:process.env,storageDir:process.env.STORAGE_DIR,logger:console}) : null;
+const browserlessActioner=enabled(process.env.AUTONOMOS_BROWSERLESS_ACTIONER_ENABLED,'true')
+  ? new BrowserlessLeadActioner({env:process.env,storageDir:process.env.STORAGE_DIR,logger:console}) : null;
 const taskForceVerifier=new TaskForceVerifier({env:process.env,storageDir:process.env.STORAGE_DIR,logger:console});
 const taskForceWorker=new TaskForceWorker({env:process.env,storageDir:process.env.STORAGE_DIR,logger:console});
 const globalFeedPublisher=new GlobalFeedPublisher({env:process.env,storageDir:process.env.STORAGE_DIR,logger:console});
 
-hunter.start();
+internetHunter?.start();
 globalHunter.start();
-globalLeadActioner.start();
+browserActioner?.start();
+browserlessActioner?.start();
 taskForceVerifier.start();
-if(!/^(0|false|no|off)$/i.test(String(process.env.AUTONOMOS_TASKFORCE_WORKER_ENABLED||'true')))taskForceWorker.start();
+if(enabled(process.env.AUTONOMOS_TASKFORCE_WORKER_ENABLED,'true'))taskForceWorker.start();
 globalFeedPublisher.start();
 
-const stop=()=>{hunter.stop();globalHunter.stop();globalLeadActioner.stop();taskForceVerifier.stop();taskForceWorker.stop();globalFeedPublisher.stop();};
+const stop=()=>{internetHunter?.stop();globalHunter.stop();browserActioner?.stop();browserlessActioner?.stop();taskForceVerifier.stop();taskForceWorker.stop();globalFeedPublisher.stop();};
 process.on('SIGTERM',stop);
 process.on('SIGINT',stop);
 
 await import('../server.js');
+
+function enabled(value,fallback='false'){return !/^(0|false|no|off)$/i.test(String(value??fallback));}
