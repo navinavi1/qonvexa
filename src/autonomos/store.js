@@ -1,6 +1,20 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
+const TERMINAL_RECOVERY_HOLDS=new Set(['competitive_auto_submit_disabled']);
+
+export function pruneTerminalInFlightJobs(value){
+  if(!value||Array.isArray(value)||typeof value!=='object')return value;
+  for(const [jobId,record] of Object.entries(value)){
+    if(String(record?.status||'')!=='manual_attention')continue;
+    const hold=String(record?.recoveryHold||'').toLowerCase();
+    const lastError=String(record?.lastError||'').toLowerCase();
+    const terminal=TERMINAL_RECOVERY_HOLDS.has(hold)||lastError.includes('claimed_job_capability_no_longer_executable');
+    if(terminal)delete value[jobId];
+  }
+  return value;
+}
+
 export class AutonomOSStore {
   constructor(rootDir) {
     this.rootDir = rootDir;
@@ -8,15 +22,22 @@ export class AutonomOSStore {
   }
 
   readJson(name, fallback = {}) {
-    try { return JSON.parse(fs.readFileSync(this.file(name), 'utf8')); } catch { return structuredCloneSafe(fallback); }
+    try {
+      const value=JSON.parse(fs.readFileSync(this.file(name), 'utf8'));
+      return name==='in-flight-jobs.json'?pruneTerminalInFlightJobs(value):value;
+    } catch { return structuredCloneSafe(fallback); }
   }
 
   readJsonStrict(name, fallback = {}) {
-    try { return JSON.parse(fs.readFileSync(this.file(name), 'utf8')); }
+    try {
+      const value=JSON.parse(fs.readFileSync(this.file(name), 'utf8'));
+      return name==='in-flight-jobs.json'?pruneTerminalInFlightJobs(value):value;
+    }
     catch(error) { if(error?.code==='ENOENT')return structuredCloneSafe(fallback);throw error; }
   }
 
   writeJson(name, value) {
+    if(name==='in-flight-jobs.json')pruneTerminalInFlightJobs(value);
     const target = this.file(name);
     return this.withLock(name, () => this.writeJsonUnlocked(target, value));
   }
