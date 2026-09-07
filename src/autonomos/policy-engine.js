@@ -78,6 +78,19 @@ export function normalizeConfig(raw={}){
     if(raw.maxPaidProcurementUsd===undefined||Number(raw.maxPaidProcurementUsd)===3)cfg.maxPaidProcurementUsd=10;
   }
 
+  // Explicit production throughput overrides. The persisted config still wins in isolated
+  // tests/fixtures; these only apply to a real persisted runtime snapshot with updatedAt.
+  const runtimeEnvOverridesEnabled=/^(1|true|yes|on)$/i.test(String(env.AUTONOMOS_RUNTIME_ENV_OVERRIDES||''))&&Boolean(String(raw.updatedAt||'').trim());
+  if(runtimeEnvOverridesEnabled){
+    if(env.AUTONOMOS_COMMISSIONING_MODE!==undefined)cfg.commissioningMode=/^(1|true|yes|on)$/i.test(String(env.AUTONOMOS_COMMISSIONING_MODE));
+    if(env.AUTONOMOS_AUTO_COMPETITIVE_SUBMISSIONS!==undefined)cfg.autoCompetitiveSubmissions=/^(1|true|yes|on)$/i.test(String(env.AUTONOMOS_AUTO_COMPETITIVE_SUBMISSIONS));
+    if(env.AUTONOMOS_MAX_CHILDREN!==undefined)cfg.maxChildren=Number(env.AUTONOMOS_MAX_CHILDREN);
+    if(env.AUTONOMOS_MAX_CONCURRENT_JOBS!==undefined)cfg.maxConcurrentJobs=Number(env.AUTONOMOS_MAX_CONCURRENT_JOBS);
+    if(env.AUTONOMOS_MAX_JOBS_PER_CYCLE!==undefined)cfg.maxJobsPerCycle=Number(env.AUTONOMOS_MAX_JOBS_PER_CYCLE);
+    if(env.AUTONOMOS_HEARTBEAT_SECONDS!==undefined)cfg.heartbeatSeconds=Number(env.AUTONOMOS_HEARTBEAT_SECONDS);
+    if(env.AUTONOMOS_FAST_CLAIM_POLL_SECONDS!==undefined)cfg.fastClaimPollSeconds=Number(env.AUTONOMOS_FAST_CLAIM_POLL_SECONDS);
+  }
+
   cfg.platformGeneration=8;cfg.earningProfileVersion=16;
   cfg.enabled=Boolean(cfg.enabled);cfg.killSwitch=Boolean(cfg.killSwitch);
   cfg.survivalMode=cfg.survivalMode!==false;cfg.noAbandonAcceptedJobs=cfg.noAbandonAcceptedJobs!==false;cfg.emergencyFinishMode=cfg.emergencyFinishMode!==false;cfg.skillAcquisitionMode=cfg.skillAcquisitionMode!==false;
