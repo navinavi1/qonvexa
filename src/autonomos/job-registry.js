@@ -27,6 +27,7 @@ export class JobRegistry {
     const tombstone=this.tombstones[identity];
     if(tombstone){
       const row={...(this.records[identity]||baseRow(opportunity,identity,fingerprint,now)),fingerprint,version:Number(this.records[identity]?.version||1),status:'graveyard',terminal:true,failureOwner:tombstone.failureOwner||'market',reasonCode:tombstone.reasonCode||'permanent_tombstone',reason:tombstone.reason||'',closedAt:tombstone.closedAt||now,lastSeenAt:now,seenCount:Number(this.records[identity]?.seenCount||0)+1};
+      suppressRediscoveredOwnedAssignedOpportunity(opportunity,row);
       this.records[identity]=row;this.persist();return {...row};
     }
     let row=this.records[identity];
@@ -43,6 +44,13 @@ export class JobRegistry {
         row={...row,fingerprint,version:Number(row.version||1)+1,status:'new',failureOwner:'',reasonCode:'',reason:'',retryAfter:'',attempts:0,lastSeenAt:now,seenCount:Number(row.seenCount||0)+1,previousVersions:[...(row.previousVersions||[]).slice(-8),previous]};
       }else row={...row,fingerprint,lastSeenAt:now,seenCount:Number(row.seenCount||0)+1,previousVersions:[...(row.previousVersions||[]).slice(-8),previous]};
     }else row={...row,lastSeenAt:now,seenCount:Number(row.seenCount||0)+1};
+    // A seller-queue order can remain visible forever after it has already been claimed or
+    // moved to manual_attention. The runtime historically treated every `already_assigned`
+    // item as pre-committed and bypassed JobRegistry blockers, so the same dead order kept
+    // re-entering the fresh claim scheduler every few seconds. Mutate only the rediscovered
+    // opportunity object to `recovery_only` once registry history proves it is already owned
+    // or blocked. Fresh assigned orders remain untouched and can still start normally.
+    suppressRediscoveredOwnedAssignedOpportunity(opportunity,row);
     row=refreshMetadata(row,opportunity);
     this.records[identity]=row;this.persist();return {...row};
   }
@@ -132,7 +140,7 @@ export class JobRegistry {
     const identity=jobIdentity(opportunity);const row=this.records[identity]||this.observe(opportunity);const now=new Date().toISOString();
     if(this.tombstones[identity]||row.terminal||row.everOwned)return {...row};
     this.records[identity]={...row,status:'policy_hold',terminal:false,failureOwner:String(owner||'policy'),reasonCode:String(reasonCode).slice(0,120),reason:String(reason).slice(0,500),retryAfter:String(retryAfter||''),lastStateAt:now};
-    this.persist();return {...this.records[identity]};
+    this.persist();return {...row};
   }
 
   repairV76LegacyPollution(){
@@ -283,6 +291,17 @@ export class JobRegistry {
   }
 }
 
+function suppressRediscoveredOwnedAssignedOpportunity(opportunity,row){
+  if(!opportunity||typeof opportunity!=='object')return;
+  const source=String(opportunity.source||'').toLowerCase();
+  const assigned=['t2000','dealwork'].includes(source)&&String(opportunity.claimMode||'')==='already_assigned';
+  if(!assigned)return;
+  const status=String(row?.status||'');
+  const ownedOrBlocked=Boolean(row?.everOwned||row?.terminal)||OWNED_STATUSES.has(status)||SYSTEM_BLOCKED_STATUSES.has(status)||['retry','graveyard','archived','stale_check'].includes(status);
+  if(!ownedOrBlocked)return;
+  opportunity.claimMode='recovery_only';
+  opportunity.__registryRecoveryOnly=true;
+}
 function baseRow(opportunity,identity,fingerprint,now){return refreshMetadata({identity,source:String(opportunity?.source||''),externalId:String(opportunity?.externalId||''),fingerprint,version:1,status:'new',everOwned:false,terminal:false,firstSeenAt:now,lastSeenAt:now,seenCount:1},opportunity);}
 function refreshMetadata(row,opportunity){return {...row,title:String(opportunity?.title||row.title||'').slice(0,300),budgetUsd:Number(opportunity?.budgetUsd??row.budgetUsd??0),currency:String(opportunity?.currency||row.currency||''),claimMode:String(opportunity?.claimMode||row.claimMode||''),deadline:String(opportunity?.deadline||row.deadline||''),url:String(opportunity?.url||row.url||'')};}
 function legacyOpportunity(row={}){return {source:String(row.source||'unknown'),externalId:String(row.externalId||row.id||''),title:String(row.title||''),budgetUsd:Number(row.budgetUsd||0),currency:String(row.currency||''),claimMode:String(row.claimMode||''),deadline:String(row.deadline||''),description:String(row.description||'')};}
