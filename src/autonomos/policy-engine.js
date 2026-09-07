@@ -31,14 +31,22 @@ export function normalizeConfig(raw={}){
   if(env.AUTONOMOS_NO_ABANDON_ACCEPTED_JOBS!==undefined)envOverrides.noAbandonAcceptedJobs=/^(1|true|yes|on)$/i.test(String(env.AUTONOMOS_NO_ABANDON_ACCEPTED_JOBS));
   if(env.AUTONOMOS_EMERGENCY_FINISH_MODE!==undefined)envOverrides.emergencyFinishMode=/^(1|true|yes|on)$/i.test(String(env.AUTONOMOS_EMERGENCY_FINISH_MODE));
   if(env.AUTONOMOS_SKILL_ACQUISITION_MODE!==undefined)envOverrides.skillAcquisitionMode=/^(1|true|yes|on)$/i.test(String(env.AUTONOMOS_SKILL_ACQUISITION_MODE));
-  // Explicit Render/runtime policy overrides persisted UI state. This is deliberate for
-  // Survival-mode safety/economics controls: a stale config.json must not silently undo
-  // the operator's deployment policy after restart.
-  const mergedRaw={...raw,...envOverrides};
+  // Persisted/runtime config remains authoritative for isolated runtimes and tests. Environment
+  // values supply defaults when a field is absent, instead of leaking Render's production
+  // policy into every test fixture that constructs its own runtime.
+  const mergedRaw={...envOverrides,...raw};
   const legacy=!Object.prototype.hasOwnProperty.call(mergedRaw,'platformGeneration');
   const previousGeneration=Number(mergedRaw.platformGeneration||(legacy?0:3));
   const previousProfile=Number(mergedRaw.earningProfileVersion||15);
   const cfg={...DEFAULT_AUTONOMOS_CONFIG,...mergedRaw};
+
+  // One known production v15/v16 stale value ($0.30) came from commissioning and blocked
+  // real work. If the deploy explicitly supplies the new Survival ceiling, migrate only that
+  // stale value. Deliberate admin/test values (0, 1, 3, etc.) are not overridden.
+  if(env.AUTONOMOS_MAX_PAID_PROCUREMENT_USD!==undefined&&Number(raw.maxPaidProcurementUsd)===0.3){
+    const deployed=Number(env.AUTONOMOS_MAX_PAID_PROCUREMENT_USD);
+    if(Number.isFinite(deployed)&&deployed>=0)cfg.maxPaidProcurementUsd=deployed;
+  }
 
   if(legacy&&Number(raw.maxJobsPerCycle)===2)cfg.maxJobsPerCycle=6;
   if(previousGeneration<6){
