@@ -32,7 +32,8 @@ export function normalizeConfig(raw={}){
   if(env.AUTONOMOS_NO_ABANDON_ACCEPTED_JOBS!==undefined)envOverrides.noAbandonAcceptedJobs=/^(1|true|yes|on)$/i.test(String(env.AUTONOMOS_NO_ABANDON_ACCEPTED_JOBS));
   if(env.AUTONOMOS_EMERGENCY_FINISH_MODE!==undefined)envOverrides.emergencyFinishMode=/^(1|true|yes|on)$/i.test(String(env.AUTONOMOS_EMERGENCY_FINISH_MODE));
   if(env.AUTONOMOS_SKILL_ACQUISITION_MODE!==undefined)envOverrides.skillAcquisitionMode=/^(1|true|yes|on)$/i.test(String(env.AUTONOMOS_SKILL_ACQUISITION_MODE));
-  const mergedRaw={...raw,...envOverrides};
+  const hasPersistedRuntimeConfig=Boolean(String(raw.updatedAt||'').trim());
+  const mergedRaw=hasPersistedRuntimeConfig?{...raw,...envOverrides}:{...envOverrides,...raw};
   const legacy=!Object.prototype.hasOwnProperty.call(mergedRaw,'platformGeneration');
   const previousGeneration=Number(mergedRaw.platformGeneration||(legacy?0:3));
   const previousProfile=Number(mergedRaw.earningProfileVersion||15);
@@ -67,7 +68,7 @@ export function normalizeConfig(raw={}){
     if(raw.maxPaidProcurementUsd===undefined||Number(raw.maxPaidProcurementUsd)===3)cfg.maxPaidProcurementUsd=10;
   }
 
-  const runtimeEnvOverridesEnabled=/^(1|true|yes|on)$/i.test(String(env.AUTONOMOS_RUNTIME_ENV_OVERRIDES||''));
+  const runtimeEnvOverridesEnabled=/^(1|true|yes|on)$/i.test(String(env.AUTONOMOS_RUNTIME_ENV_OVERRIDES||''))&&hasPersistedRuntimeConfig;
   if(runtimeEnvOverridesEnabled){
     if(env.AUTONOMOS_COMMISSIONING_MODE!==undefined)cfg.commissioningMode=/^(1|true|yes|on)$/i.test(String(env.AUTONOMOS_COMMISSIONING_MODE));
     if(env.AUTONOMOS_AUTO_COMPETITIVE_SUBMISSIONS!==undefined)cfg.autoCompetitiveSubmissions=/^(1|true|yes|on)$/i.test(String(env.AUTONOMOS_AUTO_COMPETITIVE_SUBMISSIONS));
