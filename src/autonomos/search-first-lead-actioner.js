@@ -43,6 +43,25 @@ export class SearchFirstLeadActioner extends BrowserlessLeadActioner{
       const payout=this.resolvePayout(lead,evidenceText);
       if(!payout.paid){this.setAction(id,{status:'payout_unverified',nextRetryAt:new Date(Date.now()+6*60*60_000).toISOString()});return;}
 
+      // GitHub bounty/issues should not be forced through an email-only route. When the
+      // linked GitHub token can comment on an open public issue, post one transparent
+      // application comment exactly once. This turns many previous no_direct_route rows
+      // into real applications without browser automation or paid search.
+      const githubIssue=parseGithubIssue(lead.url);
+      if(githubIssue&&String(this.env.GITHUB_TOKEN||'').trim()){
+        const proposal=await this.makeProposal(lead,evidenceText,capability,payout);
+        const githubApply=await tryGitHubIssueApplication(githubIssue,{lead,proposal,payout,env:this.env});
+        if(githubApply.ok){
+          this.setAction(id,{status:'applied',appliedAt:now(),applicationUrl:lead.url,proposal:proposal.slice(0,1800),payout,skill:capability.skill,route:'github_issue_comment',commentId:String(githubApply.commentId||''),nextCheckAt:new Date(Date.now()+30*60_000).toISOString()});
+          this.state.stats.applied=Number(this.state.stats.applied||0)+1;
+          this.event('lead_applied_github_issue',{id,host,repo:`${githubIssue.owner}/${githubIssue.repo}`,issue:githubIssue.number,amountUsd:payout.amountUsd,currency:payout.currency,skill:capability.skill});return;
+        }
+        if(githubApply.uncertain){
+          this.setAction(id,{status:'application_uncertain',reason:githubApply.error||'github_comment_outcome_uncertain',applicationUrl:lead.url,nextCheckAt:new Date(Date.now()+60*60_000).toISOString()});
+          this.event('lead_github_application_uncertain',{id,host});return;
+        }
+      }
+
       let routes=[...discoverEmailRoutes(page.html,page.finalUrl||lead.url)];
       const candidateUrls=[...discoverApplyLinks(page.html,page.finalUrl||lead.url),...(searchFallback.urls||[])];
       for(const url of unique(candidateUrls).filter(url=>hostname(url)!==host||!AGGREGATOR_HOST.test(host)).slice(0,6)){
@@ -63,7 +82,7 @@ export class SearchFirstLeadActioner extends BrowserlessLeadActioner{
       routes=rankRoutes(routes.filter(validRoute));
       const route=routes[0];
       if(!route){
-        const reason=page.ok?'no verified direct application email found':'aggregator/direct page blocked; search fallback found no verified application email';
+        const reason=page.ok?'no verified direct application route found':'aggregator/direct page blocked; free search found no verified application route';
         this.setAction(id,{status:'no_direct_route',reason,nextRetryAt:new Date(Date.now()+6*60*60_000).toISOString(),payout,skill:capability.skill,contactSearchAttempted:true,searchFallbackUsed:Boolean(searchFallback.ok),directFetchError:page.error||''});
         this.event('lead_no_direct_route',{id,host,searchFallbackUsed:Boolean(searchFallback.ok),directFetchError:page.error||''});return;
       }
@@ -120,6 +139,24 @@ function searchRowRelevant(row,lead){
   return hits>=required;
 }
 function significantTitleTerms(value){return [...new Set(String(value||'').toLowerCase().replace(/[^a-z0-9+#. -]/g,' ').split(/\s+/).map(x=>x.replace(/^[.+#-]+|[.+#-]+$/g,'')).filter(x=>x.length>=4&&!SEARCH_STOPWORDS.has(x)))].slice(0,10);}
+
+function parseGithubIssue(url){
+  try{const u=new URL(String(url));if(!/(^|\.)github\.com$/i.test(u.hostname))return null;const m=u.pathname.match(/^\/([^/]+)\/([^/]+)\/issues\/(\d+)(?:\/|$)/i);if(!m)return null;return{owner:m[1],repo:m[2],number:Number(m[3])};}catch{return null;}
+}
+async function tryGitHubIssueApplication(issue,{lead,proposal,payout,env}){
+  const token=String(env.GITHUB_TOKEN||'').trim();if(!token)return{ok:false,error:'github_token_missing'};
+  const api=`https://api.github.com/repos/${encodeURIComponent(issue.owner)}/${encodeURIComponent(issue.repo)}/issues/${issue.number}`;
+  const headers={accept:'application/vnd.github+json',authorization:`Bearer ${token}`,'x-github-api-version':'2022-11-28','user-agent':'AutonomOS-WorkHunter/15'};
+  try{
+    const inspect=await fetch(api,{headers,signal:AbortSignal.timeout(12000)});if(!inspect.ok)return{ok:false,error:`github_issue_http_${inspect.status}`};
+    const detail=await inspect.json().catch(()=>({}));if(String(detail?.state||'').toLowerCase()!=='open'||detail?.locked===true)return{ok:false,error:'github_issue_not_open_for_comment'};
+    const body=[proposal,'',`AutonomOS application for this paid task. Expected payout: ${payout.amountUsd||'stated in issue'} ${payout.currency||''}.`,'','AutonomOS is an AI-assisted digital-services agency. We do not claim a human identity or unverifiable credentials. If this issue is still available, we can begin immediately and deliver with QA evidence.'].join('\n').slice(0,5000);
+    const response=await fetch(`${api}/comments`,{method:'POST',headers:{...headers,'content-type':'application/json'},body:JSON.stringify({body}),signal:AbortSignal.timeout(12000)});
+    if(response.ok){const data=await response.json().catch(()=>({}));return{ok:true,commentId:data?.id||'',url:data?.html_url||lead?.url||''};}
+    if([401,403,404,422].includes(response.status))return{ok:false,error:`github_comment_http_${response.status}`};
+    return{ok:false,uncertain:true,error:`github_comment_http_${response.status}`};
+  }catch(error){return{ok:false,uncertain:true,error:`github_comment_network:${safeError(error)}`};}
+}
 
 async function fetchPage(url){
   let response;try{response=await fetch(String(url),{redirect:'follow',headers:{accept:'text/html,application/xhtml+xml,text/plain;q=0.8','user-agent':'Mozilla/5.0 (compatible; AutonomOS-WorkHunter/15; +https://qonvexa.co)'},signal:AbortSignal.timeout(12_000)});}catch(error){return{ok:false,error:`fetch_network:${safeError(error)}`,html:'',text:'',finalUrl:String(url||'')};}
