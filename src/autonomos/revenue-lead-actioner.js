@@ -7,9 +7,21 @@ const COLLECTION_TITLE=/(?:^|\b)\d+\s+(?:places?|ways?|sites?|websites?|resource
 const GENERIC_COUNT_TITLE=/^\s*\d+\s+(?:remote\s+)?(?:jobs|vacancies|openings|freelance jobs)\b/i;
 const SPECIFIC_ROLE_OR_REQUEST=/\b(request for proposals|\brfp\b|hiring|seeking|looking for|wanted|needed|required|opening|vacancy|contractor|freelance\s+(?:developer|writer|translator|designer|researcher|tester|engineer|assistant|specialist|consultant)|developer|engineer|writer|translator|designer|researcher|tester|quality assurance|\bqa\b|analyst|assistant|specialist|consultant|manager|moderator|copywriter|editor|proofreader|data entry|automation)\b/i;
 const JOB_URL_HINT=/\/(?:job|project|gig|bounty|opportunity|opening|vacancy)(?:\/|\?|$)/i;
+const KNOWN_MARKETPLACE_HOST=/(^|\.)(freelancer\.com|guru\.com|workana\.com|contra\.com|peopleperhour\.com|truelancer\.com|upwork\.com|fiverr\.com)$/i;
+const MARKETPLACE_APPLICATION_LOCAL=/^(?:apply|applications?|jobs?|careers?|talent|projects?|freelance|freelancers|bount(?:y|ies)|hiring|proposals?)$/i;
 
 export class RevenueLeadActioner extends SearchFirstLeadActioner{
   priority(lead){return super.priority(lead)+(lead?.directRouteHint?120:0);}
+
+  // A marketplace page mentioning KYC/CAPTCHA/2FA should not permanently kill a job.
+  // We continue looking for a separate legitimate API/GitHub/public application route.
+  // Actual protected gates are still never bypassed or solved by the agent.
+  inspectPage(text,lead){
+    const disposition=super.inspectPage(text,lead);
+    if(disposition?.status==='human_gate')return null;
+    return disposition;
+  }
+
   async makeProposal(lead,_text,capability,payout){
     const title=clean(String(lead?.title||'the project')).slice(0,180),skill=String(capability?.skill||lead?.category||'digital').toLowerCase(),line=proposalLine(skill);
     const payoutText=Number(payout?.amountUsd||0)>0?` The stated ${Number(payout.amountUsd).toLocaleString('en-US')} ${String(payout.currency||'USD')} budget works for us subject to the listed scope.`:'';
@@ -20,6 +32,18 @@ export class RevenueLeadActioner extends SearchFirstLeadActioner{
     if(!isSpecificWorkListing(lead)||!EXPLICIT_LISTING_INTENT.test(listingText)){if(id)this.setAction(id,{status:'archived',reason:'not a specific paid work listing; outbound application suppressed'});this.event('lead_application_suppressed',{id,host,reason:'not_specific_work_listing'});return;}
     const floor=Math.max(0,Number(this.env.AUTONOMOS_GLOBAL_MIN_JOB_PAYOUT_USD||this.env.AUTONOMOS_MIN_JOB_PAYOUT_USD||0.5));
     if(Number(payout?.amountUsd||0)<floor){if(id)this.setAction(id,{status:'payout_unverified',reason:`priced payout below verification floor (${Number(payout?.amountUsd||0)} < ${floor})`,nextRetryAt:new Date(Date.now()+12*60*60_000).toISOString()});this.event('lead_application_suppressed',{id,host,reason:'payout_not_priced_above_floor',amountUsd:Number(payout?.amountUsd||0),floor});return;}
+
+    // Do not pretend that emailing an arbitrary address on a marketplace domain is the
+    // same as placing a native bid. For known marketplaces we only use an on-domain email
+    // if its local-part is clearly an application endpoint; otherwise keep the job alive
+    // for native OAuth/API/account routing instead of falsely counting it as applied.
+    const routeEmail=String(route?.email||'').trim().toLowerCase();
+    const [local,domain]=routeEmail.split('@');
+    if(KNOWN_MARKETPLACE_HOST.test(String(host||''))&&domain&&domain===String(host||'').replace(/^www\./,'').toLowerCase()&&!MARKETPLACE_APPLICATION_LOCAL.test(String(local||''))){
+      if(id)this.setAction(id,{status:'native_marketplace_auth_required',reason:'marketplace listing requires authenticated/native application route; generic platform email is not a valid bid',nextRetryAt:new Date(Date.now()+6*60*60_000).toISOString(),applicationUrl:String(lead?.url||''),payout,skill:capability?.skill||''});
+      this.event('lead_application_suppressed',{id,host,reason:'native_marketplace_auth_required'});return;
+    }
+
     const now=Date.now(),events=Array.isArray(this.state?.events)?this.state.events:[],hourCap=Math.max(1,Math.min(100,Number(this.env.AUTONOMOS_EMAIL_APPLICATIONS_PER_HOUR||20))),dayCap=Math.max(hourCap,Math.min(500,Number(this.env.AUTONOMOS_EMAIL_APPLICATIONS_PER_DAY||120)));
     const sentAt=events.filter(row=>String(row?.type||'')==='lead_applied_email').map(row=>Date.parse(String(row?.at||0))).filter(Number.isFinite),hour=sentAt.filter(ts=>now-ts<60*60_000).length,day=sentAt.filter(ts=>now-ts<24*60*60_000).length;
     if(hour>=hourCap||day>=dayCap){if(id)this.setAction(id,{status:'email_rate_limited',reason:`qualified application queued by email pacing: ${hour}/${hourCap} last hour, ${day}/${dayCap} last 24h`,nextRetryAt:new Date(now+15*60_000).toISOString()});this.event('email_application_rate_limited',{hour,hourCap,day,dayCap});return;}
