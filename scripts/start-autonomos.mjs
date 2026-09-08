@@ -1,9 +1,9 @@
 import 'dotenv/config';
 import { LeanInternetHunter } from '../src/autonomos/lean-internet-hunter.js';
 import { FreeRevenueGlobalWorkHunter } from '../src/autonomos/free-revenue-global-work-hunter.js';
-import { AgrentingLiveWorker } from '../src/autonomos/agrenting-live-worker.js';
+import { FreeAgrentingLiveWorker } from '../src/autonomos/free-agrenting-live-worker.js';
 import { ReliableGlobalLeadActioner } from '../src/autonomos/reliable-global-lead-actioner.js';
-import { RevenueLeadActioner } from '../src/autonomos/revenue-lead-actioner.js';
+import { FreeRevenueLeadActioner } from '../src/autonomos/free-revenue-lead-actioner.js';
 import { GmailJobMonitor } from '../src/autonomos/gmail-job-monitor.js';
 import { migrateGlobalActionerState } from '../src/autonomos/global-actioner-migrations.js';
 import { TaskForceVerifier } from '../src/autonomos/taskforce-verifier.js';
@@ -25,7 +25,7 @@ const internetHunter=enabled(process.env.AUTONOMOS_INTERNET_HUNTER_ENABLED,'true
   ? new LeanInternetHunter({env:process.env,storageDir:process.env.STORAGE_DIR,logger:console}) : null;
 const globalHunter=new FreeRevenueGlobalWorkHunter({env:process.env,storageDir:process.env.STORAGE_DIR,logger:console});
 const agrentingWorker=enabled(process.env.AUTONOMOS_AGRENTING_ENABLED,'true')
-  ? new AgrentingLiveWorker({env:process.env,storageDir:process.env.STORAGE_DIR,logger:console}) : null;
+  ? new FreeAgrentingLiveWorker({env:process.env,storageDir:process.env.STORAGE_DIR,logger:console}) : null;
 const browserActioner=enabled(process.env.AUTONOMOS_GLOBAL_ACTIONER_ENABLED,'false')
   ? new ReliableGlobalLeadActioner({env:process.env,storageDir:process.env.STORAGE_DIR,logger:console}) : null;
 const outboundEmailRequested=enabled(process.env.AUTONOMOS_BROWSERLESS_ACTIONER_ENABLED,'true');
@@ -46,14 +46,14 @@ async function ensureRevenueEmailLane(){
       try{console.info('[RevenueEmailGate] '+JSON.stringify({ready:false,reason:String(probe?.reason||'gmail_not_ready'),reconnectRequired:Boolean(probe?.reconnectRequired),reconnectAvailable:Boolean(probe?.reconnectAvailable)}));}catch{}
       return false;
     }
-    browserlessActioner=new RevenueLeadActioner({env:process.env,storageDir:process.env.STORAGE_DIR,logger:console});
+    browserlessActioner=new FreeRevenueLeadActioner({env:process.env,storageDir:process.env.STORAGE_DIR,logger:console});
     browserlessActioner.start();
     if(enabled(process.env.AUTONOMOS_GMAIL_JOB_MONITOR_ENABLED,'true')){
       gmailJobMonitor=new GmailJobMonitor({actioner:browserlessActioner,env:process.env,logger:console});
       gmailJobMonitor.start();
     }
     if(emailGateTimer){clearInterval(emailGateTimer);emailGateTimer=null;}
-    try{console.info('[RevenueEmailGate] '+JSON.stringify({ready:true,started:true,reason:'gmail_send_authorized'}));}catch{}
+    try{console.info('[RevenueEmailGate] '+JSON.stringify({ready:true,started:true,reason:'gmail_send_authorized',capabilityMode:'free-first'}));}catch{}
     return true;
   }catch(error){
     try{console.error('[RevenueEmailGate] '+JSON.stringify({ready:false,error:String(error?.message||error).slice(0,180)}));}catch{}
