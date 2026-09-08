@@ -4,13 +4,15 @@ const SOURCE_CONFIG = [
   {name:'jobicy',minIntervalMs:60*60_000,load:loadJobicy},
   {name:'remoteok',minIntervalMs:60*60_000,load:loadRemoteOk},
   {name:'weworkremotely',minIntervalMs:60*60_000,load:loadWwr},
-  {name:'remotive',minIntervalMs:6*60*60_000,load:loadRemotive}
+  {name:'remotive',minIntervalMs:6*60*60_000,load:loadRemotive},
+  // GitHub's own REST search is covered by the existing GitHub connection/token and has
+  // no pay-as-you-go billing. Poll slowly and only keep issues that state real money/crypto.
+  {name:'github-bounties',minIntervalMs:6*60*60_000,load:loadGithubBounties}
 ];
 
-// Zero-paid-dependency discovery. These sources are public and require no API key,
-// payment method or subscription. The parent class is retained for TaskForce lifecycle
-// logic only; its Tavily/Firecrawl searchWorldwide() implementation is deliberately not
-// called here.
+// Zero-paid-dependency discovery. These sources are public/free-to-query and do not use
+// Tavily, Firecrawl or Browserbase. The parent class is retained for TaskForce lifecycle
+// logic only; its paid-search searchWorldwide() implementation is deliberately not called.
 export class FreeRevenueGlobalWorkHunter extends RevenueGlobalWorkHunter {
   async searchWorldwide(){
     this.state.freeSources=this.state.freeSources||{};
@@ -22,7 +24,7 @@ export class FreeRevenueGlobalWorkHunter extends RevenueGlobalWorkHunter {
       if(Number.isFinite(last)&&now-last<source.minIntervalMs){skipped++;continue;}
       polled++;
       try{
-        const rows=await source.load();
+        const rows=await source.load(this.env);
         rowsSeen+=rows.length;
         let sourceNew=0;
         for(const row of rows){
@@ -32,7 +34,7 @@ export class FreeRevenueGlobalWorkHunter extends RevenueGlobalWorkHunter {
           if(lead.humanGate){this.archiveLead(lead.id,'protected_registration_or_identity_step_required',lead);continue;}
           const prev=this.state.leads?.[lead.id];
           if(!prev){newLeads++;sourceNew++;}
-          const directRouteHint=/\b(apply|application|send (?:your )?(?:proposal|cv|resume)|email|contact|contract|freelance)\b/i.test(`${row.title||''} ${row.snippet||''}`);
+          const directRouteHint=/\b(apply|application|send (?:your )?(?:proposal|cv|resume)|email|contact|contract|freelance|claim|bounty)\b/i.test(`${row.title||''} ${row.snippet||''}`);
           this.state.leads[lead.id]={...prev,...lead,directRouteHint,freeSource:source.name,firstSeenAt:prev?.firstSeenAt||new Date().toISOString(),lastSeenAt:new Date().toISOString()};
         }
         this.state.freeSources[source.name]={lastPollAt:new Date().toISOString(),lastSuccessAt:new Date().toISOString(),lastCount:rows.length,lastNew:sourceNew,error:''};
@@ -98,6 +100,23 @@ async function loadWwr(){
     score:1,
     snippet:cleanHtml(`${xmlValue(item,'description')} ${xmlValue(item,'category')}`).slice(0,6000)
   })).filter(validRow);
+}
+
+async function loadGithubBounties(env={}){
+  const queries=['is:issue is:open bounty','is:issue is:open "paid" reward','is:issue is:open USDC bounty','is:issue is:open USDT bounty'];
+  const out=[],seen=new Set();
+  for(const query of queries){
+    const headers={accept:'application/vnd.github+json','user-agent':'AutonomOS-FreeRevenueHunter/1.0'};const token=String(env.GITHUB_TOKEN||'').trim();if(token)headers.authorization=`Bearer ${token}`;
+    const u=new URL('https://api.github.com/search/issues');u.searchParams.set('q',query);u.searchParams.set('sort','updated');u.searchParams.set('order','desc');u.searchParams.set('per_page','30');
+    const r=await fetch(u,{headers,signal:AbortSignal.timeout(20_000)});if(!r.ok)throw new Error(`github_issues_http_${r.status}`);const data=await r.json();
+    for(const issue of Array.isArray(data?.items)?data.items:[]){
+      const url=String(issue?.html_url||'');if(!url||seen.has(url)||issue?.pull_request)continue;seen.add(url);
+      const labels=(issue?.labels||[]).map(x=>typeof x==='string'?x:String(x?.name||'')).join(' ');const body=String(issue?.body||'');const text=`${issue?.title||''} ${labels} ${body}`;
+      if(!/(?:\$\s?\d|\b\d+(?:\.\d+)?\s?(?:USD|USDC|USDT|DAI|ETH|SOL|BTC)\b)/i.test(text))continue;
+      out.push({title:String(issue?.title||'GitHub paid bounty'),url,score:1,snippet:cleanHtml(`GitHub issue bounty ${labels} ${body}`).slice(0,6000)});
+    }
+  }
+  return out.slice(0,120).filter(validRow);
 }
 
 async function getJson(url){
