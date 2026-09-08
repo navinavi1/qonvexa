@@ -12,10 +12,11 @@ export const FREE_SKILL_MATRIX=Object.freeze({
   'document-generation': ['e2b_python','e2b_shell','artifact_storage','google_drive'],
   'translation': ['llm','document-generation'],
   'copywriting': ['llm','document-generation'],
-  'web-research': ['public_http','public_rss','public_api','llm'],
+  'web-research': ['e2b_public_http','github_public_search','stackexchange_public_api','wikipedia_public_api','public_rss','llm'],
+  'browser-ops': ['e2b_shell','playwright_or_puppeteer'],
   'app-automation': ['composio_free_apps'],
   'testing': ['e2b_python','e2b_shell'],
-  'seo': ['public_http','e2b_python','document-generation'],
+  'seo': ['e2b_public_http','e2b_python','document-generation'],
   'analytics': ['e2b_python','google_sheets','document-generation'],
   'ecommerce': ['composio_free_apps','google_sheets','copywriting'],
   'customer-support': ['gmail','composio_free_apps','copywriting'],
@@ -24,6 +25,7 @@ export const FREE_SKILL_MATRIX=Object.freeze({
   'presentation': ['e2b_python','document-generation'],
   'image-basic': ['e2b_python','e2b_shell','figma','canva'],
   'audio-video-basic': ['e2b_shell'],
+  'deploy': ['composio_free_apps','vercel','netlify'],
   'general-digital': ['llm','e2b_python','e2b_shell','composio_free_apps','document-generation']
 });
 
@@ -37,25 +39,28 @@ const CATEGORY_TO_SKILL=Object.freeze({
   testing:'testing', qa:'testing', ecommerce:'ecommerce', 'customer-support':'customer-support',
   'social-media':'social-media', 'virtual-assistant':'app-automation', 'ai-workflow':'app-automation',
   'graphic-design':'image-basic', 'ui-ux':'image-basic', video:'audio-video-basic', audio:'audio-video-basic',
-  website:'code-analysis'
+  browser:'browser-ops', website:'code-analysis', deploy:'deploy'
 });
 
 export function freeCapabilityContext(env=process.env){
+  const hasE2B=Boolean(env.E2B_API_KEY);
+  const hasComposio=Boolean(env.COMPOSIO_API_KEY);
   return {
     llmEnabled:Boolean(env.OPENAI_API_KEY),
     hasGithubPrTool:Boolean(env.GITHUB_TOKEN),
-    hasShellTool:Boolean(env.E2B_API_KEY),
-    hasBrowserTool:false,
-    hasDeployTool:Boolean(env.AUTONOMOS_DEPLOY_WEBHOOK_URL),
-    hasArtifactTool:Boolean((env.S3_ENDPOINT||env.R2_ENDPOINT)&&(env.S3_BUCKET||env.R2_BUCKET)),
-    hasAppTool:Boolean(env.COMPOSIO_API_KEY),
+    hasShellTool:hasE2B,
+    // Interactive work uses Playwright/Puppeteer inside the isolated E2B sandbox. It is
+    // never used to bypass CAPTCHA/KYC/2FA or to impersonate a human identity.
+    hasBrowserTool:hasE2B,
+    // Vercel/Netlify are already connected through the free Composio app gateway.
+    hasDeployTool:Boolean(env.AUTONOMOS_DEPLOY_WEBHOOK_URL)||hasComposio,
+    hasArtifactTool:Boolean((env.S3_ENDPOINT||env.R2_ENDPOINT)&&(env.S3_BUCKET||env.R2_BUCKET))||hasComposio,
+    hasAppTool:hasComposio,
     connectedApps:[...FREE_CONNECTED_APPS],
-    // Generic paid search is deliberately false. Current-data jobs may still use
-    // task-provided URLs and approved public HTTP/RSS/API sources.
-    hasWebSearchTool:false,
-    // Basic media can be produced in E2B with open-source tools/packages. This is NOT
-    // a claim that every advanced creative brief is executable.
-    hasDesignMediaTool:Boolean(env.E2B_API_KEY)
+    // E2B gives agents a real public-HTTP execution environment. Current-fact work must
+    // still cite actual URLs/API responses; this flag does not re-enable Tavily/Firecrawl.
+    hasWebSearchTool:hasE2B||Boolean(env.GITHUB_TOKEN),
+    hasDesignMediaTool:hasE2B
   };
 }
 
@@ -71,6 +76,8 @@ export function normalizeOpportunityForFreeSkills(op={}){
   if(/\b(?:seo audit|keyword list|on-page seo|meta description)\b/i.test(hay))normalizedCategory='web-research';
   if(/\b(?:dashboard|reporting|data visualization|chart|analytics report)\b/i.test(hay))normalizedCategory='data-transform';
   if(/\b(?:customer support|email support|reply to customers|inbox triage)\b/i.test(hay))normalizedCategory='app-automation';
+  if(/\b(?:browser automation|web app testing|screenshot|navigate (?:the )?(?:site|dashboard))\b/i.test(hay))normalizedCategory='browser-ops';
+  if(/\b(?:deploy|deployment|publish (?:the )?(?:site|app)|release to production)\b/i.test(hay))normalizedCategory='deploy';
   return {...op,category:normalizedCategory,skills:[...(Array.isArray(op.skills)?op.skills:[]),mapped]};
 }
 
