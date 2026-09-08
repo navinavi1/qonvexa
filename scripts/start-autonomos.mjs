@@ -1,7 +1,7 @@
 import 'dotenv/config';
 import { LeanInternetHunter } from '../src/autonomos/lean-internet-hunter.js';
 import { FreeRevenueGlobalWorkHunter } from '../src/autonomos/free-revenue-global-work-hunter.js';
-import { AgrentingWorker } from '../src/autonomos/agrenting-worker.js';
+import { AgrentingLiveWorker } from '../src/autonomos/agrenting-live-worker.js';
 import { ReliableGlobalLeadActioner } from '../src/autonomos/reliable-global-lead-actioner.js';
 import { RevenueLeadActioner } from '../src/autonomos/revenue-lead-actioner.js';
 import { GmailJobMonitor } from '../src/autonomos/gmail-job-monitor.js';
@@ -25,7 +25,7 @@ const internetHunter=enabled(process.env.AUTONOMOS_INTERNET_HUNTER_ENABLED,'true
   ? new LeanInternetHunter({env:process.env,storageDir:process.env.STORAGE_DIR,logger:console}) : null;
 const globalHunter=new FreeRevenueGlobalWorkHunter({env:process.env,storageDir:process.env.STORAGE_DIR,logger:console});
 const agrentingWorker=enabled(process.env.AUTONOMOS_AGRENTING_ENABLED,'true')
-  ? new AgrentingWorker({env:process.env,storageDir:process.env.STORAGE_DIR,logger:console}) : null;
+  ? new AgrentingLiveWorker({env:process.env,storageDir:process.env.STORAGE_DIR,logger:console}) : null;
 const browserActioner=enabled(process.env.AUTONOMOS_GLOBAL_ACTIONER_ENABLED,'false')
   ? new ReliableGlobalLeadActioner({env:process.env,storageDir:process.env.STORAGE_DIR,logger:console}) : null;
 const outboundEmailRequested=enabled(process.env.AUTONOMOS_BROWSERLESS_ACTIONER_ENABLED,'true');
