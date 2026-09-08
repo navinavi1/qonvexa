@@ -21,6 +21,9 @@ export class GlobalFeedPublisher{
       const actioner=readJson(path.join(this.root,'global-lead-actioner.json'),{});
       const taskforceWorker=readJson(path.join(this.root,'taskforce-worker.json'),{});
       const registry=readJson(path.join(this.root,'job-registry.json'),{});
+      const moneyReport=readJson(path.join(this.root,'money-report.json'),{});
+      const sourceScout=readJson(path.join(this.root,'free-market-scout.json'),{});
+      const skillLibrary=readJson(path.join(this.root,'adaptive-skill-library.json'),{});
       const disabled=new Set(String(this.env.AUTONOMOS_DISABLED_MARKETS||'').split(',').map(x=>x.trim().toLowerCase()).filter(Boolean));
       const rows=[];
       const seen=new Set();
@@ -37,7 +40,7 @@ export class GlobalFeedPublisher{
           bucket,status:actionState||(lead?.applyReady?'ready':'new'),firstSeenAt:String(lead?.firstSeenAt||''),lastSeenAt:String(action?.updatedAt||lead?.lastSeenAt||''),
           appliedAt:String(action?.appliedAt||''),acceptedAt:String(action?.acceptedAt||''),submittedAt:String(action?.submittedAt||''),
           reason:String(action?.reason||action?.error||lead?.blocker||'').slice(0,220),cryptoPayout:Boolean(lead?.cryptoPayout),payoutVerified:Boolean(lead?.payoutVerified),
-          attempts:Number(action?.attempts||0),applicationUrl:safeUrl(action?.applicationUrl)
+          attempts:Number(action?.attempts||0),applicationUrl:safeUrl(action?.applicationUrl),freeSource:String(lead?.freeSource||'')
         });
       }
       for(const [key,app] of Object.entries(hunter?.taskforce?.applications||{})){
@@ -53,18 +56,15 @@ export class GlobalFeedPublisher{
         const bucket=['dispatch_pending','bid_submitted','claimed','executing','qa'].includes(status)?'working':['delivered','completed'].includes(status)?'done':['paid','settled'].includes(status)?'paid':['archived','graveyard','stale_check','policy_hold','not_eligible','system_blocked','capability_hold','manual_attention','rejected','expired','cancelled'].includes(status)?'archive':status==='ready'?'ready':'new';
         rows.push({id,title:String(row?.title||row?.externalId||'Marketplace job').slice(0,220),source,url:safeUrl(row?.url),category:'marketplace',amountUsd:num(row?.budgetUsd),currency:String(row?.currency||'USD').toUpperCase(),bucket,status,firstSeenAt:String(row?.firstSeenAt||row?.createdAt||row?.lastSeenAt||''),lastSeenAt:String(row?.lastSeenAt||row?.lastStateAt||''),appliedAt:String(row?.bidSubmittedAt||row?.claimedAt||''),acceptedAt:String(row?.claimedAt||''),submittedAt:String(row?.deliveredAt||''),reason:String(row?.reason||row?.reasonCode||'').slice(0,220),cryptoPayout:['USDC','USDT','ETH','BTC','SOL','DAI'].includes(String(row?.currency||'').toUpperCase()),payoutVerified:false});
       }
-      // Stable owner-facing order: a job's position is based on when it first appeared, not
-      // on every scan touching lastSeenAt. This prevents the live table from jumping around.
       rows.sort((a,b)=>time(b.firstSeenAt||b.appliedAt||b.lastSeenAt)-time(a.firstSeenAt||a.appliedAt||a.lastSeenAt)||String(a.id).localeCompare(String(b.id)));
       const counts={};for(const row of rows)counts[row.bucket]=(counts[row.bucket]||0)+1;
-      const payload={generatedAt:new Date().toISOString(),scope:'worldwide',intervalSeconds:30,total:rows.length,counts,actioner:actioner?.stats||{},rows:rows.slice(0,1200)};
+      const scoutCandidates=Object.values(sourceScout?.candidates||{}).sort((a,b)=>Number(b?.score||0)-Number(a?.score||0)).slice(0,25).map(x=>({name:x.name,score:Number(x.score||0),status:x.status,repoUrl:safeUrl(x.repoUrl),homepage:safeUrl(x.homepage),payoutSignal:Boolean(x.payoutSignal),registrationSignal:Boolean(x.registrationSignal),humanGate:Boolean(x.humanGate)}));
+      const payload={generatedAt:new Date().toISOString(),scope:'worldwide',intervalSeconds:30,total:rows.length,counts,actioner:actioner?.stats||{},moneyReport,autonomy:{freeSources:hunter?.freeSources||{},marketScout:{lastScanAt:String(sourceScout?.lastScanAt||''),scans:Number(sourceScout?.scans||0),verifiedCandidates:scoutCandidates.filter(x=>x.status==='verified_candidate').length,candidates:scoutCandidates},skillLibrary:{generatedAt:String(skillLibrary?.generatedAt||''),topWorkflows:Array.isArray(skillLibrary?.topWorkflows)?skillLibrary.topWorkflows.slice(0,12):[]}},rows:rows.slice(0,1200)};
       fs.writeFileSync(this.publicFile,JSON.stringify(payload),{encoding:'utf8',mode:0o644});
     }catch(error){try{this.logger.warn?.('[GlobalFeedPublisher] '+String(error?.message||error).slice(0,180));}catch{}}
   }
 }
 function webActionBucket(status,lead){
-  // "applied" means a confirmed application/proposal was actually sent. Queued or
-  // uncertain attempts stay outside this count so the owner-facing number is auditable.
   if(['applied','applied_email'].includes(status))return'applied';
   if(['inspecting_direct','email_send_in_progress','accepted','accepted_email','accepted_waiting_treasury','accepted_needs_capability','executing','executing_email','delivery_email_in_progress','submission_uncertain'].includes(status))return'working';
   if(['submitted','submitted_email'].includes(status))return'done';if(status==='paid')return'paid';
