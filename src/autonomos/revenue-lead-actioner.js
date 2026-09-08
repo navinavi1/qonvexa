@@ -13,6 +13,12 @@ const MARKETPLACE_APPLICATION_LOCAL=/^(?:apply|applications?|jobs?|careers?|tale
 export class RevenueLeadActioner extends SearchFirstLeadActioner{
   priority(lead){return super.priority(lead)+(lead?.directRouteHint?120:0);}
 
+  shouldBrowserlessInspect(lead){
+    const action=this.state?.actions?.[lead?.id];
+    if(String(action?.status||'')==='human_gate')return true;
+    return super.shouldBrowserlessInspect(lead);
+  }
+
   // A marketplace page mentioning KYC/CAPTCHA/2FA should not permanently kill a job.
   // We continue looking for a separate legitimate API/GitHub/public application route.
   // Actual protected gates are still never bypassed or solved by the agent.
