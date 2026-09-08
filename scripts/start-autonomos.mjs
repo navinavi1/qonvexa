@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import '../src/autonomos/taskforce-live-recovery-patch.js';
 import '../src/autonomos/revenue-lifecycle-hardening-patch.js';
+import { cleanLegacyAutonomOSState } from '../src/autonomos/legacy-state-cleaner.js';
 import { LeanInternetHunter } from '../src/autonomos/lean-internet-hunter.js';
 import { ProfitFirstGlobalWorkHunter } from '../src/autonomos/profit-first-global-work-hunter.js';
 import { FreeAgrentingLiveWorker } from '../src/autonomos/free-agrenting-live-worker.js';
@@ -16,15 +17,12 @@ import { GmailJobMonitor } from '../src/autonomos/gmail-job-monitor.js';
 import { migrateGlobalActionerState } from '../src/autonomos/global-actioner-migrations.js';
 import { TaskForceVerifier } from '../src/autonomos/taskforce-verifier.js';
 import { TaskForceWorker } from '../src/autonomos/taskforce-worker.js';
-import { applySourceQuarantine } from '../src/autonomos/source-quarantine.js';
 import { GlobalFeedPublisher } from '../src/autonomos/global-feed-publisher.js';
 import { probeRuntimeEmailChannel } from '../src/autonomos/email-channel-probe.js';
-import { installNetworkGuard } from '../src/autonomos/network-guard.js';
 
 if (/^(1|true|yes|on)$/i.test(String(process.env.AUTONOMOS_PRODUCTION_SWARM_MODE||''))) process.env.AUTONOMOS_RUNTIME_ENV_OVERRIDES='true';
 
-installNetworkGuard({env:process.env,logger:console});
-applySourceQuarantine({env:process.env,storageDir:process.env.STORAGE_DIR,logger:console});
+cleanLegacyAutonomOSState({env:process.env,storageDir:process.env.STORAGE_DIR,logger:console});
 migrateGlobalActionerState({env:process.env,storageDir:process.env.STORAGE_DIR,logger:console});
 
 const internetHunter=enabled(process.env.AUTONOMOS_INTERNET_HUNTER_ENABLED,'true')?new LeanInternetHunter({env:process.env,storageDir:process.env.STORAGE_DIR,logger:console}):null;
