@@ -2,6 +2,9 @@ import 'dotenv/config';
 import { LeanInternetHunter } from '../src/autonomos/lean-internet-hunter.js';
 import { FreeRevenueGlobalWorkHunter } from '../src/autonomos/free-revenue-global-work-hunter.js';
 import { FreeAgrentingLiveWorker } from '../src/autonomos/free-agrenting-live-worker.js';
+import { FreeMarketScout } from '../src/autonomos/free-market-scout.js';
+import { SkillLibraryWorker } from '../src/autonomos/skill-library-worker.js';
+import { DailyMoneyReporter } from '../src/autonomos/daily-money-reporter.js';
 import { ReliableGlobalLeadActioner } from '../src/autonomos/reliable-global-lead-actioner.js';
 import { FreeRevenueLeadActioner } from '../src/autonomos/free-revenue-lead-actioner.js';
 import { GmailJobMonitor } from '../src/autonomos/gmail-job-monitor.js';
@@ -26,6 +29,10 @@ const internetHunter=enabled(process.env.AUTONOMOS_INTERNET_HUNTER_ENABLED,'true
 const globalHunter=new FreeRevenueGlobalWorkHunter({env:process.env,storageDir:process.env.STORAGE_DIR,logger:console});
 const agrentingWorker=enabled(process.env.AUTONOMOS_AGRENTING_ENABLED,'true')
   ? new FreeAgrentingLiveWorker({env:process.env,storageDir:process.env.STORAGE_DIR,logger:console}) : null;
+const marketScout=enabled(process.env.AUTONOMOS_FREE_MARKET_SCOUT_ENABLED,'true')
+  ? new FreeMarketScout({env:process.env,storageDir:process.env.STORAGE_DIR,logger:console}) : null;
+const skillLibrary=new SkillLibraryWorker({env:process.env,storageDir:process.env.STORAGE_DIR,logger:console});
+const moneyReporter=new DailyMoneyReporter({env:process.env,storageDir:process.env.STORAGE_DIR,logger:console});
 const browserActioner=enabled(process.env.AUTONOMOS_GLOBAL_ACTIONER_ENABLED,'false')
   ? new ReliableGlobalLeadActioner({env:process.env,storageDir:process.env.STORAGE_DIR,logger:console}) : null;
 const outboundEmailRequested=enabled(process.env.AUTONOMOS_BROWSERLESS_ACTIONER_ENABLED,'true');
@@ -64,6 +71,9 @@ async function ensureRevenueEmailLane(){
 internetHunter?.start();
 globalHunter.start();
 agrentingWorker?.start();
+marketScout?.start();
+skillLibrary.start();
+moneyReporter.start();
 browserActioner?.start();
 if(outboundEmailRequested){
   await ensureRevenueEmailLane();
@@ -77,7 +87,7 @@ if(enabled(process.env.AUTONOMOS_TASKFORCE_WORKER_ENABLED,'true'))taskForceWorke
 globalFeedPublisher.start();
 
 const stop=()=>{
-  internetHunter?.stop();globalHunter.stop();agrentingWorker?.stop();browserActioner?.stop();browserlessActioner?.stop();gmailJobMonitor?.stop();taskForceVerifier.stop();taskForceWorker.stop();globalFeedPublisher.stop();
+  internetHunter?.stop();globalHunter.stop();agrentingWorker?.stop();marketScout?.stop();skillLibrary.stop();moneyReporter.stop();browserActioner?.stop();browserlessActioner?.stop();gmailJobMonitor?.stop();taskForceVerifier.stop();taskForceWorker.stop();globalFeedPublisher.stop();
   if(emailGateTimer)clearInterval(emailGateTimer);emailGateTimer=null;
 };
 process.on('SIGTERM',stop);
