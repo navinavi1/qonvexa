@@ -1,6 +1,6 @@
 import 'dotenv/config';
 import { LeanInternetHunter } from '../src/autonomos/lean-internet-hunter.js';
-import { RevenueGlobalWorkHunter } from '../src/autonomos/revenue-global-work-hunter.js';
+import { FreeRevenueGlobalWorkHunter } from '../src/autonomos/free-revenue-global-work-hunter.js';
 import { ReliableGlobalLeadActioner } from '../src/autonomos/reliable-global-lead-actioner.js';
 import { RevenueLeadActioner } from '../src/autonomos/revenue-lead-actioner.js';
 import { GmailJobMonitor } from '../src/autonomos/gmail-job-monitor.js';
@@ -26,7 +26,9 @@ migrateGlobalActionerState({env:process.env,storageDir:process.env.STORAGE_DIR,l
 
 const internetHunter=enabled(process.env.AUTONOMOS_INTERNET_HUNTER_ENABLED,'true')
   ? new LeanInternetHunter({env:process.env,storageDir:process.env.STORAGE_DIR,logger:console}) : null;
-const globalHunter=new RevenueGlobalWorkHunter({env:process.env,storageDir:process.env.STORAGE_DIR,logger:console});
+// Main worldwide discovery uses only public, no-key feeds. Tavily/Firecrawl are not in
+// this hunter's search path, so discovery cannot roll into paid search usage.
+const globalHunter=new FreeRevenueGlobalWorkHunter({env:process.env,storageDir:process.env.STORAGE_DIR,logger:console});
 // Browser automation is optional only. If Browserbase is exhausted/unconfigured it is not
 // instantiated at all and therefore cannot block the worldwide earning loop.
 const browserActioner=enabled(process.env.AUTONOMOS_GLOBAL_ACTIONER_ENABLED,'false')
