@@ -1,18 +1,18 @@
 export const DEFAULT_AUTONOMOS_CONFIG = Object.freeze({
   enabled: false, killSwitch: false,
   genesisObjective:'Maximize sustainable net revenue by completing legitimate digital work, preserving owner capital, and reinvesting a bounded agent treasury.',
-  survivalMode:true, ownerRevenuePercent:50, agentTreasuryPercent:50,
+  survivalMode:true, ownerRevenuePercent:10, agentTreasuryPercent:90,
   completionReservePercentOfPayout:15, completionReserveMultiplier:0.5,
   noAbandonAcceptedJobs:true, emergencyFinishMode:true, skillAcquisitionMode:true,
   zeroSpendMode:false, earnedFundsOnly:true, seedSpendBudgetUsd:3, allowExternalSpending:false,
-  minMarginPercent:20, reservePercent:50, growthPercent:35, experimentPercent:15,
+  minMarginPercent:20, reservePercent:10, growthPercent:63, experimentPercent:27,
   heartbeatSeconds:60, fastClaimPollSeconds:15,
   maxChildren:50, childSpawnConcurrencyThreshold:3, childTtlMinutes:180,
   maxPaidProcurementUsd:3, maxApiCostPercentOfPayout:60,
   maxJobsPerCycle:10, maxConcurrentJobs:6,
-  platformGeneration:8, earningProfileVersion:16,
+  platformGeneration:8, earningProfileVersion:17,
   autoClaimJobs:true, autoCompetitiveSubmissions:false,
-  commissioningMode:true, commissioningMinPayoutUsd:0.5, cryptoOnlyEarnings:true,
+  commissioningMode:false, commissioningMinPayoutUsd:0.5, cryptoOnlyEarnings:false,
   requireEscrowForAutoClaim:true, rejectDemoAndTestJobs:true,
   minJobPayoutUsd:0.5, clawlancerMinJobPayoutUsd:0.5, dealworkMinJobPayoutUsd:0.5, superteamMinJobPayoutUsd:0.5,
   t2000MinOpenJobPayoutUsd:0.5, t2000PriorityOpenJobPayoutUsd:25, t2000PremiumOpenJobPayoutUsd:50,
@@ -27,21 +27,18 @@ export function normalizeConfig(raw={}){
   if(env.AUTONOMOS_SURVIVAL_MODE!==undefined)envOverrides.survivalMode=/^(1|true|yes|on)$/i.test(String(env.AUTONOMOS_SURVIVAL_MODE));
   if(env.AUTONOMOS_OWNER_REVENUE_PERCENT!==undefined)envOverrides.ownerRevenuePercent=Number(env.AUTONOMOS_OWNER_REVENUE_PERCENT);
   if(env.AUTONOMOS_AGENT_TREASURY_PERCENT!==undefined)envOverrides.agentTreasuryPercent=Number(env.AUTONOMOS_AGENT_TREASURY_PERCENT);
+  if(env.AUTONOMOS_CRYPTO_ONLY_EARNINGS!==undefined)envOverrides.cryptoOnlyEarnings=/^(1|true|yes|on)$/i.test(String(env.AUTONOMOS_CRYPTO_ONLY_EARNINGS));
   if(env.AUTONOMOS_COMPLETION_RESERVE_PERCENT!==undefined)envOverrides.completionReservePercentOfPayout=Number(env.AUTONOMOS_COMPLETION_RESERVE_PERCENT);
   if(env.AUTONOMOS_NO_ABANDON_ACCEPTED_JOBS!==undefined)envOverrides.noAbandonAcceptedJobs=/^(1|true|yes|on)$/i.test(String(env.AUTONOMOS_NO_ABANDON_ACCEPTED_JOBS));
   if(env.AUTONOMOS_EMERGENCY_FINISH_MODE!==undefined)envOverrides.emergencyFinishMode=/^(1|true|yes|on)$/i.test(String(env.AUTONOMOS_EMERGENCY_FINISH_MODE));
   if(env.AUTONOMOS_SKILL_ACQUISITION_MODE!==undefined)envOverrides.skillAcquisitionMode=/^(1|true|yes|on)$/i.test(String(env.AUTONOMOS_SKILL_ACQUISITION_MODE));
-  const mergedRaw={...envOverrides,...raw};
+  const mergedRaw={...raw,...envOverrides};
   const legacy=!Object.prototype.hasOwnProperty.call(mergedRaw,'platformGeneration');
   const previousGeneration=Number(mergedRaw.platformGeneration||(legacy?0:3));
   const previousProfile=Number(mergedRaw.earningProfileVersion||15);
   const cfg={...DEFAULT_AUTONOMOS_CONFIG,...mergedRaw};
 
-  if(env.AUTONOMOS_MAX_PAID_PROCUREMENT_USD!==undefined&&Number(raw.maxPaidProcurementUsd)===0.3){
-    const deployed=Number(env.AUTONOMOS_MAX_PAID_PROCUREMENT_USD);
-    if(Number.isFinite(deployed)&&deployed>=0)cfg.maxPaidProcurementUsd=deployed;
-  }
-
+  if(env.AUTONOMOS_MAX_PAID_PROCUREMENT_USD!==undefined&&Number(raw.maxPaidProcurementUsd)===0.3){const deployed=Number(env.AUTONOMOS_MAX_PAID_PROCUREMENT_USD);if(Number.isFinite(deployed)&&deployed>=0)cfg.maxPaidProcurementUsd=deployed;}
   if(legacy&&Number(raw.maxJobsPerCycle)===2)cfg.maxJobsPerCycle=6;
   if(previousGeneration<6){
     if(raw.minJobPayoutUsd===undefined||Number(raw.minJobPayoutUsd)===25)cfg.minJobPayoutUsd=10;
@@ -55,7 +52,6 @@ export function normalizeConfig(raw={}){
     if(Number(raw.maxApiCostPercentOfPayout)===25)cfg.maxApiCostPercentOfPayout=35;
     if(raw.maxChildren===undefined)cfg.maxChildren=20;
   }
-  if(previousGeneration<7){if(raw.commissioningMode===undefined)cfg.commissioningMode=true;if(raw.commissioningMinPayoutUsd===undefined)cfg.commissioningMinPayoutUsd=0.5;if(raw.cryptoOnlyEarnings===undefined)cfg.cryptoOnlyEarnings=true;}
   if(previousGeneration<8){
     if(raw.minJobPayoutUsd===undefined||Number(cfg.minJobPayoutUsd)===10)cfg.minJobPayoutUsd=0.5;
     if(raw.clawlancerMinJobPayoutUsd===undefined||Number(cfg.clawlancerMinJobPayoutUsd)===10)cfg.clawlancerMinJobPayoutUsd=0.5;
@@ -63,7 +59,6 @@ export function normalizeConfig(raw={}){
     if(raw.superteamMinJobPayoutUsd===undefined||Number(cfg.superteamMinJobPayoutUsd)===10)cfg.superteamMinJobPayoutUsd=0.5;
     if(raw.t2000MinOpenJobPayoutUsd===undefined||Number(cfg.t2000MinOpenJobPayoutUsd)===10)cfg.t2000MinOpenJobPayoutUsd=0.5;
   }
-
   if(previousProfile<16&&previousGeneration>=8){
     if(raw.maxChildren===undefined||Number(raw.maxChildren)===20)cfg.maxChildren=50;
     if(raw.maxConcurrentJobs===undefined||Number(raw.maxConcurrentJobs)===4)cfg.maxConcurrentJobs=6;
@@ -72,10 +67,7 @@ export function normalizeConfig(raw={}){
     if(raw.maxPaidProcurementUsd===undefined||Number(raw.maxPaidProcurementUsd)===3)cfg.maxPaidProcurementUsd=10;
   }
 
-  // Production swarm can scale elastically without leaking those limits into unit tests.
-  // These are high technical ceilings, not targets: runtime still scales only to real queue,
-  // available treasury and actual process capacity.
-  const runtimeEnvOverridesEnabled=/^(1|true|yes|on)$/i.test(String(env.AUTONOMOS_RUNTIME_ENV_OVERRIDES||''))&&Boolean(String(raw.updatedAt||'').trim());
+  const runtimeEnvOverridesEnabled=/^(1|true|yes|on)$/i.test(String(env.AUTONOMOS_RUNTIME_ENV_OVERRIDES||''));
   if(runtimeEnvOverridesEnabled){
     if(env.AUTONOMOS_COMMISSIONING_MODE!==undefined)cfg.commissioningMode=/^(1|true|yes|on)$/i.test(String(env.AUTONOMOS_COMMISSIONING_MODE));
     if(env.AUTONOMOS_AUTO_COMPETITIVE_SUBMISSIONS!==undefined)cfg.autoCompetitiveSubmissions=/^(1|true|yes|on)$/i.test(String(env.AUTONOMOS_AUTO_COMPETITIVE_SUBMISSIONS));
@@ -86,18 +78,16 @@ export function normalizeConfig(raw={}){
     if(env.AUTONOMOS_FAST_CLAIM_POLL_SECONDS!==undefined)cfg.fastClaimPollSeconds=Number(env.AUTONOMOS_FAST_CLAIM_POLL_SECONDS);
   }
 
-  cfg.platformGeneration=8;cfg.earningProfileVersion=16;
+  cfg.platformGeneration=8;cfg.earningProfileVersion=17;
   cfg.enabled=Boolean(cfg.enabled);cfg.killSwitch=Boolean(cfg.killSwitch);
   cfg.survivalMode=cfg.survivalMode!==false;cfg.noAbandonAcceptedJobs=cfg.noAbandonAcceptedJobs!==false;cfg.emergencyFinishMode=cfg.emergencyFinishMode!==false;cfg.skillAcquisitionMode=cfg.skillAcquisitionMode!==false;
   cfg.zeroSpendMode=cfg.zeroSpendMode!==false;cfg.earnedFundsOnly=cfg.earnedFundsOnly!==false;cfg.seedSpendBudgetUsd=clampNumber(cfg.seedSpendBudgetUsd,0,50,3);cfg.allowExternalSpending=Boolean(cfg.allowExternalSpending)&&!cfg.zeroSpendMode;cfg.minMarginPercent=clampNumber(cfg.minMarginPercent,0,95,20);
-  cfg.ownerRevenuePercent=clampNumber(cfg.ownerRevenuePercent,0,100,50);cfg.agentTreasuryPercent=clampNumber(cfg.agentTreasuryPercent,0,100,50);let split=cfg.ownerRevenuePercent+cfg.agentTreasuryPercent;if(split<=0){cfg.ownerRevenuePercent=50;cfg.agentTreasuryPercent=50;}else if(Math.abs(split-100)>0.0001){cfg.ownerRevenuePercent=100*cfg.ownerRevenuePercent/split;cfg.agentTreasuryPercent=100-cfg.ownerRevenuePercent;}
+  cfg.ownerRevenuePercent=clampNumber(cfg.ownerRevenuePercent,0,100,10);cfg.agentTreasuryPercent=clampNumber(cfg.agentTreasuryPercent,0,100,90);let split=cfg.ownerRevenuePercent+cfg.agentTreasuryPercent;if(split<=0){cfg.ownerRevenuePercent=10;cfg.agentTreasuryPercent=90;}else if(Math.abs(split-100)>0.0001){cfg.ownerRevenuePercent=100*cfg.ownerRevenuePercent/split;cfg.agentTreasuryPercent=100-cfg.ownerRevenuePercent;}
   cfg.completionReservePercentOfPayout=clampNumber(cfg.completionReservePercentOfPayout,0,50,15);cfg.completionReserveMultiplier=clampNumber(cfg.completionReserveMultiplier,0,3,0.5);
   if(cfg.survivalMode){cfg.reservePercent=cfg.ownerRevenuePercent;cfg.growthPercent=cfg.agentTreasuryPercent*0.70;cfg.experimentPercent=cfg.agentTreasuryPercent*0.30;}else{cfg.reservePercent=clampNumber(cfg.reservePercent,0,100,85);cfg.growthPercent=clampNumber(cfg.growthPercent,0,100,10);cfg.experimentPercent=clampNumber(cfg.experimentPercent,0,100,5);}
-  const maxChildrenCap=runtimeEnvOverridesEnabled?10000:100;
-  const maxJobsPerCycleCap=runtimeEnvOverridesEnabled?1000:50;
-  const maxConcurrentJobsCap=runtimeEnvOverridesEnabled?500:20;
+  const maxChildrenCap=runtimeEnvOverridesEnabled?10000:100,maxJobsPerCycleCap=runtimeEnvOverridesEnabled?1000:50,maxConcurrentJobsCap=runtimeEnvOverridesEnabled?500:20;
   cfg.heartbeatSeconds=Math.round(clampNumber(cfg.heartbeatSeconds,20,3600,60));cfg.fastClaimPollSeconds=Math.round(clampNumber(cfg.fastClaimPollSeconds,5,cfg.heartbeatSeconds,15));cfg.maxChildren=Math.round(clampNumber(cfg.maxChildren,1,maxChildrenCap,50));cfg.childSpawnConcurrencyThreshold=Math.round(clampNumber(cfg.childSpawnConcurrencyThreshold,2,500,3));cfg.childTtlMinutes=Math.round(clampNumber(cfg.childTtlMinutes,5,1440,180));cfg.maxPaidProcurementUsd=clampNumber(cfg.maxPaidProcurementUsd,0,100000,3);cfg.maxApiCostPercentOfPayout=clampNumber(cfg.maxApiCostPercentOfPayout,0,80,60);cfg.maxJobsPerCycle=Math.round(clampNumber(cfg.maxJobsPerCycle,1,maxJobsPerCycleCap,10));cfg.maxConcurrentJobs=Math.round(clampNumber(cfg.maxConcurrentJobs,1,maxConcurrentJobsCap,6));
-  cfg.autoClaimJobs=cfg.autoClaimJobs!==false;cfg.autoCompetitiveSubmissions=Boolean(cfg.autoCompetitiveSubmissions);cfg.commissioningMode=cfg.commissioningMode!==false;cfg.commissioningMinPayoutUsd=clampNumber(cfg.commissioningMinPayoutUsd,0.01,10,0.5);cfg.cryptoOnlyEarnings=cfg.cryptoOnlyEarnings!==false;cfg.rejectDemoAndTestJobs=cfg.rejectDemoAndTestJobs!==false;cfg.requireEscrowForAutoClaim=cfg.requireEscrowForAutoClaim!==false;
+  cfg.autoClaimJobs=cfg.autoClaimJobs!==false;cfg.autoCompetitiveSubmissions=Boolean(cfg.autoCompetitiveSubmissions);cfg.commissioningMode=cfg.commissioningMode!==false;cfg.commissioningMinPayoutUsd=clampNumber(cfg.commissioningMinPayoutUsd,0.01,10,0.5);cfg.cryptoOnlyEarnings=Boolean(cfg.cryptoOnlyEarnings);cfg.rejectDemoAndTestJobs=cfg.rejectDemoAndTestJobs!==false;cfg.requireEscrowForAutoClaim=cfg.requireEscrowForAutoClaim!==false;
   cfg.minJobPayoutUsd=clampNumber(cfg.minJobPayoutUsd,0,100000,0.5);cfg.clawlancerMinJobPayoutUsd=clampNumber(cfg.clawlancerMinJobPayoutUsd,cfg.minJobPayoutUsd,100000,Math.max(.5,cfg.minJobPayoutUsd));cfg.dealworkMinJobPayoutUsd=clampNumber(cfg.dealworkMinJobPayoutUsd,cfg.minJobPayoutUsd,100000,Math.max(.5,cfg.minJobPayoutUsd));cfg.superteamMinJobPayoutUsd=clampNumber(cfg.superteamMinJobPayoutUsd,cfg.minJobPayoutUsd,100000,Math.max(.5,cfg.minJobPayoutUsd));cfg.t2000MinOpenJobPayoutUsd=clampNumber(cfg.t2000MinOpenJobPayoutUsd,0,100000,.5);cfg.t2000PriorityOpenJobPayoutUsd=clampNumber(cfg.t2000PriorityOpenJobPayoutUsd,cfg.t2000MinOpenJobPayoutUsd,100000,Math.max(25,cfg.t2000MinOpenJobPayoutUsd));cfg.t2000PremiumOpenJobPayoutUsd=clampNumber(cfg.t2000PremiumOpenJobPayoutUsd,cfg.t2000PriorityOpenJobPayoutUsd,100000,Math.max(50,cfg.t2000PriorityOpenJobPayoutUsd));
   cfg.autoReplication=cfg.autoReplication!==false;cfg.genesisObjective=String(cfg.genesisObjective||DEFAULT_AUTONOMOS_CONFIG.genesisObjective).trim().slice(0,1000);cfg.treasuryAsset=['USDC','USDT','ETH','BTC','SOL'].includes(String(cfg.treasuryAsset).toUpperCase())?String(cfg.treasuryAsset).toUpperCase():'USDC';cfg.updatedAt=new Date().toISOString();return cfg;
 }
