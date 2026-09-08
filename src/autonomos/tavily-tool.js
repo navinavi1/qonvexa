@@ -37,6 +37,10 @@ function delay(ms, signal) {
   });
 }
 
+function paidSearchDisabled(env){
+  return /^(1|true|yes|on)$/i.test(String(env.AUTONOMOS_ZERO_PAID_SEARCH||'false'));
+}
+
 async function reserveTavilySlot(env, signal) {
   const minGapMs = numberInRange(env.TAVILY_MIN_REQUEST_GAP_MS, 3000, 500, 15000);
   let release;
@@ -66,17 +70,16 @@ function applyTavilyCooldown(response, env) {
 export async function tavilySearch(query, env = process.env, signal) {
   const q = String(query || '').trim().slice(0, 400);
   if (!q) return { ok:false, error:'search_query_missing' };
+  // Owner-controlled production kill switch. When enabled, neither Tavily nor the
+  // Firecrawl fallback is contacted even if credentials are accidentally re-added later.
+  if(paidSearchDisabled(env))return{ok:false,error:'paid_search_disabled_by_owner'};
   const tavilyKey=String(env.TAVILY_API_KEY||'').trim();
   let tavilyFailure='';
   if(tavilyKey){
-    // Once Tavily tells us to slow down, stop hammering it on every query. Keep discovery
-    // moving through Firecrawl until the shared cooldown expires.
     if(tavilyCooldownUntil>Date.now()){
       tavilyFailure=`tavily_rate_limit_cooldown:${Math.max(1,Math.ceil((tavilyCooldownUntil-Date.now())/1000))}s`;
     }else{
       try {
-        // GlobalWorkHunter can run several queries per scan. Reserve a shared Tavily slot so
-        // those queries are paced instead of arriving as an 8-request burst every 30 seconds.
         await reserveTavilySlot(env, signal);
         const response = await fetch('https://api.tavily.com/search', {
           method:'POST',
@@ -104,6 +107,7 @@ export async function tavilySearch(query, env = process.env, signal) {
 }
 
 export async function firecrawlSearch(query,env=process.env,signal){
+  if(paidSearchDisabled(env))return{ok:false,error:'paid_search_disabled_by_owner'};
   const key=String(env.FIRECRAWL_API_KEY||'').trim();if(!key)return{ok:false,error:'firecrawl_api_key_missing'};
   try{
     const response=await fetch('https://api.firecrawl.dev/v2/search',{
