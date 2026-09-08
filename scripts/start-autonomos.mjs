@@ -4,6 +4,7 @@ import { FreeRevenueGlobalWorkHunter } from '../src/autonomos/free-revenue-globa
 import { FreeAgrentingLiveWorker } from '../src/autonomos/free-agrenting-live-worker.js';
 import { FreeMarketScout } from '../src/autonomos/free-market-scout.js';
 import { SkillLibraryWorker } from '../src/autonomos/skill-library-worker.js';
+import { AdaptiveSkillAcquirer } from '../src/autonomos/adaptive-skill-acquirer.js';
 import { DailyMoneyReporter } from '../src/autonomos/daily-money-reporter.js';
 import { ReliableGlobalLeadActioner } from '../src/autonomos/reliable-global-lead-actioner.js';
 import { FreeRevenueLeadActioner } from '../src/autonomos/free-revenue-lead-actioner.js';
@@ -32,6 +33,8 @@ const agrentingWorker=enabled(process.env.AUTONOMOS_AGRENTING_ENABLED,'true')
 const marketScout=enabled(process.env.AUTONOMOS_FREE_MARKET_SCOUT_ENABLED,'true')
   ? new FreeMarketScout({env:process.env,storageDir:process.env.STORAGE_DIR,logger:console}) : null;
 const skillLibrary=new SkillLibraryWorker({env:process.env,storageDir:process.env.STORAGE_DIR,logger:console});
+const skillAcquirer=enabled(process.env.AUTONOMOS_SKILL_ACQUISITION_MODE,'true')
+  ? new AdaptiveSkillAcquirer({env:process.env,storageDir:process.env.STORAGE_DIR,logger:console}) : null;
 const moneyReporter=new DailyMoneyReporter({env:process.env,storageDir:process.env.STORAGE_DIR,logger:console});
 const browserActioner=enabled(process.env.AUTONOMOS_GLOBAL_ACTIONER_ENABLED,'false')
   ? new ReliableGlobalLeadActioner({env:process.env,storageDir:process.env.STORAGE_DIR,logger:console}) : null;
@@ -73,6 +76,7 @@ globalHunter.start();
 agrentingWorker?.start();
 marketScout?.start();
 skillLibrary.start();
+skillAcquirer?.start();
 moneyReporter.start();
 browserActioner?.start();
 if(outboundEmailRequested){
@@ -87,7 +91,7 @@ if(enabled(process.env.AUTONOMOS_TASKFORCE_WORKER_ENABLED,'true'))taskForceWorke
 globalFeedPublisher.start();
 
 const stop=()=>{
-  internetHunter?.stop();globalHunter.stop();agrentingWorker?.stop();marketScout?.stop();skillLibrary.stop();moneyReporter.stop();browserActioner?.stop();browserlessActioner?.stop();gmailJobMonitor?.stop();taskForceVerifier.stop();taskForceWorker.stop();globalFeedPublisher.stop();
+  internetHunter?.stop();globalHunter.stop();agrentingWorker?.stop();marketScout?.stop();skillLibrary.stop();skillAcquirer?.stop();moneyReporter.stop();browserActioner?.stop();browserlessActioner?.stop();gmailJobMonitor?.stop();taskForceVerifier.stop();taskForceWorker.stop();globalFeedPublisher.stop();
   if(emailGateTimer)clearInterval(emailGateTimer);emailGateTimer=null;
 };
 process.on('SIGTERM',stop);
