@@ -1,6 +1,6 @@
 import 'dotenv/config';
 import { LeanInternetHunter } from '../src/autonomos/lean-internet-hunter.js';
-import { ExpandedFreeRevenueGlobalWorkHunter } from '../src/autonomos/expanded-free-revenue-global-work-hunter.js';
+import { ProfitFirstGlobalWorkHunter } from '../src/autonomos/profit-first-global-work-hunter.js';
 import { FreeAgrentingLiveWorker } from '../src/autonomos/free-agrenting-live-worker.js';
 import { FreeMarketScout } from '../src/autonomos/free-market-scout.js';
 import { MarketExpansionEngine } from '../src/autonomos/market-expansion-engine.js';
@@ -26,7 +26,7 @@ applySourceQuarantine({env:process.env,storageDir:process.env.STORAGE_DIR,logger
 migrateGlobalActionerState({env:process.env,storageDir:process.env.STORAGE_DIR,logger:console});
 
 const internetHunter=enabled(process.env.AUTONOMOS_INTERNET_HUNTER_ENABLED,'true')?new LeanInternetHunter({env:process.env,storageDir:process.env.STORAGE_DIR,logger:console}):null;
-const globalHunter=new ExpandedFreeRevenueGlobalWorkHunter({env:process.env,storageDir:process.env.STORAGE_DIR,logger:console});
+const globalHunter=new ProfitFirstGlobalWorkHunter({env:process.env,storageDir:process.env.STORAGE_DIR,logger:console});
 const agrentingWorker=enabled(process.env.AUTONOMOS_AGRENTING_ENABLED,'true')?new FreeAgrentingLiveWorker({env:process.env,storageDir:process.env.STORAGE_DIR,logger:console}):null;
 const marketScout=enabled(process.env.AUTONOMOS_FREE_MARKET_SCOUT_ENABLED,'true')?new FreeMarketScout({env:process.env,storageDir:process.env.STORAGE_DIR,logger:console}):null;
 const marketExpansion=enabled(process.env.AUTONOMOS_MARKET_EXPANSION_ENABLED,'true')?new MarketExpansionEngine({env:process.env,storageDir:process.env.STORAGE_DIR,logger:console}):null;
