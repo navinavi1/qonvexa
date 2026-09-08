@@ -1,105 +1,28 @@
-import assert from "node:assert/strict";
-import fs from "node:fs";
-import { JSDOM } from "jsdom";
-import { marketplaceSettings } from "../src/autonomos/marketplace-manager.js";
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import {JSDOM} from 'jsdom';
 
-const dom = new JSDOM('<div id="new-marketplaces"></div>', {
-  url: "https://local.example/admin",
-  runScripts: "outside-only",
-});
-const { window } = dom;
-let requests = [];
-let result = { ok: true };
-window.fetch = async (url, opts) => {
-  requests.push({ url, body: JSON.parse(opts.body) });
-  return { ok: true, json: async () => result };
+const html=fs.readFileSync(new URL('../public/admin.html',import.meta.url),'utf8');
+const dom=new JSDOM(html,{url:'https://local.example/admin',runScripts:'outside-only'});
+const {window}=dom;
+window.fetch=async url=>{
+  if(String(url).includes('autonomos-global-feed.json'))return{ok:true,json:async()=>({generatedAt:new Date().toISOString(),counts:{applied:1,working:1,done:0,paid:0,archive:0},rows:[
+    {id:'live1',source:'freelancer-public-api',title:'Python automation',category:'automation',amountUsd:100,currency:'USD',status:'applied_email',bucket:'applied',appliedAt:new Date().toISOString()},
+    {id:'legacy1',source:'t2000',title:'Old T2000 noise',category:'other',amountUsd:1,currency:'USD',status:'ready',bucket:'live'}
+  ]})};
+  return{ok:true,json:async()=>({})};
 };
-window.eval(
-  fs.readFileSync(
-    new URL("../public/marketplaces.js", import.meta.url),
-    "utf8",
-  ),
-);
-const market = (id) => ({
-  id,
-  settings: marketplaceSettings(id),
-  health: {},
-  metrics: { attempts: 0, won: 0, paid: 0, revenueUsd: 0, costUsd: 0 },
-  lifecycle: {},
-  jobs: [],
-  canary: null,
-});
-const data = {
-  markets: [market("agenthansa"), market("taskbounty")],
-  events: [],
-};
-window.renderNewMarketplaces(data);
-assert.equal(window.document.querySelectorAll("[data-market]").length, 2);
-assert.equal(
-  window.document.querySelector('[data-action="canary"]').disabled,
-  true,
-);
-assert(!window.document.body.textContent.includes("undefined"));
-const card = window.document.querySelector('[data-market="taskbounty"]');
-const form = card.querySelector("form");
-form.elements.mode.value = "canary";
-form.elements.competitiveAllowed.checked = true;
-form.elements.minPayoutUsd.value = "10";
-form.elements.minPayoutUsd.dispatchEvent(new window.Event('input',{bubbles:true}));
-window.renderNewMarketplaces(data);
-assert.equal(window.document.querySelector('[data-market="taskbounty"] input[name="minPayoutUsd"]').value,'10','polling cannot discard unsaved settings');
-form.dispatchEvent(
-  new window.Event("submit", { bubbles: true, cancelable: true }),
-);
-await new Promise((r) => setTimeout(r, 0));
-assert.equal(
-  requests[0].url,
-  "/api/admin/autonomos/marketplaces/taskbounty/config",
-);
-assert.equal(requests[0].body.minPayoutUsd, 10);
-assert.equal(requests[0].body.mode, "canary");
-assert.equal(requests[0].body.competitiveAllowed, true);
-assert.equal(form.dataset.dirty,undefined,'successful save releases polling lock');
-result = { ok: false, reason: "credentials_missing" };
-card.querySelector('[data-action="probe"]').click();
-await new Promise((r) => setTimeout(r, 0));
-assert.equal(
-  card.querySelector('[role="status"]').textContent,
-  "credentials_missing",
-);
-assert.equal(card.querySelector('[data-action="canary"]').disabled, true);
-data.markets[1].jobs = [
-  {
-    title: "<img src=x onerror=alert(1)>",
-    status: "filtered",
-    kind: "competitive",
-    netPayoutUsd: 4,
-    qualification: { reasons: ["below floor"] },
-  },
-];
-window.renderNewMarketplaces(data);
-assert.equal(window.document.querySelector("img"), null);
-assert.match(window.document.body.textContent, /below floor/);
-const html = fs.readFileSync(
-  new URL("../public/admin.html", import.meta.url),
-  "utf8",
-);
-const page = new JSDOM(html);
-const ids = [...page.window.document.querySelectorAll("[id]")].map((e) => e.id);
-assert.equal(new Set(ids).size, ids.length, "admin IDs must remain unique");
-const tabs = [...page.window.document.querySelectorAll("[data-view]")];
-for (const tab of tabs)
-  assert(
-    page.window.document.querySelector(`[data-panel="${tab.dataset.view}"]`),
-  );
-assert.equal(
-  page.window.document
-    .getElementById("new-marketplaces")
-    .closest(".autonomos-stat-grid"),
-  null,
-);
-console.log(
-  "PASS UI controls: both markets, mode gate, save payload, error feedback, XSS escaping, unique IDs and navigation targets",
-);
+window.eval(fs.readFileSync(new URL('../public/marketplaces.js',import.meta.url),'utf8'));
+window.document.dispatchEvent(new window.Event('DOMContentLoaded'));
+await new Promise(r=>setTimeout(r,20));
+assert.equal(window.document.querySelectorAll('[data-market]').length,0,'legacy marketplace control cards are gone');
+assert.equal(window.document.querySelector('.autonomos-t2000-card'),null,'legacy T2000 card is removed from owner UI');
+assert.equal(window.document.querySelector('section[aria-label="AgentHansa and TaskBounty"]'),null,'old marketplace compatibility section is removed');
+const feed=window.document.getElementById('autonomos-global-work-feed');
+assert(feed,'global paid-work feed must exist');
+assert.match(feed.textContent,/Реальний робочий потік/);
+assert(!feed.textContent.includes('Old T2000 noise'),'obsolete source rows must be filtered from the live feed');
+const ids=[...window.document.querySelectorAll('[id]')].map(e=>e.id);
+assert.equal(new Set(ids).size,ids.length,'admin IDs must remain unique');
+console.log('PASS UI cleanup: legacy marketplace controls removed; live global work feed retained');
 dom.window.close();
-page.window.close();
