@@ -1,11 +1,11 @@
 export const DEFAULT_AUTONOMOS_CONFIG = Object.freeze({
   enabled: false, killSwitch: false,
   genesisObjective:'Maximize sustainable net revenue by completing legitimate digital work, preserving owner capital, and reinvesting a bounded agent treasury.',
-  survivalMode:true, ownerRevenuePercent:10, agentTreasuryPercent:90,
+  survivalMode:true, ownerRevenuePercent:50, agentTreasuryPercent:50,
   completionReservePercentOfPayout:15, completionReserveMultiplier:0.5,
   noAbandonAcceptedJobs:true, emergencyFinishMode:true, skillAcquisitionMode:true,
   zeroSpendMode:false, earnedFundsOnly:true, seedSpendBudgetUsd:3, allowExternalSpending:false,
-  minMarginPercent:20, reservePercent:10, growthPercent:63, experimentPercent:27,
+  minMarginPercent:20, reservePercent:50, growthPercent:35, experimentPercent:15,
   heartbeatSeconds:60, fastClaimPollSeconds:15,
   maxChildren:50, childSpawnConcurrencyThreshold:3, childTtlMinutes:180,
   maxPaidProcurementUsd:3, maxApiCostPercentOfPayout:60,
@@ -82,7 +82,7 @@ export function normalizeConfig(raw={}){
   cfg.enabled=Boolean(cfg.enabled);cfg.killSwitch=Boolean(cfg.killSwitch);
   cfg.survivalMode=cfg.survivalMode!==false;cfg.noAbandonAcceptedJobs=cfg.noAbandonAcceptedJobs!==false;cfg.emergencyFinishMode=cfg.emergencyFinishMode!==false;cfg.skillAcquisitionMode=cfg.skillAcquisitionMode!==false;
   cfg.zeroSpendMode=cfg.zeroSpendMode!==false;cfg.earnedFundsOnly=cfg.earnedFundsOnly!==false;cfg.seedSpendBudgetUsd=clampNumber(cfg.seedSpendBudgetUsd,0,50,3);cfg.allowExternalSpending=Boolean(cfg.allowExternalSpending)&&!cfg.zeroSpendMode;cfg.minMarginPercent=clampNumber(cfg.minMarginPercent,0,95,20);
-  cfg.ownerRevenuePercent=clampNumber(cfg.ownerRevenuePercent,0,100,10);cfg.agentTreasuryPercent=clampNumber(cfg.agentTreasuryPercent,0,100,90);let split=cfg.ownerRevenuePercent+cfg.agentTreasuryPercent;if(split<=0){cfg.ownerRevenuePercent=10;cfg.agentTreasuryPercent=90;}else if(Math.abs(split-100)>0.0001){cfg.ownerRevenuePercent=100*cfg.ownerRevenuePercent/split;cfg.agentTreasuryPercent=100-cfg.ownerRevenuePercent;}
+  cfg.ownerRevenuePercent=clampNumber(cfg.ownerRevenuePercent,0,100,50);cfg.agentTreasuryPercent=clampNumber(cfg.agentTreasuryPercent,0,100,50);let split=cfg.ownerRevenuePercent+cfg.agentTreasuryPercent;if(split<=0){cfg.ownerRevenuePercent=50;cfg.agentTreasuryPercent=50;}else if(Math.abs(split-100)>0.0001){cfg.ownerRevenuePercent=100*cfg.ownerRevenuePercent/split;cfg.agentTreasuryPercent=100-cfg.ownerRevenuePercent;}
   cfg.completionReservePercentOfPayout=clampNumber(cfg.completionReservePercentOfPayout,0,50,15);cfg.completionReserveMultiplier=clampNumber(cfg.completionReserveMultiplier,0,3,0.5);
   if(cfg.survivalMode){cfg.reservePercent=cfg.ownerRevenuePercent;cfg.growthPercent=cfg.agentTreasuryPercent*0.70;cfg.experimentPercent=cfg.agentTreasuryPercent*0.30;}else{cfg.reservePercent=clampNumber(cfg.reservePercent,0,100,85);cfg.growthPercent=clampNumber(cfg.growthPercent,0,100,10);cfg.experimentPercent=clampNumber(cfg.experimentPercent,0,100,5);}
   const maxChildrenCap=runtimeEnvOverridesEnabled?10000:100,maxJobsPerCycleCap=runtimeEnvOverridesEnabled?1000:50,maxConcurrentJobsCap=runtimeEnvOverridesEnabled?500:20;
