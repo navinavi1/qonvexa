@@ -12,7 +12,7 @@ export const DEFAULT_AUTONOMOS_CONFIG = Object.freeze({
   maxJobsPerCycle:10, maxConcurrentJobs:6,
   platformGeneration:8, earningProfileVersion:17,
   autoClaimJobs:true, autoCompetitiveSubmissions:false,
-  commissioningMode:false, commissioningMinPayoutUsd:0.5, cryptoOnlyEarnings:false,
+  commissioningMode:true, commissioningMinPayoutUsd:0.5, cryptoOnlyEarnings:true,
   requireEscrowForAutoClaim:true, rejectDemoAndTestJobs:true,
   minJobPayoutUsd:0.5, clawlancerMinJobPayoutUsd:0.5, dealworkMinJobPayoutUsd:0.5, superteamMinJobPayoutUsd:0.5,
   t2000MinOpenJobPayoutUsd:0.5, t2000PriorityOpenJobPayoutUsd:25, t2000PremiumOpenJobPayoutUsd:50,
