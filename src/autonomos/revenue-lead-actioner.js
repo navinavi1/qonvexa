@@ -5,10 +5,15 @@ const EXPLICIT_LISTING_INTENT=/\b(job|jobs|project|projects|hiring|hire|hiring f
 const GENERIC_OR_CONTENT_TITLE=/\b(how to|guide|tutorial|tips?|template|templates|course|courses|best\s+.+\s+freelancers?|top\s+.+\s+freelancers?|hire\s+.+\s+freelancers?|find\s+.+\s+freelance jobs|freelance jobs and leads|work from home careers|project proposals?|score freelance clients|marketplace for freelancers?|services? for freelancers?|places? to find|ways? to find|where to find)\b/i;
 const COLLECTION_TITLE=/(?:^|\b)\d+\s+(?:places?|ways?|sites?|websites?|resources?|tools?|tips?|templates?|jobs?|vacancies|openings)\b|\bjobs\b|^freelance\s+.+\s+(?:jobs?|projects?)\b|^remote\s+.+\s+jobs?\b|\bjobs?\s+in\s+[a-z]|\b(?:find|browse|discover)\s+.+\s+(?:freelance|remote)\s+jobs?\b|\b(?:jobs?|projects?)\s*(?:\||-|—)\s*(?:indeed|linkedin|glassdoor|ziprecruiter|freelancer|peopleperhour)\b/i;
 const GENERIC_COUNT_TITLE=/^\s*\d+\s+(?:remote\s+)?(?:jobs|vacancies|openings|freelance jobs)\b/i;
-const SPECIFIC_ROLE_OR_REQUEST=/\b(request for proposals|\brfp\b|hiring|seeking|looking for|wanted|needed|required|opening|vacancy|contractor|freelance\s+(?:developer|writer|translator|designer|researcher|tester|engineer|assistant|specialist|consultant)|developer|engineer|writer|translator|designer|researcher|tester|quality assurance|\bqa\b|analyst|assistant|specialist|consultant|manager|moderator|copywriter|editor|proofreader|data entry|automation)\b/i;
+const SPECIFIC_ROLE_OR_REQUEST=/\b(request for proposals|\brfp\b|hiring|seeking|looking for|wanted|needed|required|opening|vacancy|contractor|freelance\s+(?:developer|writer|translator|designer|researcher|tester|engineer|assistant|specialist|consultant)|developer|engineer|writer|translator|designer|researcher|tester|quality assurance|\bqa\b|analyst|assistant|specialist|consultant|manager|moderator|copywriter|editor|proofreader|data entry|automation|advertising|ads?|ppc|paid search|media buying|campaign|lead generation|sales ops|crm|email marketing|newsletter|content moderation|customer success|bookkeeping|market research|product research|recruiting sourcing|project management|operations|accessibility|localization|subtitles|data labeling|annotation|prompt engineering|ai evaluation|api integration|wordpress|shopify|webflow|podcast|audio editing|landing page|conversion rate optimization|cro)\b/i;
 const JOB_URL_HINT=/\/(?:job|project|gig|bounty|opportunity|opening|vacancy)(?:\/|\?|$)/i;
 const KNOWN_MARKETPLACE_HOST=/(^|\.)(freelancer\.com|guru\.com|workana\.com|contra\.com|peopleperhour\.com|truelancer\.com|upwork\.com|fiverr\.com)$/i;
 const MARKETPLACE_APPLICATION_LOCAL=/^(?:apply|applications?|jobs?|careers?|talent|projects?|freelance|freelancers|bount(?:y|ies)|hiring|proposals?)$/i;
+// Employment feeds often expose an annual salary that previously looked like a huge project budget.
+// AutonomOS is an autonomous services agency: salary/employee roles are leads to ignore, while explicit
+// freelance/contract/RFP/project/bounty work remains eligible in every digital niche.
+const EMPLOYMENT_COMPENSATION=/\b(?:full[- ]?time|part[- ]?time|permanent employee|employee benefits?|employment type|annual salary|salary range|salary per year|per annum|\/\s*year|a year|401\s*\(?k\)?|health insurance|dental insurance|paid time off|\bpto\b|equity package|stock options?|base salary)\b/i;
+const CONTRACT_OVERRIDE=/\b(?:freelance|freelancer|independent contractor|contract project|fixed[- ]price|project fee|project budget|milestone|bounty|reward|rfp|request for proposals|one[- ]off project|paid task|gig)\b/i;
 
 export class RevenueLeadActioner extends SearchFirstLeadActioner{
   priority(lead){return super.priority(lead)+(lead?.directRouteHint?120:0);}
@@ -35,14 +40,14 @@ export class RevenueLeadActioner extends SearchFirstLeadActioner{
   }
   async sendApplicationEmailOnce(args){
     const {id,host,lead,route,subject,body,proposal,payout,capability}=args||{};const listingText=`${String(lead?.title||'')} ${String(lead?.snippet||'')}`;
+    if(EMPLOYMENT_COMPENSATION.test(listingText)&&!CONTRACT_OVERRIDE.test(listingText)){
+      if(id)this.setAction(id,{status:'physical_or_employment',reason:'salary/employee role is not a client project; annual compensation is not treated as project payout'});
+      this.event('lead_application_suppressed',{id,host,reason:'salaried_employment_not_service_contract'});return;
+    }
     if(!isSpecificWorkListing(lead)||!EXPLICIT_LISTING_INTENT.test(listingText)){if(id)this.setAction(id,{status:'archived',reason:'not a specific paid work listing; outbound application suppressed'});this.event('lead_application_suppressed',{id,host,reason:'not_specific_work_listing'});return;}
     const floor=Math.max(0,Number(this.env.AUTONOMOS_GLOBAL_MIN_JOB_PAYOUT_USD||this.env.AUTONOMOS_MIN_JOB_PAYOUT_USD||0.5));
     if(Number(payout?.amountUsd||0)<floor){if(id)this.setAction(id,{status:'payout_unverified',reason:`priced payout below verification floor (${Number(payout?.amountUsd||0)} < ${floor})`,nextRetryAt:new Date(Date.now()+12*60*60_000).toISOString()});this.event('lead_application_suppressed',{id,host,reason:'payout_not_priced_above_floor',amountUsd:Number(payout?.amountUsd||0),floor});return;}
 
-    // Do not pretend that emailing an arbitrary address on a marketplace domain is the
-    // same as placing a native bid. For known marketplaces we only use an on-domain email
-    // if its local-part is clearly an application endpoint; otherwise keep the job alive
-    // for native OAuth/API/account routing instead of falsely counting it as applied.
     const routeEmail=String(route?.email||'').trim().toLowerCase();
     const [local,domain]=routeEmail.split('@');
     if(KNOWN_MARKETPLACE_HOST.test(String(host||''))&&domain&&domain===String(host||'').replace(/^www\./,'').toLowerCase()&&!MARKETPLACE_APPLICATION_LOCAL.test(String(local||''))){
@@ -61,7 +66,7 @@ export class RevenueLeadActioner extends SearchFirstLeadActioner{
     this.setAction(id,{status:'application_uncertain',reason:`email send outcome uncertain: ${String(result.detail||result.error||'unknown').slice(0,220)}`,recipient:route.email,nextCheckAt:new Date(Date.now()+60*60_000).toISOString()});
   }
 }
-function isSpecificWorkListing(lead){const title=clean(lead?.title).toLowerCase(),snippet=clean(lead?.snippet).toLowerCase(),url=String(lead?.url||'');if(!title)return false;if(GENERIC_OR_CONTENT_TITLE.test(title)||GENERIC_COUNT_TITLE.test(title)||COLLECTION_TITLE.test(title))return false;if(SPECIFIC_ROLE_OR_REQUEST.test(title))return true;if(JOB_URL_HINT.test(url)&&EXPLICIT_LISTING_INTENT.test(`${title} ${snippet}`))return true;return false;}
+function isSpecificWorkListing(lead){const title=clean(lead?.title).toLowerCase(),snippet=clean(lead?.snippet).toLowerCase(),url=String(lead?.url||'');if(!title)return false;if(GENERIC_OR_CONTENT_TITLE.test(title)||GENERIC_COUNT_TITLE.test(title)||COLLECTION_TITLE.test(title))return false;if(EMPLOYMENT_COMPENSATION.test(`${title} ${snippet}`)&&!CONTRACT_OVERRIDE.test(`${title} ${snippet}`))return false;if(SPECIFIC_ROLE_OR_REQUEST.test(title))return true;if(JOB_URL_HINT.test(url)&&EXPLICIT_LISTING_INTENT.test(`${title} ${snippet}`))return true;return false;}
 function proposalLine(skill){if(skill==='translation')return 'We can translate/localize the supplied material, preserve meaning and terminology, then run a consistency and completeness check';if(skill==='copywriting')return 'We can produce the requested copy to the supplied brief, structure it for the target audience, and perform a final clarity/accuracy edit';if(skill==='web-research')return 'We can research the requested facts from public sources, cross-check key points and return a structured result with source evidence';if(skill==='data-transform')return 'We can clean, normalize, deduplicate and transform the supplied data, then verify the output programmatically';if(skill==='code-analysis')return 'We can inspect or implement the code in an isolated environment, run the relevant tests/checks and return verifiable changes/results';if(skill==='app-automation')return 'We can build the requested API/workflow automation using the available integrations and verify the end-to-end behavior';if(skill==='document-generation')return 'We can create the requested structured document or deliverable and verify the final file/content before handoff';return 'We can complete the digital deliverable with the appropriate research, code, data, content and automation tools available to the agent team';}
 function clean(value){return String(value||'').replace(/[\r\n\t]+/g,' ').replace(/\s+/g,' ').trim();}
 function maskEmail(email){const [local,domain]=String(email||'').split('@');return local&&domain?`${local.slice(0,2)}***@${domain}`:'redacted';}
