@@ -8,7 +8,7 @@ export function applySourceQuarantine({env=process.env,storageDir='',logger=cons
   const disabled=new Set(String(env.AUTONOMOS_DISABLED_MARKETS||'').split(',').map(x=>x.trim().toLowerCase()).filter(Boolean));
   const hardIgnoreBelow=Math.max(0,Number(env.AUTONOMOS_HARD_IGNORE_BELOW_USD||0.10));
   const now=new Date().toISOString();
-  const summary={disabled:[...disabled],archived:0,inFlightRemoved:0,t2000Disconnected:false,t2000CredentialRemoved:false,registryWriteDeferred:false};
+  const summary={disabled:[...disabled],archived:0,unarchived:0,inFlightRemoved:0,t2000Disconnected:false,t2000CredentialRemoved:false,registryWriteDeferred:false};
 
   if(disabled.has('t2000')){
     try{
@@ -51,6 +51,26 @@ export function applySourceQuarantine({env=process.env,storageDir='',logger=cons
     const owned=Boolean(row?.everOwned)||['claimed','executing','qa','delivered','paid','settled','completed','bid_submitted'].includes(status);
     const payout=Number(row?.budgetUsd||0);
     const disabledSource=disabled.has(source);
+
+    // Owner re-enabled this source. Reverse only the quarantine that was created by the
+    // owner's disabled-market policy; never revive real marketplace failures or completed
+    // work. This makes AUTONOMOS_DISABLED_MARKETS reversible instead of a one-way tombstone.
+    if(!disabledSource&&status==='archived'&&row?.terminal===true&&String(row?.reasonCode||'')==='source_disabled_by_owner'){
+      registry[identity]={
+        ...row,
+        status:'policy_hold',
+        terminal:false,
+        failureOwner:'owner_policy',
+        reasonCode:'source_reenabled_by_owner',
+        reason:`Source ${source} re-enabled by owner; eligible for fresh discovery and preflight.`,
+        retryAfter:'',
+        closedAt:'',
+        lastStateAt:now
+      };
+      registryChanged=true;summary.unarchived++;
+      continue;
+    }
+
     const worthless=!owned&&payout>0&&payout<hardIgnoreBelow;
     if(!disabledSource&&!worthless)continue;
     if(owned&&!disabledSource)continue;
