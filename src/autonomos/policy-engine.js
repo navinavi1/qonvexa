@@ -33,7 +33,7 @@ export function normalizeConfig(raw={}){
   if(env.AUTONOMOS_EMERGENCY_FINISH_MODE!==undefined)envOverrides.emergencyFinishMode=/^(1|true|yes|on)$/i.test(String(env.AUTONOMOS_EMERGENCY_FINISH_MODE));
   if(env.AUTONOMOS_SKILL_ACQUISITION_MODE!==undefined)envOverrides.skillAcquisitionMode=/^(1|true|yes|on)$/i.test(String(env.AUTONOMOS_SKILL_ACQUISITION_MODE));
   const hasPersistedRuntimeConfig=Boolean(String(raw.updatedAt||'').trim());
-  const mergedRaw=hasPersistedRuntimeConfig?{...raw,...envOverrides}:{...envOverrides,...raw};
+  const mergedRaw=hasPersistedRuntimeConfig?{...raw,...envOverrides}:{...raw};
   const legacy=!Object.prototype.hasOwnProperty.call(mergedRaw,'platformGeneration');
   const previousGeneration=Number(mergedRaw.platformGeneration||(legacy?0:3));
   const previousProfile=Number(mergedRaw.earningProfileVersion||15);
