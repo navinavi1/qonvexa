@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import '../src/autonomos/taskforce-live-recovery-patch.js';
+import '../src/autonomos/revenue-lifecycle-hardening-patch.js';
 import { LeanInternetHunter } from '../src/autonomos/lean-internet-hunter.js';
 import { ProfitFirstGlobalWorkHunter } from '../src/autonomos/profit-first-global-work-hunter.js';
 import { FreeAgrentingLiveWorker } from '../src/autonomos/free-agrenting-live-worker.js';
