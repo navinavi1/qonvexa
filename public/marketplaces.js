@@ -12,14 +12,17 @@ function isActive(row){return row?.bucket!=='archive'&&!isLegacy(row);}
 function availableCount(rows){return rows.filter(r=>!isLegacy(r)&&(['new','ready'].includes(String(r.bucket||''))||String(r.status||'')==='email_rate_limited')).length;}
 
 window.renderNewMarketplaces=function(){
-  const root=document.getElementById('new-marketplaces');
-  if(root)root.remove();
+  if(typeof document==='undefined')return;
+  document.getElementById('new-marketplaces')?.remove();
   document.querySelector('section[aria-label="AgentHansa and TaskBounty"]')?.remove();
+  ensureGlobalFeedPanel();
 };
 
 function removeLegacyDashboardNodes(){
+  if(typeof document==='undefined'||!document?.querySelector)return;
   document.querySelector('.autonomos-t2000-card')?.remove();
   document.querySelector('section[aria-label="AgentHansa and TaskBounty"]')?.remove();
+  document.getElementById('new-marketplaces')?.remove();
   const radar=document.getElementById('autonomos-market-radar');
   if(radar){for(const card of [...radar.children]){const text=String(card.textContent||'').toLowerCase();if([...LEGACY_SOURCES].some(x=>text.includes(x)))card.remove();}}
   const outcomes=document.getElementById('autonomos-market-jobs');
@@ -27,20 +30,24 @@ function removeLegacyDashboardNodes(){
 }
 
 function ensureGlobalFeedPanel(){
-  const anchor=document.querySelector('.autonomos-command-panel');if(!anchor)return;
-  anchor.remove();removeLegacyDashboardNodes();
+  if(typeof document==='undefined'||!document?.querySelector)return;
+  removeLegacyDashboardNodes();
   if(document.getElementById('autonomos-global-work-feed'))return;
+  const parent=document.querySelector('[data-panel="autonomos"]');if(!parent)return;
+  document.querySelector('.autonomos-command-panel')?.remove();
   const panel=document.createElement('section');panel.id='autonomos-global-work-feed';panel.className='admin-panel autonomos-panel global-work-feed';
   const tabs=[['live','Усі активні'],['applied','Подано'],['working','В роботі'],['done','Здано'],['paid','Оплачено'],['archive','Архів']];
   panel.innerHTML=`<div class="admin-panel-head"><div><small>ПО ВСЬОМУ СВІТУ · НАЖИВО</small><h2>Реальний робочий потік</h2><p class="settings-note">Тільки актуальні джерела й задачі. Старі вимкнені ринки та їх історичний шум тут не показуються.</p></div><div id="global-feed-meta"></div></div><div id="global-feed-summary" class="global-feed-summary"></div><div class="global-feed-tabs" role="tablist">${tabs.map(([k,l])=>`<button class="admin-secondary global-feed-tab${k==='live'?' active':''}" data-global-feed="${k}" type="button">${l} <b data-global-count="${k}">0</b></button>`).join('')}</div><div class="autonomos-job-toolbar"><input id="global-feed-search" type="search" placeholder="Шукати роботу, джерело або категорію…"></div><div class="autonomos-job-table-wrap"><table class="autonomos-job-table"><thead><tr><th>Робота</th><th>Джерело</th><th>Категорія</th><th>Виплата</th><th>Статус</th><th>Знайдено / дія</th></tr></thead><tbody id="global-feed-body"></tbody></table></div>`;
-  const parent=document.querySelector('[data-panel="autonomos"]');const firstOperator=parent?.querySelector('.autonomos-operator-row');if(firstOperator)parent.insertBefore(panel,firstOperator);else parent?.appendChild(panel);
-  if(!document.getElementById('global-feed-style')){const style=document.createElement('style');style.id='global-feed-style';style.textContent=`.global-feed-tabs{display:flex;gap:.5rem;flex-wrap:wrap;margin:1rem 0}.global-feed-tab.active{outline:2px solid currentColor}.global-feed-tab b{margin-left:.35rem}.global-work-feed{border:1px solid rgba(120,140,255,.28)}#global-feed-meta{font-size:.82rem;opacity:.8;max-width:390px;text-align:right}.global-feed-summary{display:flex;gap:.7rem;flex-wrap:wrap;margin:.75rem 0 1rem}.global-feed-summary span{padding:.5rem .75rem;border:1px solid rgba(120,140,255,.22);border-radius:10px;font-size:.82rem}.global-feed-summary b{font-size:1rem;margin-left:.35rem}.global-feed-archive{opacity:.48}.global-feed-working{font-weight:600}.global-feed-applied td:nth-child(5){font-weight:700}`;document.head.appendChild(style);}
+  const firstOperator=parent.querySelector('.autonomos-operator-row');if(firstOperator)parent.insertBefore(panel,firstOperator);else parent.appendChild(panel);
+  if(!document.getElementById('global-feed-style')){const style=document.createElement('style');style.id='global-feed-style';style.textContent=`.global-feed-tabs{display:flex;gap:.5rem;flex-wrap:wrap;margin:1rem 0}.global-feed-tab.active{outline:2px solid currentColor}.global-feed-tab b{margin-left:.35rem}.global-work-feed{border:1px solid rgba(120,140,255,.28)}#global-feed-meta{font-size:.82rem;opacity:.8;max-width:390px;text-align:right}.global-feed-summary{display:flex;gap:.7rem;flex-wrap:wrap;margin:.75rem 0 1rem}.global-feed-summary span{padding:.5rem .75rem;border:1px solid rgba(120,140,255,.22);border-radius:10px;font-size:.82rem}.global-feed-summary b{font-size:1rem;margin-left:.35rem}.global-feed-archive{opacity:.48}.global-feed-working{font-weight:600}.global-feed-applied td:nth-child(5){font-weight:700}`;document.head?.appendChild(style);}
   panel.addEventListener('click',e=>{const b=e.target.closest('[data-global-feed]');if(!b)return;globalFeedFilter=b.dataset.globalFeed;panel.querySelectorAll('.global-feed-tab').forEach(x=>x.classList.toggle('active',x===b));renderGlobalFeed();});
   panel.querySelector('#global-feed-search')?.addEventListener('input',renderGlobalFeed);
+  renderGlobalFeed();
 }
 
-async function loadGlobalFeed(){ensureGlobalFeedPanel();try{const r=await fetch(`/autonomos-global-feed.json?t=${Date.now()}`,{cache:'no-store'});if(r.ok)globalFeedData=await r.json();}catch{}renderGlobalFeed();removeLegacyDashboardNodes();}
+async function loadGlobalFeed(){if(typeof document==='undefined')return;ensureGlobalFeedPanel();try{const r=await fetch(`/autonomos-global-feed.json?t=${Date.now()}`,{cache:'no-store'});if(r.ok)globalFeedData=await r.json();}catch{}renderGlobalFeed();removeLegacyDashboardNodes();}
 function renderGlobalFeed(){
+  if(typeof document==='undefined'||!document?.getElementById)return;
   const body=document.getElementById('global-feed-body');if(!body)return;
   const search=String(document.getElementById('global-feed-search')?.value||'').trim().toLowerCase();
   const rows=(Array.isArray(globalFeedData.rows)?globalFeedData.rows:[]).filter(r=>!isLegacy(r));
@@ -51,7 +58,16 @@ function renderGlobalFeed(){
   const summary=document.getElementById('global-feed-summary');if(summary)summary.innerHTML=`<span>Доступно до подачі <b>${availableCount(rows)}</b></span><span>Заявок відправлено <b>${Number(c.applied||0)}</b></span><span>В роботі <b>${Number(c.working||0)}</b></span><span>Здано <b>${Number(c.done||0)}</b></span><span>Оплачено <b>${Number(c.paid||0)}</b></span>`;
   const meta=document.getElementById('global-feed-meta');if(meta)meta.textContent=`${rows.length} актуальних записів · ${live} активних · оновлено ${globalFeedData.generatedAt?new Date(globalFeedData.generatedAt).toLocaleTimeString():'—'}`;
 }
-function refreshMissionControl(){if(document.hidden)return;const b=document.querySelector('#refresh-btn');if(b&&!b.disabled)b.click();}
-const observer=new MutationObserver(removeLegacyDashboardNodes);observer.observe(document.documentElement,{childList:true,subtree:true});
-document.addEventListener('DOMContentLoaded',()=>{ensureGlobalFeedPanel();loadGlobalFeed();setTimeout(refreshMissionControl,1500);});
-setInterval(loadGlobalFeed,10000);setInterval(refreshMissionControl,10000);
+function refreshMissionControl(){if(typeof document==='undefined'||document.hidden)return;const b=document.querySelector('#refresh-btn');if(b&&!b.disabled)b.click();}
+let observer=null;
+if(typeof MutationObserver!=='undefined'&&typeof document!=='undefined'){
+  observer=new MutationObserver(()=>{removeLegacyDashboardNodes();ensureGlobalFeedPanel();});
+  observer.observe(document.documentElement,{childList:true,subtree:true});
+  window.addEventListener?.('beforeunload',()=>observer?.disconnect());
+}
+if(typeof document!=='undefined'){
+  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',()=>{ensureGlobalFeedPanel();loadGlobalFeed();setTimeout(refreshMissionControl,1500);},{once:true});
+  else {ensureGlobalFeedPanel();loadGlobalFeed();setTimeout(refreshMissionControl,1500);}
+}
+setInterval(()=>{if(typeof document!=='undefined'&&document.documentElement?.isConnected)loadGlobalFeed();},10000);
+setInterval(()=>{if(typeof document!=='undefined'&&document.documentElement?.isConnected)refreshMissionControl();},10000);
