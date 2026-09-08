@@ -1,12 +1,12 @@
 const RULES = [
-  { skill:'translation', categories:['translation'], words:['translate','translation','localization','localisation'] },
-  { skill:'code-analysis', categories:['coding','code','development','software'], words:['code','bug','javascript','typescript','node','python','api','script','review','test','build','repository','github'] },
-  { skill:'data-transform', categories:['data','spreadsheet'], words:['csv','json','normalize','extract','transform','parse','structured','excel','xlsx','spreadsheet','dataset'] },
-  { skill:'document-generation', categories:['document','presentation'], words:['pdf','docx','pptx','presentation','slide deck','document','deliverable file','downloadable file'] },
-  { skill:'app-automation', categories:['automation','operations','crm'], words:['gmail','google sheets','google drive','notion','slack','calendar','crm','hubspot','airtable','linear','jira','connected app','workflow'] },
-  { skill:'browser-ops', categories:['browser','qa','testing'], words:['browser automation','navigate','dashboard','fill form','screenshot','web app testing','click through'] },
-  { skill:'web-research', categories:['research','analysis'], words:['research','analyze','analysis','compare','website','web','public','headers','endpoint','market','report','sources'] },
-  { skill:'copywriting', categories:['writing','content','marketing'], words:['write','rewrite','copy','summary','summarize','description','intro','landing','headline','content'] }
+  { skill:'translation', categories:['translation','transcription'], words:['translate','translation','localization','localisation','transcription','transcribe','subtitles','captions'] },
+  { skill:'code-analysis', categories:['coding','code','development','software','website','ai-workflow','graphic-design','ui-ux','video','audio'], words:['code','bug','javascript','typescript','node','python','api','script','review','test','build','repository','github','website','html','css','svg','image','video','audio','ffmpeg'] },
+  { skill:'data-transform', categories:['data','spreadsheet','data-entry','scraping','analytics'], words:['csv','json','normalize','extract','transform','parse','structured','excel','xlsx','spreadsheet','dataset','deduplicate','chart','analytics','dashboard','reporting'] },
+  { skill:'document-generation', categories:['document','presentation','technical-writing'], words:['pdf','docx','pptx','presentation','slide deck','document','deliverable file','downloadable file','manual','sop','knowledge base','technical writing'] },
+  { skill:'app-automation', categories:['automation','operations','crm','no-code','virtual-assistant','customer-support','ecommerce','social-media'], words:['gmail','google sheets','google drive','notion','slack','calendar','crm','hubspot','airtable','linear','jira','connected app','workflow','customer support','inbox','ecommerce','shopify','product listing','social media'] },
+  { skill:'browser-ops', categories:['browser'], words:['browser automation','navigate','dashboard','fill form','screenshot','web app testing','click through'] },
+  { skill:'web-research', categories:['research','analysis','seo'], words:['research','analyze','analysis','compare','website','web','public','headers','endpoint','market','report','sources','seo','keyword','competitor'] },
+  { skill:'copywriting', categories:['writing','content','marketing'], words:['write','rewrite','copy','summary','summarize','description','intro','landing','headline','content','blog','article','email marketing','product description'] }
 ];
 
 // Naive substring matching (hay.includes(word)) caused real false positives — e.g. the
@@ -18,12 +18,12 @@ function containsWord(hay,phrase){
   return new RegExp(`\\b${escaped}\\b`,'i').test(hay);
 }
 
-const REQUIRES_SHELL=/\b(docker(file)?|kubernetes|k8s|ci\/cd|shell access|terminal access|npm install|yarn install|pnpm install|pip install|build the (app|project)|run (the )?tests?|compile|package (the )?(app|project))\b/i;
+const REQUIRES_SHELL=/\b(docker(file)?|kubernetes|k8s|ci\/cd|shell access|terminal access|npm install|yarn install|pnpm install|pip install|build the (app|project)|run (the )?tests?|compile|package (the )?(app|project)|ffmpeg|imagemagick|image conversion|audio conversion|video conversion)\b/i;
 const REQUIRES_BROWSER=/\b(browser automation|headless browser|screenshot of the (site|app|page)|fill (out )?(the )?form|navigate (the )?(site|dashboard)|web app testing|click through|log in to (the )?(site|dashboard))\b/i;
 const REQUIRES_DEPLOY=/\b(?:deploy\s+(?:the |this |a )?(?:app|application|site|service|project|contract)|release to production|trigger (?:a )?deployment|access (?:the )?production server)\b/i;
 const REQUIRES_GITHUB_PR=/\b(?:open|create|submit|deliver|publish|merge)\s+(?:a |an |the )?(?:github )?(?:pull request|pr|merge request)\b|\bgit\s+push\b|\bdeliver.{0,30}\bpull request\b/i;
-const REQUIRES_ARTIFACT=/\b(downloadable|attach(?:ed|ment)?|deliver (?:a )?(?:file|pdf|docx|xlsx|csv|zip|pptx)|create (?:a )?(?:pdf|docx|xlsx|csv|zip|pptx)|generate (?:a )?(?:pdf|docx|xlsx|csv|zip|pptx)|spreadsheet file|presentation file|(?:build|implement|develop|create)\s+(?:a |an |the )?(?:working\s+|functional\s+)?(?:prototype|dapp|d-app|application|smart\s+contract|api|website|web\s*app|program|bot|script|tool)|submit\s+(?:your|the)\s+(?:project|code|repo|repository|prototype|submission)|working\s+(?:prototype|demo|implementation))\b/i;
-const REQUIRES_APP=/\b(send (?:an )?email|create (?:a )?calendar event|update (?:the )?crm|update (?:a )?(?:google )?sheet|post to (?:slack|reddit|x|twitter|linkedin|discord|telegram)|publish (?:on|to) (?:reddit|x|twitter|linkedin|discord|telegram)|x post|post on x|create (?:a )?jira|create (?:a )?linear issue|edit (?:a )?notion|upload to (?:google )?drive|connected app)\b|\bpost\s*[—\-→:]\s*x\b/i;
+const REQUIRES_ARTIFACT=/\b(downloadable|attach(?:ed|ment)?|deliver (?:a )?(?:file|pdf|docx|xlsx|csv|zip|pptx|png|jpe?g|svg|mp3|wav|mp4)|create (?:a )?(?:pdf|docx|xlsx|csv|zip|pptx|png|jpe?g|svg|mp3|wav|mp4)|generate (?:a )?(?:pdf|docx|xlsx|csv|zip|pptx|png|jpe?g|svg|mp3|wav|mp4)|spreadsheet file|presentation file|(?:build|implement|develop|create)\s+(?:a |an |the )?(?:working\s+|functional\s+)?(?:prototype|dapp|d-app|application|smart\s+contract|api|website|web\s*app|program|bot|script|tool)|submit\s+(?:your|the)\s+(?:project|code|repo|repository|prototype|submission)|working\s+(?:prototype|demo|implementation))\b/i;
+const REQUIRES_APP=/\b(send (?:an )?email|create (?:a )?calendar event|update (?:the )?crm|update (?:a )?(?:google )?sheet|post to (?:slack|reddit|x|twitter|linkedin|discord|telegram)|publish (?:on|to) (?:reddit|x|twitter|linkedin|discord|telegram)|x post|post on x|create (?:a )?jira|create (?:a )?linear issue|edit (?:a )?notion|upload to (?:google )?drive|connected app|reply to (?:a )?customer|triage (?:the )?inbox|update product listing)\b|\bpost\s*[—\-→:]\s*x\b/i;
 // Procurement must be an explicit requirement of the actual task. Marketplace chrome such
 // as “buy services”, “hire talent” or a footer describing how customers purchase work must
 // never turn an otherwise ordinary translation/writing/code job into external_procurement.
@@ -111,7 +111,7 @@ export function classifyOpportunity(opportunity, { llmEnabled=false, hasGithubPr
 
 function inferRequiredApps(hay=''){
   const apps=[];
-  const tests=[['reddit',/\breddit\b/i],['x',/\b(?:x\.com|twitter|tweet|post to x|publish on x|post on x|x post)\b|\bpost\s*[—\-→:]\s*x\b/i],['linkedin',/\blinkedin\b/i],['discord',/\bdiscord\b/i],['telegram',/\btelegram\b/i],['gmail',/\b(?:gmail|send (?:an )?email)\b/i],['slack',/\bslack\b/i],['notion',/\bnotion\b/i],['google_sheets',/\bgoogle sheets?\b/i],['google_drive',/\bgoogle drive\b/i],['google_calendar',/\b(?:google calendar|calendar event)\b/i]];
+  const tests=[['reddit',/\breddit\b/i],['x',/\b(?:x\.com|twitter|tweet|post to x|publish on x|post on x|x post)\b|\bpost\s*[—\-→:]\s*x\b/i],['linkedin',/\blinkedin\b/i],['discord',/\bdiscord\b/i],['telegram',/\btelegram\b/i],['gmail',/\b(?:gmail|send (?:an )?email|customer support|email support|reply to (?:a )?customer|inbox triage)\b/i],['slack',/\bslack\b/i],['notion',/\bnotion\b/i],['google_sheets',/\bgoogle sheets?\b/i],['google_drive',/\bgoogle drive\b/i],['google_calendar',/\b(?:google calendar|calendar event)\b/i]];
   for(const [id,re] of tests)if(re.test(hay))apps.push(id);
   return [...new Set(apps)];
 }
@@ -155,6 +155,10 @@ export function capabilityCatalog(context={}){
     ['CSV / JSON / spreadsheets','data','Transform a CSV dataset and deliver a spreadsheet file.'],
     ['PDF / document processing','document','Extract a PDF and create a downloadable document.'],
     ['Translation / localization','translation','Translate and localize the provided text.'],
+    ['SEO / analytics','seo','Audit supplied URLs/data and produce a structured report.'],
+    ['Customer support / inbox','customer-support','Reply to customer emails using connected Gmail.'],
+    ['Presentation / reports','presentation','Create a presentation/report artifact.'],
+    ['Basic image/media processing','graphic-design','Resize/compose simple assets or process media with open-source tools.'],
     ['Browser QA / automation','browser','Navigate the dashboard and perform web app testing.']
   ];
   return examples.map(([name,category,description])=>{const cap=classifyOpportunity({title:name,category,description},context);return {name,available:cap.executable,skill:cap.skill,missingTools:cap.missingTools,mode:cap.mode};});
