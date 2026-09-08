@@ -50,21 +50,21 @@ export function evaluateOpportunity(input = {}, config = {}) {
 export function allocateRevenue(amountUsd, config = {}) {
   const amount = Math.max(0, finite(amountUsd, 0));
   if(config.survivalMode!==false){
-    let ownerPct=clamp(finite(config.ownerRevenuePercent,10),0,100);
-    let treasuryPct=clamp(finite(config.agentTreasuryPercent,90),0,100);
+    let ownerPct=clamp(finite(config.ownerRevenuePercent,50),0,100);
+    let treasuryPct=clamp(finite(config.agentTreasuryPercent,50),0,100);
     const split=ownerPct+treasuryPct;
-    if(split<=0){ownerPct=10;treasuryPct=90;}else{ownerPct=100*ownerPct/split;treasuryPct=100-ownerPct;}
+    if(split<=0){ownerPct=50;treasuryPct=50;}else{ownerPct=100*ownerPct/split;treasuryPct=100-ownerPct;}
     const ownerUsd=round(amount*ownerPct/100);
     const treasuryUsd=round(Math.max(0,amount-ownerUsd));
     const growthUsd=round(treasuryUsd*0.70);
     const experimentUsd=round(Math.max(0,treasuryUsd-growthUsd));
-    return {ownerUsd,treasuryUsd,reserveUsd:ownerUsd,growthUsd,experimentUsd,ownerPercent:round(ownerPct),treasuryPercent:round(treasuryPct),mode:'survival_10_90'};
+    return {ownerUsd,treasuryUsd,reserveUsd:ownerUsd,growthUsd,experimentUsd,ownerPercent:round(ownerPct),treasuryPercent:round(treasuryPct),mode:'survival_50_50'};
   }
   const reservePct = finite(config.reservePercent, 85);
   const growthPct = finite(config.growthPercent, 10);
   const experimentPct = finite(config.experimentPercent, 5);
   const total = reservePct + growthPct + experimentPct || 100;
-  const reserveUsd=round(amount*reservePct/total),growthUsd=round(amount*growthPct/total),experimentUsd=round(amount*experimentPct/total);
+  const reserveUsd=round(amount*reservePct/total),growthUsd=round(amount*growthPct/total),experimentUsd=round(Math.max(0,amount-reserveUsd-growthUsd));
   return {ownerUsd:reserveUsd,treasuryUsd:round(growthUsd+experimentUsd),reserveUsd,growthUsd,experimentUsd,mode:'legacy_allocation'};
 }
 
