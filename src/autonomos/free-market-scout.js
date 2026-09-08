@@ -5,9 +5,9 @@ const DEFAULT_QUERIES=[
   'ai agent marketplace bounty usdc','autonomous agent paid tasks usdt api','freelance bounty marketplace crypto api','agent jobs marketplace escrow stablecoin'
 ];
 
-// Verified-live seeds are deliberately market metadata, never credentials. They make the scout
-// expand beyond whichever GitHub repositories happen to rank for generic searches. Human/KYC
-// markets remain discoverable but are NOT auto-registered or submitted to by this catalog.
+// Verified-live seeds are market metadata, never credentials. They make the scout expand beyond
+// whichever GitHub repositories happen to rank for generic searches. Account/OAuth requirements
+// are recorded explicitly; this catalog never bypasses CAPTCHA, KYC or identity verification.
 const VERIFIED_LIVE_MARKETS=Object.freeze([
   {id:'freelancer.com',name:'Freelancer.com',homepage:'https://www.freelancer.com/jobs/',apiDocs:'https://developers.freelancer.com/',score:10,apiMode:'official',entryMode:'oauth_required',payout:'fiat',evidence:'Live global freelance projects; official production API; bids/projects require an authenticated Freelancer account/OAuth.'},
   {id:'guru.com',name:'Guru',homepage:'https://www.guru.com/d/jobs/',score:8,apiMode:'no_confirmed_freelance_api',entryMode:'web_account',payout:'fiat',evidence:'Live freelance jobs and SafePay; no official Guru.com freelance worker API confirmed.'},
@@ -17,8 +17,8 @@ const VERIFIED_LIVE_MARKETS=Object.freeze([
   {id:'truelancer.com',name:'Truelancer',homepage:'https://www.truelancer.com/freelance-jobs',score:8,apiMode:'no_confirmed_public_worker_api',entryMode:'web_account',payout:'fiat',evidence:'Current freelance fixed-price/hourly jobs; no public worker bidding API confirmed.'},
   {id:'opire.dev',name:'Opire',homepage:'https://app.opire.dev/home',apiDocs:'https://docs.opire.dev/overview/commands',score:10,apiMode:'github_commands',entryMode:'github_native',payout:'fiat_stripe',evidence:'Hundreds of rewarded GitHub issues. /try and /claim can run through GitHub when the Opire bot is installed. Stripe is required to receive payout.'},
   {id:'algora.io',name:'Algora',homepage:'https://algora.io/',apiDocs:'https://api.docs.algora.io/',score:10,apiMode:'official',entryMode:'github_or_account',payout:'fiat',evidence:'Open-source GitHub bounties; official API covers bounties, claims, tasks, solvers, issues and pull requests.'},
-  {id:'hackenproof.com',name:'HackenProof',homepage:'https://hackenproof.com/programs',score:8,apiMode:'no_confirmed_researcher_submission_api',entryMode:'researcher_account',payout:'fiat_or_crypto_by_program',evidence:'Hundreds of live authorized bug bounty programs. Only in-scope security testing is permitted.'},
-  {id:'immunefi.com',name:'Immunefi',homepage:'https://immunefi.com/bug-bounty/',score:8,apiMode:'no_confirmed_public_submission_api',entryMode:'researcher_account_or_kyc_by_program',payout:'crypto_or_fiat_by_program',evidence:'Large active Web3 bug-bounty marketplace with funded vaults. Program-specific KYC and scope rules apply.'}
+  {id:'issuehunt.io',name:'IssueHunt',homepage:'https://oss.issuehunt.io/issues',score:9,apiMode:'github_workflow_no_confirmed_public_worker_api',entryMode:'github_oauth_account',payout:'fiat',evidence:'Live funded open-source issues; sign in with GitHub, solve issue, submit PR, receive funded reward after acceptance.'},
+  {id:'boss.dev',name:'BOSS',homepage:'https://www.boss.dev/issues/open',score:9,apiMode:'github_app_no_confirmed_public_worker_api',entryMode:'github_oauth_account',payout:'fiat_multi_currency',evidence:'Live GitHub issue bounties with explicit amounts; GitHub-native workflow and GitHub login/app integration.'}
 ]);
 
 const SIGNAL_WORK=/\b(job|jobs|task|tasks|bounty|bounties|gig|gigs|freelance|contract|marketplace|hire|hiring|paid work)\b/i;
