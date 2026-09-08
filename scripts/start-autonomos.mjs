@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import { LeanInternetHunter } from '../src/autonomos/lean-internet-hunter.js';
 import { FreeRevenueGlobalWorkHunter } from '../src/autonomos/free-revenue-global-work-hunter.js';
+import { AgrentingWorker } from '../src/autonomos/agrenting-worker.js';
 import { ReliableGlobalLeadActioner } from '../src/autonomos/reliable-global-lead-actioner.js';
 import { RevenueLeadActioner } from '../src/autonomos/revenue-lead-actioner.js';
 import { GmailJobMonitor } from '../src/autonomos/gmail-job-monitor.js';
@@ -12,25 +13,19 @@ import { GlobalFeedPublisher } from '../src/autonomos/global-feed-publisher.js';
 import { probeRuntimeEmailChannel } from '../src/autonomos/email-channel-probe.js';
 import { installNetworkGuard } from '../src/autonomos/network-guard.js';
 
-// Build/verify runs must keep their isolated fixture config. Only the actual long-running
-// service process enables persisted-runtime throughput overrides.
 if (/^(1|true|yes|on)$/i.test(String(process.env.AUTONOMOS_PRODUCTION_SWARM_MODE||''))) {
   process.env.AUTONOMOS_RUNTIME_ENV_OVERRIDES='true';
 }
 
-// Must be installed before server.js imports the legacy connector runtime. Disabled/noisy
-// sources therefore cannot consume network time even if an older connector still tries to poll.
 installNetworkGuard({env:process.env,logger:console});
 applySourceQuarantine({env:process.env,storageDir:process.env.STORAGE_DIR,logger:console});
 migrateGlobalActionerState({env:process.env,storageDir:process.env.STORAGE_DIR,logger:console});
 
 const internetHunter=enabled(process.env.AUTONOMOS_INTERNET_HUNTER_ENABLED,'true')
   ? new LeanInternetHunter({env:process.env,storageDir:process.env.STORAGE_DIR,logger:console}) : null;
-// Main worldwide discovery uses only public, no-key feeds. Tavily/Firecrawl are not in
-// this hunter's search path, so discovery cannot roll into paid search usage.
 const globalHunter=new FreeRevenueGlobalWorkHunter({env:process.env,storageDir:process.env.STORAGE_DIR,logger:console});
-// Browser automation is optional only. If Browserbase is exhausted/unconfigured it is not
-// instantiated at all and therefore cannot block the worldwide earning loop.
+const agrentingWorker=enabled(process.env.AUTONOMOS_AGRENTING_ENABLED,'true')
+  ? new AgrentingWorker({env:process.env,storageDir:process.env.STORAGE_DIR,logger:console}) : null;
 const browserActioner=enabled(process.env.AUTONOMOS_GLOBAL_ACTIONER_ENABLED,'false')
   ? new ReliableGlobalLeadActioner({env:process.env,storageDir:process.env.STORAGE_DIR,logger:console}) : null;
 const outboundEmailRequested=enabled(process.env.AUTONOMOS_BROWSERLESS_ACTIONER_ENABLED,'true');
@@ -68,6 +63,7 @@ async function ensureRevenueEmailLane(){
 
 internetHunter?.start();
 globalHunter.start();
+agrentingWorker?.start();
 browserActioner?.start();
 if(outboundEmailRequested){
   await ensureRevenueEmailLane();
@@ -81,7 +77,7 @@ if(enabled(process.env.AUTONOMOS_TASKFORCE_WORKER_ENABLED,'true'))taskForceWorke
 globalFeedPublisher.start();
 
 const stop=()=>{
-  internetHunter?.stop();globalHunter.stop();browserActioner?.stop();browserlessActioner?.stop();gmailJobMonitor?.stop();taskForceVerifier.stop();taskForceWorker.stop();globalFeedPublisher.stop();
+  internetHunter?.stop();globalHunter.stop();agrentingWorker?.stop();browserActioner?.stop();browserlessActioner?.stop();gmailJobMonitor?.stop();taskForceVerifier.stop();taskForceWorker.stop();globalFeedPublisher.stop();
   if(emailGateTimer)clearInterval(emailGateTimer);emailGateTimer=null;
 };
 process.on('SIGTERM',stop);
