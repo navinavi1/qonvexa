@@ -1,0 +1,36 @@
+name: One-time AutonomOS mega cleanup
+on:
+  push:
+    paths:
+      - 'scripts/one-time-mega-cleanup.mjs'
+      - '.github/workflows/one-time-mega-cleanup.yml'
+permissions:
+  contents: write
+jobs:
+  cleanup:
+    if: ${{ !contains(github.event.head_commit.message, '[cleanup-final]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.14.1'
+          cache: npm
+      - name: Apply one-time cleanup
+        run: node scripts/one-time-mega-cleanup.mjs
+      - name: Refresh lockfile
+        run: npm install --package-lock-only --ignore-scripts
+      - name: Install clean dependencies
+        run: npm ci --include=dev
+      - name: Verify cleaned production tree
+        run: npm run verify
+      - name: Commit only if verification passed
+        run: |
+          rm -f scripts/one-time-mega-cleanup.mjs .github/workflows/one-time-mega-cleanup.yml
+          git config user.name 'AutonomOS Cleanup'
+          git config user.email 'actions@users.noreply.github.com'
+          git add -A
+          git commit -m '[cleanup-final] remove obsolete markets tools UI and legacy code'
+          git push origin HEAD:main
