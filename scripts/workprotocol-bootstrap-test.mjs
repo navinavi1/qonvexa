@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import {hydrateWorkProtocolRegistration} from '../src/autonomos/secret-provider.js';
+import {hydrateWorkProtocolRegistration} from '../src/autonomos/workprotocol-bootstrap.js';
 
 const root=fs.mkdtempSync(path.join(os.tmpdir(),'workprotocol-bootstrap-'));
 const wallet='0x1111111111111111111111111111111111111111';

@@ -31,7 +31,6 @@ import { EventBus } from './event-bus.js';
 import { emitOperationalLog } from './observability.js';
 import { AutonomOSCache } from './cache.js';
 import { ArtifactStore } from './artifact-store.js';
-import { dispatchPaidOpportunity, temporalEnabled } from './temporal-client.js';
 import { dispatchTriggerPaidOpportunity, triggerEnabled } from './trigger-client.js';
 import { estimateOutcomeProbability } from './outcome-model.js';
 import { ledgerEntry, appendUniqueLedgerEntry } from './financial-ledger.js';
@@ -41,7 +40,7 @@ import { buildLearningSnapshot, recommendActions, scoreOpportunity, createJobIde
 import { JobRegistry, classifyFailure } from './job-registry.js';
 
 // Whether a processMarketplaceOpportunity() result should be reported as ok:true to a
-// durable dispatcher (Trigger.dev/Temporal), whose own retry only makes sense before
+// durable dispatcher (Trigger.dev), whose own retry only makes sense before
 // anything is committed on the marketplace side. Once claimed/bid, re-running the whole
 // opportunity from scratch would re-attempt claimMarketplaceJob() and risk a double
 // claim/bid — recovery for an already-claimed job is recoverInFlightJobs()'s job, not
@@ -370,11 +369,6 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
       return{ok:shouldReportSuccessToDurableDispatcher(result),...result};
     },
 
-    // Backward-compatible alias for the deferred Temporal worker.
-    async processTemporalOpportunity(opportunity){
-      return this.processDurableOpportunity(opportunity);
-    },
-
     async snapshot() {
       const ledger = store.readNdjson('ledger.ndjson', -1);
       const events = store.readNdjson('events.ndjson', 500).reverse();
@@ -429,7 +423,7 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
         // P0 fix (external audit): maxPaidProcurementUsd defaults to 0 and was NOT in this
         // list, so even an owner who correctly set zeroSpendMode:false and
         // allowExternalSpending:true through the admin UI still had every paid tool call
-        // (Firecrawl/E2B) denied with 'above_spend_limit' — the one field that actually
+        // (external tool) denied with 'above_spend_limit' — the one field that actually
         // raises the ceiling had no way to be changed outside hand-editing config.json.
         'zeroSpendMode','earnedFundsOnly','allowExternalSpending','seedSpendBudgetUsd','maxPaidProcurementUsd'
       ];
@@ -444,7 +438,7 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
     stop(){config=normalizeConfig({...config,enabled:false});store.writeJson('config.json',config);clearTimer();event('runtime_stopped',{});return{ok:true,status:'stopped'};},
     emergencyStop(){config=normalizeConfig({...config,enabled:false,killSwitch:true,allowExternalSpending:false,zeroSpendMode:true});store.writeJson('config.json',config);clearTimer();
       // P0 fix (external audit): previously this only set job.cancelled=true, a flag that
-      // NOTHING actually checked mid-flight — an already-running LLM/Firecrawl/E2B/GitHub
+      // NOTHING actually checked mid-flight — an already-running LLM/external tool/GitHub
       // call, or a marketplace delivery POST, would run to completion and could still
       // spend money or submit work after Emergency Stop was pressed. Each active job now
       // carries its own AbortController (set at claim/recovery time); aborting it here
@@ -494,7 +488,7 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
       const result=await discoverMarketOpportunities({env,credentials,limit:10,sources:['clawlancer','dealwork','workprotocol']});
       const statuses=connectorStatuses(env,x402.status(),credentials);
       const sourceDefs=new Map(statuses.map(x=>[x.id,x]));
-      const sources=Object.fromEntries(Object.entries(result.health||{}).map(([id,h])=>{const def=sourceDefs.get(id)||{};const lifecycle=marketplaceLifecycleWithCashout(id);const claimReady=Boolean(h?.claimReady)||(id==='clawlancer'&&def.configured)||(id==='dealwork'&&def.configured)||(id==='t2000'&&def.configured)||(id==='workprotocol'&&def.configured);return[id,{ok:Boolean(h?.ok),disabled:Boolean(h?.disabled),mode:h?.mode||def.mode||'',count:Number(h?.count||0),configured:Boolean(def.configured),claimReady,workAutoReady:Boolean(lifecycle.workAutoReady),fullAutoReady:Boolean(lifecycle.fullAutoReady),cashoutState:lifecycle.cashoutState||'',error:String(h?.error||'').slice(0,180)}];}));
+      const sources=Object.fromEntries(Object.entries(result.health||{}).map(([id,h])=>{const def=sourceDefs.get(id)||{};const lifecycle=marketplaceLifecycleWithCashout(id);const claimReady=Boolean(h?.claimReady)||(id==='clawlancer'&&def.configured)||(id==='dealwork'&&def.configured)||(id==='workprotocol'&&def.configured);return[id,{ok:Boolean(h?.ok),disabled:Boolean(h?.disabled),mode:h?.mode||def.mode||'',count:Number(h?.count||0),configured:Boolean(def.configured),claimReady,workAutoReady:Boolean(lifecycle.workAutoReady),fullAutoReady:Boolean(lifecycle.fullAutoReady),cashoutState:lifecycle.cashoutState||'',error:String(h?.error||'').slice(0,180)}];}));
       const discoveryOk=Object.values(sources).some(x=>x.ok&&!x.disabled);
       const claimReadySources=Object.entries(sources).filter(([id,x])=>x.ok&&x.claimReady&&x.workAutoReady&&!x.disabled&&!(config.cryptoOnlyEarnings&&id==='dealwork')).map(([id])=>id);
       const fullAutoSources=Object.entries(sources).filter(([,x])=>x.ok&&x.fullAutoReady&&!x.disabled).map(([id])=>id);
@@ -589,7 +583,7 @@ async refreshTreasury(){
       let candidates=selectBudgetAwareCandidates(normalized.filter(isAutoClaimCandidate)
         .sort((a,b)=>(Number(b.intelligence?.score||0)-Number(a.intelligence?.score||0)) || (scoreCandidate(b)-scoreCandidate(a))),cycleConfig,cycleConfig.availableSpendUsd,detail=>event('candidate_skipped_cycle_budget',detail));
       candidates=applyCommissioningCandidateGate(candidates,config,{ledger:cycleLedger,activeCount:activeJobs.size});
-      const commissioningProved=cycleLedger.some(row=>row?.type==='revenue'&&Number(row?.amountUsd||row?.grossUsd||0)>0&&['t2000','clawlancer','workprotocol'].includes(String(row?.source||'')));
+      const commissioningProved=cycleLedger.some(row=>row?.type==='revenue'&&Number(row?.amountUsd||row?.grossUsd||0)>0&&['clawlancer','workprotocol'].includes(String(row?.source||'')));
 
       const processed=await mapLimit(config.enabled?candidates:[],Number(config.commissioningMode&&!commissioningProved?1:config.maxConcurrentJobs||4),async opportunity=>{
         const leaseId=crypto.randomUUID();
@@ -598,14 +592,10 @@ async refreshTreasury(){
           const dispatched=await dispatchTriggerPaidOpportunity(durableOpportunity,env);
           if(dispatched.ok){jobRegistry.markDispatchPending(opportunity,{provider:'trigger',runId:dispatched.runId||'',leaseId,retryAfter:new Date(Date.now()+6*60*60_000).toISOString()});event('trigger_job_dispatched',{source:opportunity.source,externalId:opportunity.externalId,runId:dispatched.runId||'',leaseId});return{claimed:false,delivered:false,durable:true,provider:'trigger'};}
           event('trigger_dispatch_fallback',{source:opportunity.source,externalId:opportunity.externalId,reason:dispatched.reason||''});
-        }else if(temporalEnabled(env)){
-          const dispatched=await dispatchPaidOpportunity(durableOpportunity,env);
-          if(dispatched.ok){jobRegistry.markDispatchPending(opportunity,{provider:'temporal',runId:dispatched.workflowId||'',leaseId,retryAfter:new Date(Date.now()+6*60*60_000).toISOString()});event('temporal_job_dispatched',{source:opportunity.source,externalId:opportunity.externalId,workflowId:dispatched.workflowId,duplicate:Boolean(dispatched.duplicate),leaseId});return{claimed:false,delivered:false,durable:true,provider:'temporal'};}
-          event('temporal_dispatch_fallback',{source:opportunity.source,externalId:opportunity.externalId,reason:dispatched.reason||''});
         }
         return processMarketplaceOpportunity(opportunity);
       });
-      const claimed=processed.filter(x=>x?.claimed).length,delivered=processed.filter(x=>x?.delivered).length,triggerDispatched=processed.filter(x=>x?.provider==='trigger').length,temporalDispatched=processed.filter(x=>x?.provider==='temporal').length,durableDispatched=triggerDispatched+temporalDispatched;
+      const claimed=processed.filter(x=>x?.claimed).length,delivered=processed.filter(x=>x?.delivered).length,triggerDispatched=processed.filter(x=>x?.provider==='trigger').length,durableDispatched=triggerDispatched;
 
       await syncSettlements();
       // Accepted obligations and primary marketplace candidates get capacity first.
@@ -628,10 +618,10 @@ async refreshTreasury(){
       }
       setAgent('evolution-agent','working');state.lastEvolution=boundedEvolution(normalized);setAgentMetric('evolution-agent',{tasks:1});
       state.cycles=Number(state.cycles||0)+1;state.lastCycleAt=new Date().toISOString();state.lastCycleMs=Date.now()-started;state.updatedAt=new Date().toISOString();state.lastCycleId=cycleId;state.lastCycleTrigger=trigger;
-      state.lastCycleSummary={opportunities:normalized.length,candidates:candidates.length,claimed,delivered,durableDispatched,triggerDispatched,temporalDispatched,concurrency:Number(config.maxConcurrentJobs||4),elasticChildren:children.filter(c=>c.status==='alive').length};store.writeJson('state.json',state);
-      event('cycle_completed',{cycleId,trigger,ms:state.lastCycleMs,opportunities:normalized.length,candidates:candidates.length,claimed,delivered,durableDispatched,triggerDispatched,temporalDispatched});
+      state.lastCycleSummary={opportunities:normalized.length,candidates:candidates.length,claimed,delivered,durableDispatched,triggerDispatched,concurrency:Number(config.maxConcurrentJobs||4),elasticChildren:children.filter(c=>c.status==='alive').length};store.writeJson('state.json',state);
+      event('cycle_completed',{cycleId,trigger,ms:state.lastCycleMs,opportunities:normalized.length,candidates:candidates.length,claimed,delivered,durableDispatched,triggerDispatched});
       logDiagnostics('cycle_diagnostics');
-      return{ok:true,cycleId,ms:state.lastCycleMs,opportunities:normalized.length,candidates:candidates.length,claimed,delivered,durableDispatched,triggerDispatched,temporalDispatched};
+      return{ok:true,cycleId,ms:state.lastCycleMs,opportunities:normalized.length,candidates:candidates.length,claimed,delivered,durableDispatched,triggerDispatched};
     }catch(error){state.lastError=String(error?.message||error).slice(0,400);state.updatedAt=new Date().toISOString();store.writeJson('state.json',state);incrementAgentError('prime-governor');event('cycle_failed',{cycleId,trigger,error:state.lastError});logger.error?.('AutonomOS cycle failed:',error);return{ok:false,cycleId,error:state.lastError};}
     finally{cycleRunning=false;for(const agent of agents)if(agent.status==='working')agent.status='idle';persistAgents();}
   }
@@ -654,7 +644,6 @@ async refreshTreasury(){
     const mode=String(op.claimMode||'');
     if(source==='x402-bazaar')return false; // buyer-side API discovery, not paid work for us
     if(['watchlist_only','competitive_manual','grant_proposal'].includes(mode))return false;
-    if(['laborx','dework','bountycaster','questbook'].includes(source))return false;
     return ['clawlancer','dealwork','workprotocol'].includes(source);
   }
   function isCryptoNativeEarning(op={}){
@@ -696,7 +685,6 @@ async refreshTreasury(){
 
   function effectiveJobFloor(op={}){    if(op?.source==='clawlancer')return Number(config.clawlancerMinJobPayoutUsd??0.5);
     if(op?.source==='dealwork')return Number(config.dealworkMinJobPayoutUsd??0.5);
-    if(op?.source==='superteam')return Number(config.superteamMinJobPayoutUsd??0.5);
     return Number(config.minJobPayoutUsd??0.5);
   }
 
@@ -732,12 +720,12 @@ async refreshTreasury(){
     const lifecycle=marketplaceLifecycleTruth(op.source);
     if(!preCommittedOrder&&!lifecycle.autoReady&&!lifecycle.competitive)reasons.push(`marketplace_lifecycle_not_auto_ready:${lifecycle.reason||lifecycle.payout||'incomplete'}`);
     if(/credentials_required|needs_credentials/.test(String(op.claimMode||'')))reasons.push('connector_credentials_missing');
-    else if(op.source==='superteam'&&!config.autoCompetitiveSubmissions)reasons.push('competitive_auto_submit_disabled');
+    
     if(!preCommittedOrder&&config.rejectDemoAndTestJobs&&isDemoOrTestOpportunity(op))reasons.push('demo_or_test_opportunity');
     // human sponsor) — requiring escrowed:true for it would permanently block every
     // Dealwork bid-mode jobs are the same shape while a bid is outstanding: escrow only
     // locks once the buyer accepts a bid, which hasn't happened yet at discovery time.
-    if(!preCommittedOrder&&config.requireEscrowForAutoClaim&&!op.escrowed&&op.source!=='superteam'&&!(op.source==='dealwork'&&(op.claimMode==='bid'||op.escrowOnAccept===true)))reasons.push('not_escrowed_and_escrow_required');
+    if(!preCommittedOrder&&config.requireEscrowForAutoClaim&&!op.escrowed&&!(op.source==='dealwork'&&(op.claimMode==='bid'||op.escrowOnAccept===true)))reasons.push('not_escrowed_and_escrow_required');
     // the buyer has already purchased our published Service and funded/assigned the job.
     // Some seller-queue responses omit the service price; applying discovery-time payout
     // floors or payout-percentage economics to a missing price would strand a real paid
@@ -918,7 +906,7 @@ async refreshTreasury(){
     setWorkerStatus(worker,'working');
     // P0 fix (external audit — Emergency Stop was not a real abort): give this job its own
     // AbortController and store it alongside cancelled:true so emergencyStop() below can
-    // actually interrupt an in-flight LLM/Firecrawl/E2B/GitHub call, not just prevent
+    // actually interrupt an in-flight LLM/external tool/GitHub call, not just prevent
     // starting a new one.
     const abortController=new AbortController();
     const estimatedMinutes=estimateJobDurationMinutes(op);
@@ -928,7 +916,7 @@ async refreshTreasury(){
     let deliverable; // hoisted so the catch block below can still see partial tool spend
     try{
       if((op.source==='dealwork'&&!claim.workOrder)){throw new Error('work_order_unavailable_refusing_blind_delivery');}
-      const execOp={...op,jobId,acceptanceContract:op.acceptanceContract||buildAcceptanceContract(op),executionBudgetUsd:Number(op.executionBudgetUsd||config.availableSpendUsd||config.seedSpendBudgetUsd||0),jobSpendCeilingUsd:Number(op.budgetUsd||0)*(Number(config.maxApiCostPercentOfPayout||25)/100),...(claim.workOrder?{__workOrderRaw:claim.workOrder,description:`${op.description}\n\n[${op.source} authoritative work order]\n${typeof claim.workOrder==='string'?claim.workOrder:JSON.stringify(claim.workOrder).slice(0,4000)}${op.source==='t2000'?'\n\n[t2000 delivery constraint] Final delivery body must be at most 16 KiB UTF-8. If the result is larger, summarize it and include stable links/hashes where the work order permits.':''}`}:{})};
+      const execOp={...op,jobId,acceptanceContract:op.acceptanceContract||buildAcceptanceContract(op),executionBudgetUsd:Number(op.executionBudgetUsd||config.availableSpendUsd||config.seedSpendBudgetUsd||0),jobSpendCeilingUsd:Number(op.budgetUsd||0)*(Number(config.maxApiCostPercentOfPayout||25)/100),...(claim.workOrder?{__workOrderRaw:claim.workOrder,description:`${op.description}\n\n[${op.source} authoritative work order]\n${typeof claim.workOrder==='string'?claim.workOrder:JSON.stringify(claim.workOrder).slice(0,4000)}`}:{})};
       deliverable=await orchestrateJob(execOp,{llm,memory,taskAgents,jobId,env,store,maxTaskAgents:Number(config.maxChildren||12),abortSignal:abortController.signal,onEvent:(type,detail)=>event(type,{jobId,source:op.source,...detail}),execute:(plannedOp,execOpts={})=>executeExternalOpportunity(plannedOp,op.capability,{llm,siteUrl,env,config,abortSignal:abortController.signal,memoryContext:plannedOp.__memoryContext||'',...execOpts})});
       setAgent('qa-evaluator','working'); validateExternalDeliverable(deliverable,execOp);
       deliverable=await ensureMarketplaceArtifact(jobId,op,deliverable);
@@ -945,16 +933,12 @@ async refreshTreasury(){
       const actualCostUsd=computeActualCostUsd(deliverable,op.capability);
       const toolCostUsd=Number(deliverable.evidence?.toolCostUsd||0);
       setWorkerMetric(worker,{tasks:1,cost:actualCostUsd+toolCostUsd});setAgentMetric('qa-evaluator',{tasks:1});event('market_job_delivered',{jobId,source:op.source,externalId:op.externalId,transactionId:delivery.transactionId||''});
-      if (op.source !== 'superteam') {
-        const pendingLearning=store.readJson('learning-pending.json',{});
+              const pendingLearning=store.readJson('learning-pending.json',{});
         pendingLearning[jobId]={jobId,source:op.source,externalId:op.externalId,skill:op.capability?.skill||'',title:op.title,description:op.description,deliverableHash:deliverable.hash,accepted:false,createdAt:new Date().toISOString(),tenantScope:op.tenantScope||op.clientId||'global'};
         store.writeJson('learning-pending.json',pendingLearning);
-      }
       recordCost({jobId,source:op.source,externalId:op.externalId,amountUsd:actualCostUsd,kind:'model',estimated:!deliverable.evidence?.usage});
-      // P1 fix: Firecrawl/E2B spend was previously invisible to the ledger entirely —
-      // recorded here as its own 'tool_api' cost row so Profit Engine accounting
-      // (computeEarnedSpendBudgetUsd, netProfitUsd) reflects real tool spend, not just LLM tokens.
-      if(toolCostUsd>0)recordCost({jobId,source:op.source,externalId:op.externalId,amountUsd:toolCostUsd,kind:'tool_api',estimated:true,note:'firecrawl_e2b_call_cost_estimate'});
+      // Tool/API spend is recorded separately so net-profit accounting includes non-model execution cost.
+      if(toolCostUsd>0)recordCost({jobId,source:op.source,externalId:op.externalId,amountUsd:toolCostUsd,kind:'tool_api',estimated:true,note:'tool_api_call_cost_estimate'});
       if(executionAttempts[key]){delete executionAttempts[key];store.writeJson('execution-attempts.json',executionAttempts);}
       clearInFlightJob(jobId);
       return{claimed:true,delivered:true};
@@ -965,7 +949,7 @@ async refreshTreasury(){
       // afterwards (bad output, delivery rejected, etc). Record that spend so it isn't
       // silently absorbed as free — this is exactly the "Revenue $1 / Cost $0" bug.
       // P1 fix: this previously only accounted for the estimated LLM cost — if
-      // Firecrawl/E2B calls had already succeeded before a LATER step failed (QA
+      // external tool calls had already succeeded before a LATER step failed (QA
       // rejection, delivery error), that real tool spend in `deliverable.evidence`
       // was silently dropped because `deliverable` wasn't in scope in this catch block.
       const incurredCostUsd=Number(op.capability?.estimatedModelCostUsd||0);
@@ -1110,14 +1094,12 @@ async refreshTreasury(){
         const toolCostUsd=Number(deliverable.evidence?.toolCostUsd||0);
         setWorkerMetric(worker,{tasks:1,cost:actualCostUsd+toolCostUsd});
         recordCost({jobId,source:op.source,externalId:op.externalId,amountUsd:actualCostUsd,kind:'model',estimated:!deliverable.evidence?.usage});
-        if(toolCostUsd>0)recordCost({jobId,source:op.source,externalId:op.externalId,amountUsd:toolCostUsd,kind:'tool_api',estimated:true,note:'firecrawl_e2b_call_cost_estimate'});
+        if(toolCostUsd>0)recordCost({jobId,source:op.source,externalId:op.externalId,amountUsd:toolCostUsd,kind:'tool_api',estimated:true,note:'tool_api_call_cost_estimate'});
         event('market_job_delivered',{jobId,source:op.source,externalId:op.externalId,transactionId:delivery.transactionId||status.contractId,fromBid:true});
         jobRegistry.setState(op,'delivered',{reasonCode:'delivery_accepted',transactionId:delivery.transactionId||status.contractId||'',deliveredAt:new Date().toISOString()});
-        if (op.source !== 'superteam') {
-          const pendingLearning=store.readJson('learning-pending.json',{});
+                  const pendingLearning=store.readJson('learning-pending.json',{});
           pendingLearning[jobId]={jobId,source:op.source,externalId:op.externalId,skill:op.capability?.skill||'',title:op.title,description:op.description,deliverableHash:deliverable.hash,accepted:false,createdAt:new Date().toISOString(),tenantScope:op.tenantScope||op.clientId||'global'};
           store.writeJson('learning-pending.json',pendingLearning);
-        }
         clearInFlightJob(jobId);
         if(executionAttempts[opportunityKey(op)]){delete executionAttempts[opportunityKey(op)];store.writeJson('execution-attempts.json',executionAttempts);}
       }catch(error){
@@ -1167,15 +1149,6 @@ async refreshTreasury(){
       // an unconnected social account, human identity, or another capability AutonomOS
       // cannot truthfully perform. Keep the claim visible for manual resolution, but do not
       // burn more model/tool budget retrying an impossible workflow.
-      // intents. Pause them when automatic competitive submissions are disabled.
-      if(op.source==='superteam'&&!config.autoCompetitiveSubmissions){
-        if(record.recoveryHold!=='competitive_auto_submit_disabled'){
-          jobRegistry.markPolicyHold(op,{reasonCode:'competitive_auto_submit_disabled',reason:'Automatic competitive submissions are disabled.'});
-          writeInFlightJob(jobId,{...record,status:'manual_attention',recoveryHold:'competitive_auto_submit_disabled'});
-          event('market_job_recovery_policy_hold',{jobId,source:op.source,reason:'competitive_auto_submit_disabled'});
-        }
-        continue;
-      }
       const recoveryDescription=claim.workOrder?`${op.description||''}\n\n${typeof claim.workOrder==='string'?claim.workOrder:JSON.stringify(claim.workOrder).slice(0,4000)}`:op.description;
       const recoveryCheck=revalidateClaimedCapability({...op,description:recoveryDescription},capabilityContext());
       if(!recoveryCheck.ok){
@@ -1198,18 +1171,16 @@ async refreshTreasury(){
       let deliverable;
       try{
         if((op.source==='dealwork'&&!claim.workOrder))throw new Error('work_order_unavailable_refusing_blind_delivery');
-        const execOp={...op,jobId,acceptanceContract:op.acceptanceContract||buildAcceptanceContract(op),executionBudgetUsd:Number(op.executionBudgetUsd||config.availableSpendUsd||config.seedSpendBudgetUsd||0),jobSpendCeilingUsd:Number(op.budgetUsd||0)*(Number(config.maxApiCostPercentOfPayout||25)/100),...(claim.workOrder?{__workOrderRaw:claim.workOrder,description:`${op.description}\n\n[${op.source} authoritative work order]\n${typeof claim.workOrder==='string'?claim.workOrder:JSON.stringify(claim.workOrder).slice(0,4000)}${op.source==='t2000'?'\n\n[t2000 delivery constraint] Final delivery body must be at most 16 KiB UTF-8. If larger, summarize and include stable artifact links/hashes where permitted.':''}`}:{})};
+        const execOp={...op,jobId,acceptanceContract:op.acceptanceContract||buildAcceptanceContract(op),executionBudgetUsd:Number(op.executionBudgetUsd||config.availableSpendUsd||config.seedSpendBudgetUsd||0),jobSpendCeilingUsd:Number(op.budgetUsd||0)*(Number(config.maxApiCostPercentOfPayout||25)/100),...(claim.workOrder?{__workOrderRaw:claim.workOrder,description:`${op.description}\n\n[${op.source} authoritative work order]\n${typeof claim.workOrder==='string'?claim.workOrder:JSON.stringify(claim.workOrder).slice(0,4000)}`}:{})};
         deliverable=await orchestrateJob(execOp,{llm,memory,taskAgents,jobId,env,store,maxTaskAgents:Number(config.maxChildren||12),abortSignal:abortController.signal,onEvent:(type,detail)=>event(type,{jobId,source:op.source,...detail}),execute:(plannedOp,execOpts={})=>executeExternalOpportunity(plannedOp,op.capability,{llm,siteUrl,env,config,abortSignal:abortController.signal,memoryContext:plannedOp.__memoryContext||'',...execOpts})});
         validateExternalDeliverable(deliverable,execOp);deliverable=await ensureMarketplaceArtifact(jobId,op,deliverable);await persistDurableJobArtifacts(jobId,op,deliverable);
         const delivery=await deliverOnce(jobId,op,claim,deliverable);if(!delivery.ok)throw new Error(`delivery_failed:${delivery.reason||'unknown'}`);
         writeInFlightJob(jobId,{...inFlightJobs[jobId],jobId,op,claim,workerId:worker.id,status:'delivery_accepted',deliveryTransactionId:String(delivery.transactionId||claim.transactionId||''),deliverableHash:String(deliverable.hash||''),deliveryAcceptedAt:new Date().toISOString()});
         appendJobStatus({id:jobId,source:op.source,externalId:op.externalId,title:op.title,budgetUsd:op.budgetUsd,currency:op.currency,status:'delivered',transactionId:delivery.transactionId||claim.transactionId||'',workerId:worker.id,deliverableHash:deliverable.hash,at:new Date().toISOString(),recovered:true});
         const actualCostUsd=computeActualCostUsd(deliverable,op.capability);const toolCostUsd=Number(deliverable.evidence?.toolCostUsd||0);setWorkerMetric(worker,{tasks:1,cost:actualCostUsd+toolCostUsd});recordCost({jobId,source:op.source,externalId:op.externalId,amountUsd:actualCostUsd,kind:'model',estimated:!deliverable.evidence?.usage});if(toolCostUsd>0)recordCost({jobId,source:op.source,externalId:op.externalId,amountUsd:toolCostUsd,kind:'tool_api',estimated:true,note:'recovered_job_tool_cost'});
-        if (op.source !== 'superteam') {
-        const pendingLearning=store.readJson('learning-pending.json',{});
+                const pendingLearning=store.readJson('learning-pending.json',{});
         pendingLearning[jobId]={jobId,source:op.source,externalId:op.externalId,skill:op.capability?.skill||'',title:op.title,description:op.description,deliverableHash:deliverable.hash,accepted:false,createdAt:new Date().toISOString(),tenantScope:op.tenantScope||op.clientId||'global'};
         store.writeJson('learning-pending.json',pendingLearning);
-      }
         event('market_job_delivered',{jobId,source:op.source,externalId:op.externalId,transactionId:delivery.transactionId||'',recovered:true});jobRegistry.setState(op,'delivered',{reasonCode:'delivery_accepted',transactionId:delivery.transactionId||'',deliveredAt:new Date().toISOString(),recovered:true});clearInFlightJob(jobId);delete executionAttempts[key];store.writeJson('execution-attempts.json',executionAttempts);recovered++;
       }catch(error){
         failed++;const nextCount=Number(attempt.count||0)+1;executionAttempts[key]={count:nextCount,lastAttemptAt:new Date().toISOString(),reason:String(error?.message||error).slice(0,220)};store.writeJson('execution-attempts.json',executionAttempts);recordIfPlatformSideFailure(key,error?.message||error);const failure=classifyFailure(error,{phase:'execution'});const externalPermanent=failure.permanent&&failure.owner!=='our_system';const manual=nextCount>=MAX_EXECUTION_ATTEMPTS&&!externalPermanent;if(externalPermanent){jobRegistry.markPermanent(op,{owner:failure.owner,reasonCode:failure.reasonCode,reason:String(error?.message||error)});clearInFlightJob(jobId);}else{if(manual&&failure.owner==='our_system')jobRegistry.markSystemBlocked(op,{reasonCode:failure.reasonCode||'execution_retry_limit_attention',reason:String(error?.message||error),attempts:nextCount,capabilityVersion:capabilityVersion()});else jobRegistry.markRetry(op,{owner:failure.owner,reasonCode:failure.reasonCode,reason:String(error?.message||error),attempts:nextCount,retryAfter:manual?'':new Date(Date.now()+retryDelayMs(EXECUTION_RETRY_BACKOFF_MS,nextCount,24*60*60_000)).toISOString(),phase:'execution'});writeInFlightJob(jobId,{...record,lastError:String(error?.message||error).slice(0,220),retryCount:nextCount,lastFailedAt:new Date().toISOString(),status:manual?'system_blocked':'retry_pending',...(manual?{manualAttentionAt:new Date().toISOString()}:{})});}
@@ -1369,7 +1340,7 @@ async refreshTreasury(){
     return{rawSignals:actionRows.length,pricedJobs:paid.length,paidJobs:paid.length,aboveFloor:aboveFloor.length,executable:executable.length,profitable:profitable.length,claimable:claimableRows.length,ready:readyRows.length,blockers,blockerTotal:Object.values(blockers).reduce((a,b)=>a+Number(b||0),0),at:new Date().toISOString()};
   }
   function buildCommissioningProof(rows,jobs=[],ledger=[]){
-    const sources=new Set(['t2000','clawlancer','workprotocol']);
+    const sources=new Set(['clawlancer','workprotocol']);
     const floor=Number(config.commissioningMinPayoutUsd||0.5);
     const lane=rows.filter(x=>sources.has(String(x.source||''))&&isCryptoNativeEarning(x)&&Number(x.budgetUsd||0)>=floor);
     const ready=lane.filter(x=>explainCandidacy(x).isCandidate);
@@ -1559,16 +1530,16 @@ async refreshTreasury(){
         .sort((a,b)=>(Number(b.intelligence?.score||0)-Number(a.intelligence?.score||0)) || (scoreCandidate(b)-scoreCandidate(a))),cycleConfig,cycleConfig.availableSpendUsd,detail=>event('candidate_skipped_cycle_budget',detail));
       const fastLedger=store.readNdjson('ledger.ndjson',-1);
       candidates=applyCommissioningCandidateGate(candidates,config,{ledger:fastLedger,activeCount:activeJobs.size});
-      const fastCommissioningProved=fastLedger.some(row=>row?.type==='revenue'&&Number(row?.amountUsd||row?.grossUsd||0)>0&&['t2000','clawlancer','workprotocol'].includes(String(row?.source||'')));
-      const rows=await mapLimit(candidates,Number(config.commissioningMode&&!fastCommissioningProved?1:config.maxConcurrentJobs||4),async op=>{const leaseId=crypto.randomUUID();const durableOp={...op,__dispatchLeaseId:leaseId};if(triggerEnabled(env)){const dispatched=await dispatchTriggerPaidOpportunity(durableOp,env);if(dispatched.ok){jobRegistry.markDispatchPending(op,{provider:'trigger',runId:dispatched.runId||'',leaseId,retryAfter:new Date(Date.now()+6*60*60_000).toISOString()});event('trigger_job_dispatched',{source:op.source,externalId:op.externalId,runId:dispatched.runId||'',leaseId,fastLane:true});return{durable:true,provider:'trigger'};}event('trigger_dispatch_fallback',{source:op.source,externalId:op.externalId,reason:dispatched.reason||'',fastLane:true});}else if(temporalEnabled(env)){const dispatched=await dispatchPaidOpportunity(durableOp,env);if(dispatched.ok){jobRegistry.markDispatchPending(op,{provider:'temporal',runId:dispatched.workflowId||'',leaseId,retryAfter:new Date(Date.now()+6*60*60_000).toISOString()});event('temporal_job_dispatched',{source:op.source,externalId:op.externalId,workflowId:dispatched.workflowId,duplicate:Boolean(dispatched.duplicate),leaseId,fastLane:true});return{durable:true,provider:'temporal'};}event('temporal_dispatch_fallback',{source:op.source,externalId:op.externalId,reason:dispatched.reason||'',fastLane:true});}return processMarketplaceOpportunity(op);});
-      return{ok:true,found:normalized.length,processed:rows.filter(x=>!x?.durable).length,durableDispatched:rows.filter(x=>x?.durable).length,triggerDispatched:rows.filter(x=>x?.provider==='trigger').length,temporalDispatched:rows.filter(x=>x?.provider==='temporal').length};
+      const fastCommissioningProved=fastLedger.some(row=>row?.type==='revenue'&&Number(row?.amountUsd||row?.grossUsd||0)>0&&['clawlancer','workprotocol'].includes(String(row?.source||'')));
+      const rows=await mapLimit(candidates,Number(config.commissioningMode&&!fastCommissioningProved?1:config.maxConcurrentJobs||4),async op=>{const leaseId=crypto.randomUUID();const durableOp={...op,__dispatchLeaseId:leaseId};if(triggerEnabled(env)){const dispatched=await dispatchTriggerPaidOpportunity(durableOp,env);if(dispatched.ok){jobRegistry.markDispatchPending(op,{provider:'trigger',runId:dispatched.runId||'',leaseId,retryAfter:new Date(Date.now()+6*60*60_000).toISOString()});event('trigger_job_dispatched',{source:op.source,externalId:op.externalId,runId:dispatched.runId||'',leaseId,fastLane:true});return{durable:true,provider:'trigger'};}event('trigger_dispatch_fallback',{source:op.source,externalId:op.externalId,reason:dispatched.reason||'',fastLane:true});}return processMarketplaceOpportunity(op);});
+      return{ok:true,found:normalized.length,processed:rows.filter(x=>!x?.durable).length,durableDispatched:rows.filter(x=>x?.durable).length,triggerDispatched:rows.filter(x=>x?.provider==='trigger').length};
     }catch(error){event('fast_cycle_failed',{error:String(error?.message||error)});return{ok:false,reason:String(error?.message||error).slice(0,200)};}
     finally{fastCycleRunning=false;}
   }
   function connectedApps(){try{const raw=JSON.parse(String(env.AUTONOMOS_CONNECTED_APPS_JSON||'[]'));if(Array.isArray(raw))return raw.map(x=>String(x).toLowerCase().trim()).filter(Boolean);}catch{}return String(env.AUTONOMOS_CONNECTED_APPS||'').split(',').map(x=>x.toLowerCase().trim()).filter(Boolean);}
-  function capabilityContext(){return{llmEnabled:Boolean(llm.available??llm.enabled),hasGithubPrTool:Boolean(env.GITHUB_TOKEN),hasShellTool:Boolean(env.E2B_API_KEY),hasBrowserTool:Boolean(env.BROWSERBASE_API_KEY&&env.BROWSERBASE_PROJECT_ID),hasDeployTool:Boolean(env.AUTONOMOS_DEPLOY_WEBHOOK_URL),hasArtifactTool:artifactStore.configured(),hasAppTool:Boolean(env.COMPOSIO_API_KEY),connectedApps:connectedApps(),hasWebSearchTool:Boolean(env.FIRECRAWL_API_KEY||env.TAVILY_API_KEY),hasDesignMediaTool:false};}
+  function capabilityContext(){return{llmEnabled:Boolean(llm.available??llm.enabled),hasGithubPrTool:Boolean(env.GITHUB_TOKEN),hasShellTool:Boolean(env.E2B_API_KEY),hasBrowserTool:false,hasDeployTool:Boolean(env.AUTONOMOS_DEPLOY_WEBHOOK_URL),hasArtifactTool:artifactStore.configured(),hasAppTool:Boolean(env.COMPOSIO_API_KEY),connectedApps:connectedApps(),hasWebSearchTool:true,hasDesignMediaTool:false};}
   function capabilityVersion(){
-    return crypto.createHash('sha256').update(JSON.stringify({rules:'15',credentialVersion:crypto.createHash('sha256').update(JSON.stringify(Object.entries(env).filter(([k])=>/API_KEY|TOKEN|AGENT_ID/.test(k)))).digest('hex'),model:llm.model||'',firecrawl:Boolean(env.FIRECRAWL_API_KEY),tavily:Boolean(env.TAVILY_API_KEY),e2b:Boolean(env.E2B_API_KEY),browserbase:Boolean(env.BROWSERBASE_API_KEY&&env.BROWSERBASE_PROJECT_ID),composio:Boolean(env.COMPOSIO_API_KEY),connectedApps:connectedApps().sort(),github:Boolean(env.GITHUB_TOKEN),artifact:artifactStore.configured(),designMedia:Boolean(env.CANVA_API_KEY||env.FIGMA_ACCESS_TOKEN||env.FIGMA_API_KEY)})).digest('hex').slice(0,16);
+    return crypto.createHash('sha256').update(JSON.stringify({rules:'16',credentialVersion:crypto.createHash('sha256').update(JSON.stringify(Object.entries(env).filter(([k])=>/API_KEY|TOKEN|AGENT_ID/.test(k)))).digest('hex'),model:llm.model||'',e2b:Boolean(env.E2B_API_KEY),composio:Boolean(env.COMPOSIO_API_KEY),connectedApps:connectedApps().sort(),github:Boolean(env.GITHUB_TOKEN),artifact:artifactStore.configured(),designMedia:Boolean(env.CANVA_API_KEY||env.FIGMA_ACCESS_TOKEN||env.FIGMA_API_KEY)})).digest('hex').slice(0,16);
   }
   function buildIncidents(){
     const out=[];const now=Date.now();const summary=jobRegistry.summary();

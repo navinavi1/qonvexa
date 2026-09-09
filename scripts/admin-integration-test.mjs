@@ -29,7 +29,7 @@ try{
   for(let i=0;i<50;i++){if(dom.window.document.getElementById('autonomos-global-work-feed'))break;await new Promise(r=>setTimeout(r,50));}
   assert(dom.window.document.getElementById('autonomos-global-work-feed'),'clean global work feed must render');
   assert.equal(dom.window.document.querySelectorAll('[data-market]').length,0,'legacy marketplace control cards must stay deleted');
-  assert.equal(dom.window.document.querySelector('.autonomos-t2000-card'),null,'legacy T2000 card must not survive dashboard cleanup');
+  assert.equal(dom.window.document.querySelector('.autonomos-workprotocol-card'),null,'legacy WorkProtocol card must not survive dashboard cleanup');
   for(const tab of dom.window.document.querySelectorAll('[data-view]')){tab.click();assert.equal(dom.window.document.querySelector('.admin-view.active').dataset.panel,tab.dataset.view);}
   dom.window.location.hash='leads';await new Promise(r=>setTimeout(r,30));assert.equal(dom.window.document.querySelector('.admin-view.active').dataset.panel,'leads');
   dom.window.document.querySelector('[data-view="autonomos"]').click();

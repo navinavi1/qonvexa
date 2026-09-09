@@ -35,24 +35,24 @@ class JsonStore {
   try{
     const store=new JsonStore(root);
     const registry=new JobRegistry({store,maxRecords:1000});
-    const live={source:'superteam',externalId:'listing-1',title:'Agent bounty',description:'Produce a report',budgetUsd:600,currency:'USDC',claimMode:'competitive_submission'};
+    const live={source:'agenthansa',externalId:'listing-1',title:'Agent bounty',description:'Produce a report',budgetUsd:600,currency:'USDC',claimMode:'competitive_submission'};
     registry.observe(live);registry.setState(live,'proposal',{reasonCode:'competitive_eligible'});
 
-    const ignored=registry.reconcileCompetitiveSnapshot('superteam',[],{authoritative:false});
+    const ignored=registry.reconcileCompetitiveSnapshot('agenthansa',[],{authoritative:false});
     assert.equal(ignored.changed,0,'truncated/non-authoritative feed must never age a proposal');
     assert.equal(registry.get(live).status,'proposal');
 
-    const first=registry.reconcileCompetitiveSnapshot('superteam',[],{authoritative:true,missingToArchive:2});
+    const first=registry.reconcileCompetitiveSnapshot('agenthansa',[],{authoritative:true,missingToArchive:2});
     assert.equal(first.staleChecked,1);assert.equal(registry.get(live).status,'stale_check');
     assert.equal(registry.blockReason(live)?.status,'stale_check','stale listing must be excluded from worker claim');
 
     const restarted=new JobRegistry({store,maxRecords:1000});
     assert.equal(restarted.get(live).status,'stale_check','first miss must persist across restart');
-    const second=restarted.reconcileCompetitiveSnapshot('superteam',[],{authoritative:true,missingToArchive:2});
+    const second=restarted.reconcileCompetitiveSnapshot('agenthansa',[],{authoritative:true,missingToArchive:2});
     assert.equal(second.archived,1);assert.equal(restarted.get(live).status,'archived');
     assert.equal(restarted.blockReason(live)?.status,'archived');
 
-    const reopened=restarted.reconcileCompetitiveSnapshot('superteam',['listing-1'],{authoritative:true,missingToArchive:2});
+    const reopened=restarted.reconcileCompetitiveSnapshot('agenthansa',['listing-1'],{authoritative:true,missingToArchive:2});
     assert.equal(reopened.reopened,1,'authoritative live feed must be allowed to restore an archived competitive listing');
     assert.equal(restarted.get(live).status,'new');
     assert.equal(restarted.blockReason(live),null);

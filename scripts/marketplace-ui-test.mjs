@@ -15,7 +15,7 @@ window.eval(fs.readFileSync(new URL('../public/marketplaces.js',import.meta.url)
 window.document.dispatchEvent(new window.Event('DOMContentLoaded'));
 await new Promise(r=>setTimeout(r,20));
 assert.equal(window.document.querySelectorAll('[data-market]').length,0,'legacy marketplace control cards are gone');
-assert.equal(window.document.querySelector('.autonomos-t2000-card'),null,'legacy T2000 card is removed from owner UI');
+assert.equal(window.document.querySelector('.autonomos-workprotocol-card'),null,'legacy WorkProtocol card is removed from owner UI');
 assert.equal(window.document.querySelector('section[aria-label="AgentHansa and TaskBounty"]'),null,'old marketplace compatibility section is removed');
 const feed=window.document.getElementById('autonomos-global-work-feed');
 assert(feed,'global paid-work feed must exist');

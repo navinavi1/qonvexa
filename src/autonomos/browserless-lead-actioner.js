@@ -49,8 +49,8 @@ export class BrowserlessLeadActioner extends GlobalLeadActioner{
       const next=Date.parse(String(action.nextRetryAt||0));
       return !Number.isFinite(next)||next<=Date.now();
     }
-    // Browserbase failures are explicitly re-routed here instead of waiting on the dead dependency.
-    if(status==='inspect_or_apply_failed'&&/browserbase|browser_session|stagehand/i.test(String(action.error||'')))return true;
+    // Historical unavailable-session failures are retried through the direct free path.
+    if(status==='inspect_or_apply_failed'&&/browser_session|session_unavailable/i.test(String(action.error||'')))return true;
     const next=Date.parse(String(action.nextRetryAt||0));
     return !Number.isFinite(next)||next<=Date.now();
   }

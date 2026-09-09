@@ -1,6 +1,6 @@
 import { InternetHunter } from './internet-hunter.js';
 
-// LeanInternetHunter deliberately does not run InternetHunter's generic Tavily discovery.
+// LeanInternetHunter deliberately skips generic paid-provider discovery.
 // It keeps only known, direct, free-to-probe agent markets. This guarantees that this
 // background lane cannot consume a paid search provider or silently fall into PAYG.
 export class LeanInternetHunter extends InternetHunter{

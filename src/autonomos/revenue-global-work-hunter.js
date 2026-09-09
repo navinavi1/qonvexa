@@ -1,5 +1,5 @@
 import { GlobalWorkHunter } from './global-work-hunter.js';
-import { tavilySearch } from './tavily-tool.js';
+import { freeWebSearch } from './free-web-tool.js';
 import { classifyOpportunity } from './capabilities.js';
 
 // Keep the per-cycle request count bounded, but rotate through a much wider set of
@@ -82,7 +82,7 @@ export class RevenueGlobalWorkHunter extends GlobalWorkHunter{
     let cursor=Number(this.state.directQueryCursor||0)%DIRECT_ROUTE_QUERIES.length,directNewLeads=0;
     for(let i=0;i<perCycle;i++){
       const query=DIRECT_ROUTE_QUERIES[(cursor+i)%DIRECT_ROUTE_QUERIES.length];
-      const result=await tavilySearch(query,this.env);
+      const result=await freeWebSearch(query,this.env);
       if(!result.ok){this.event('direct_route_search_failed',{query,error:result.error||''});continue;}
       for(const row of result.results||[]){
         const url=String(row?.url||'').trim();if(!/^https?:\/\//i.test(url))continue;

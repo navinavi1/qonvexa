@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { tavilySearch } from './tavily-tool.js';
+import { freeWebSearch } from './free-web-tool.js';
 
 const DEFAULT_QUERIES=[
   'AI agent marketplace paid tasks API USDC USDT bounty',
@@ -56,7 +56,7 @@ export class InternetHunter {
       const queries=parseQueries(this.env.AUTONOMOS_INTERNET_HUNTER_QUERIES_JSON)||DEFAULT_QUERIES;
       let discovered=0;
       for(const query of queries.slice(0,12)){
-        const result=await tavilySearch(query,this.env);
+        const result=await freeWebSearch(query,this.env);
         if(!result.ok){this.event('search_failed',{query,error:result.error||''});continue;}
         for(const row of result.results||[]){
           const lead=this.classifyLead(row,query);if(!lead)continue;

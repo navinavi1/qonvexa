@@ -12,7 +12,7 @@ import crypto from 'node:crypto';
 // not an idealized model. Two independent lifecycles exist: the marketplace job pipeline
 // (bidding/claiming/claimed/delivered/execution_failed/manual_attention) and the simpler
 // x402 machine-product pipeline (started/completed/failed). 'delivered' can still move to
-// 'settled' or 'failed' later because on no-escrow marketplaces (Superteam Earn) delivery
+// 'settled' or 'failed' later because on adjudicated marketplaces delivery
 // is a submission a human still has to judge, days later, as a separate event.
 export const JOB_STATES = Object.freeze([
   'bidding','bid_failed','bid_submitted',
@@ -147,7 +147,7 @@ export function buildLearningSnapshot(jobs=[],opportunities=[]){
     const source=String(row.source||'unknown');
     const skill=String(row.skill||row.capability?.skill||'general-digital');
     // 'delivered' means submitted, not accepted/paid — on no-escrow marketplaces
-    // (Superteam Earn) a human still has to judge and claim it, sometimes days later.
+    // a sponsor may still need to judge it later.
     // Counting it as a learning "success" would teach the ranking to favor sources
     // that merely accept submissions over sources that actually pay out.
     if(isPending(row.status)){outcomes[String(row.status||'unknown')]=(outcomes[String(row.status||'unknown')]||0)+1;continue;}

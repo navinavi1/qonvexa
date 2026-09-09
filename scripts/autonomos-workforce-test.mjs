@@ -98,8 +98,6 @@ assert.equal(exceedsJobSpendCeiling(0.20,0.25),false,'under the ceiling must be 
 assert.equal(exceedsJobSpendCeiling(0.25,0.25),false,'exactly at the ceiling must not itself trip it');
 assert.equal(exceedsJobSpendCeiling(0.26,0.25),true,'over the ceiling must stop the job');
 assert.equal(exceedsJobSpendCeiling(5,0),false,'a zero/unknown ceiling must not block (economics gate already rejects $0-budget jobs upstream)');
-
-// Reproduce the production symptom: a durable dispatcher (Trigger.dev/Temporal) only
 // retries when it sees ok:false. A job that failed to claim/bid anything must be
 // reported as a failure so the dispatcher's own retry kicks in; a job that already
 // claimed/bid/delivered must be reported as ok so the dispatcher never re-invokes the

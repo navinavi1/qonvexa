@@ -11,14 +11,14 @@ const pkg=JSON.parse(fs.readFileSync(path.join(root,'package.json'),'utf8'));
 const triggerTask=fs.readFileSync(path.join(root,'trigger/autonomos-paid-job.js'),'utf8');
 
 assert.match(runtime,/version:'15\.0\.0'/,'runtime snapshot must identify AutonomOS 15.0.0');
-assert.match(runtime,/rules:'15'/,'capability fingerprint must use the current rules generation');
+assert.match(runtime,/rules:'16'/,'capability fingerprint must use the current rules generation');
 assert.ok(pkg.scripts['autonomos-regression-test'],'current regression script name must be version-neutral');
 assert.ok(!pkg.scripts['autonomos71-regression-test'],'stale 7.1 regression script alias must be removed');
 assert.match(pkg.scripts.verify,/autonomos-production-readiness-test/,'production readiness audit must run inside npm run verify');
 
 assert.match(runtime,/workAutonomousReady:claimReadySources\.length>0/,'live self-test must expose autonomous work readiness');
 assert.match(runtime,/autonomousReady:fullAutoSources\.length>0/,'live self-test autonomousReady must mean end-to-end owner-wallet readiness');
-assert.match(runtime,/\['needs_credentials','needs_configuration','connect_required'\]/,'missing setup must include explicit connect-required sources such as t2000');
+assert.match(runtime,/\['needs_credentials','needs_configuration','connect_required'\]/,'missing setup must include explicit connect-required sources such as workprotocol');
 assert.match(runtime,/status:'cashout_action'/,'missing setup must surface autonomous-work sources whose final cash-out is not verified');
 
 assert.match(admin,/FULL AUTO/,'dashboard must expose FULL AUTO truth');

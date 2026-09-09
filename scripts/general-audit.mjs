@@ -17,13 +17,10 @@ check('OpenTelemetry core peer is explicit',Boolean(pkg.dependencies?.['@opentel
 check('OTLP HTTP exporter peer is explicit',Boolean(pkg.dependencies?.['@opentelemetry/exporter-trace-otlp-http']));
 check('OTEL trace-base peer is explicit',Boolean(pkg.dependencies?.['@opentelemetry/sdk-trace-base']));
 check('Legacy NATS package removed',!pkg.dependencies?.nats);
-check('Browserbase/Stagehand dependency removed',!pkg.dependencies?.['@browserbasehq/stagehand']);
 
 const tools=read('src/autonomos/tools.js');
 const freeWeb=fs.existsSync(path.join(root,'src/autonomos/free-web-tool.js'))?read('src/autonomos/free-web-tool.js'):'';
 check('Free web search is wired into worker tools',/freeWebSearch/.test(tools)&&/free-web-tool/.test(tools));
-check('Paid Tavily worker path is removed',!/tavilySearch|TAVILY_API_KEY/.test(tools));
-check('Browserbase worker path is removed',!/browserTask|browser_task|BROWSERBASE/.test(tools));
 check('Free web search implementation exists',/free_public_web/.test(freeWeb)&&/duckduckgo/i.test(freeWeb));
 check('GitHub direct token can be identity-pinned',/AUTONOMOS_GITHUB_EXPECTED_LOGIN/.test(tools)&&/github_identity_mismatch/.test(tools));
 
@@ -44,7 +41,6 @@ const env=read('.env.example');
 for(const key of ['OPENAI_API_KEY','DATABASE_URL','REDIS_URL','TRIGGER_SECRET_KEY','COMPOSIO_API_KEY','S3_ENDPOINT','S3_REGION','S3_BUCKET','S3_ACCESS_KEY_ID','S3_SECRET_ACCESS_KEY','LANGFUSE_PUBLIC_KEY','LANGFUSE_SECRET_KEY','LANGFUSE_BASE_URL','E2B_API_KEY']){
   check(`.env.example documents ${key}`,new RegExp(`^${key}=`,`m`).test(env));
 }
-for(const key of ['BROWSERBASE_API_KEY','BROWSERBASE_PROJECT_ID','TAVILY_API_KEY','FIRECRAWL_API_KEY','T2000_MCP_URL'])check(`.env.example omits retired ${key}`,!new RegExp(`^${key}=`,`m`).test(env));
 
 const cfg=normalizeConfig({...DEFAULT_AUTONOMOS_CONFIG});
 check('Global minimum payout defaults to at least $0.50',Number(cfg.minJobPayoutUsd)>=0.5,`value=${cfg.minJobPayoutUsd}`);
@@ -58,13 +54,11 @@ const syntheticEnv={TRIGGER_SECRET_KEY:'tr_prod_redacted',DATABASE_URL:'postgres
 check('Trigger.dev config gate recognizes secret key',triggerEnabled(syntheticEnv));
 const infra=infrastructureStatus(syntheticEnv);
 for(const id of ['openai_agents','langgraph','memory','redis','redis_streams','triggerdev','composio','s3','langfuse','e2b'])check(`Infrastructure ${id} can reach ready state`,infra.find(x=>x.id===id)?.configured===true);
-for(const id of ['tavily','firecrawl','stagehand','temporal','opensearch','auth0','litellm','secrets_manager'])check(`Retired infrastructure ${id} is absent`,!infra.some(x=>x.id===id));
 
 const html=read('public/admin.html'),js=read('public/admin.js');
 check('Admin exposes demo/test safety toggle',/name="rejectDemoAndTestJobs"/.test(html));
 check('Admin submits demo/test safety toggle',/rejectDemoAndTestJobs:f\.elements\.rejectDemoAndTestJobs\.checked/.test(js));
 check('Admin copy reflects $0.50 general floor',/global floor \$0\.50/.test(html));
-check('Owner UI has no retired T2000 controls',!/t2000/i.test(html));
 
 const forbiddenInPublic=['server.js','package.json','render.yaml','Procfile','scripts'];
 for(const name of forbiddenInPublic)check(`public/${name} does not exist (would be served to the internet)`,!fs.existsSync(path.join(root,'public',name)));

@@ -29,15 +29,6 @@ export function releaseStaleDispatchReservations(value,{now=Date.now(),maxAgeMs=
   return value;
 }
 
-export function legacyT2000OAuthFallback(rootDir){
-  try{
-    const credentials=JSON.parse(fs.readFileSync(path.join(rootDir,'credentials.private.json'),'utf8'));
-    const accessToken=String(credentials?.t2000?.accessToken||'').trim();
-    if(!accessToken)return null;
-    return {token:{accessToken},oauth:{legacyCredentialFallback:true},lastError:'legacy_t2000_token_fallback'};
-  }catch{return null;}
-}
-
 export class AutonomOSStore {
   constructor(rootDir){this.rootDir=rootDir;fs.mkdirSync(rootDir,{recursive:true});}
   readJson(name,fallback={}){
@@ -46,7 +37,7 @@ export class AutonomOSStore {
       if(name==='in-flight-jobs.json')value=pruneTerminalInFlightJobs(value);
       if(name==='job-registry.json')value=releaseStaleDispatchReservations(value);
       return value;
-    }catch(error){if(error?.code==='ENOENT'&&name==='t2000-oauth.private.json'){const migrated=legacyT2000OAuthFallback(this.rootDir);if(migrated)return migrated;}return structuredCloneSafe(fallback);}
+    }catch{return structuredCloneSafe(fallback);}
   }
   readJsonStrict(name,fallback={}){
     try{
@@ -54,7 +45,7 @@ export class AutonomOSStore {
       if(name==='in-flight-jobs.json')value=pruneTerminalInFlightJobs(value);
       if(name==='job-registry.json')value=releaseStaleDispatchReservations(value);
       return value;
-    }catch(error){if(error?.code==='ENOENT'&&name==='t2000-oauth.private.json'){const migrated=legacyT2000OAuthFallback(this.rootDir);if(migrated)return migrated;}if(error?.code==='ENOENT')return structuredCloneSafe(fallback);throw error;}
+    }catch(error){if(error?.code==='ENOENT')return structuredCloneSafe(fallback);throw error;}
   }
   writeJson(name,value){if(name==='in-flight-jobs.json')pruneTerminalInFlightJobs(value);const target=this.file(name);return this.withLock(name,()=>this.writeJsonUnlocked(target,value));}
   writeJsonUnlocked(target,value){const tmp=`${target}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2,10)}.tmp`;fs.writeFileSync(tmp,JSON.stringify(value,null,2),{mode:0o600});try{const fd=fs.openSync(tmp,'r');fs.fsyncSync(fd);fs.closeSync(fd);}catch{}fs.renameSync(tmp,target);return value;}

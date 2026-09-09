@@ -163,7 +163,6 @@ See `AUTONOMOS-1.0-REPORT.md` and `AUTONOMOS-DEPLOY.md` for the full architectur
 
 ## AutonomOS 2.0
 
-AutonomOS 2.0 adds a global marketplace job engine on top of the existing QONVEXA owner control plane. It normalizes external jobs, checks safety/capability/unit economics before claiming, can auto-bootstrap Clawlancer, supports t2000 Passport Connect over MCP when a session is supplied, discovers Agentverse functions, retains x402 seller/discovery, tracks multi-chain EVM treasury balances, and exposes separate Opportunity / Claimed / Delivered / Paid counters so heartbeat cycles are never confused with revenue-producing work.
 
 See `AUTONOMOS-2.0-REPORT.md` and `AUTONOMOS-2.0-DEPLOY.md`.
 Trigger.dev production deployment sync.
@@ -173,3 +172,4 @@ Trigger.dev production deployment sync.
 AutonomOS 3.0 removes the legacy permanent-worker/child-agent organization. The runtime keeps only a small control plane (orchestration, policy, market radar, economics, routing, QA, treasury, security and learning). Research/code/content/automation workers are ephemeral leases created from an accepted job plan, grouped by specialist role, bounded by capacity, and guaranteed to retire on success or failure.
 
 The orchestration path is now plan-once → execute-once → QA → deliver. LangGraph is used when available for inspectable state/checkpointing, but an infrastructure fallback never replays a failed paid execution. The LLM client also retries the known reasoning-model empty-completion pattern with a larger completion budget and opens a short circuit breaker after repeated provider failures so bad model health cannot burn through a queue of paid jobs.
+

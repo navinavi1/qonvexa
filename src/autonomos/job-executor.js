@@ -56,10 +56,9 @@ async function executeOpportunity(opportunity, capability, { llm, siteUrl='', en
   const allAvailableTools = [];
   const add = name => { const item=schema(name); if(item&&!allAvailableTools.some(x=>x.function.name===name))allAvailableTools.push(item); };
 
-  if (spendAuthorized && (env.FIRECRAWL_API_KEY || env.TAVILY_API_KEY)) add('web_search');
-  if (spendAuthorized && env.FIRECRAWL_API_KEY) add('web_scrape');
+  add('web_search');
+  add('web_scrape');
   if (spendAuthorized && env.E2B_API_KEY) { add('run_python'); add('run_shell'); }
-  if (spendAuthorized && env.BROWSERBASE_API_KEY && env.BROWSERBASE_PROJECT_ID) add('browser_task');
   if (spendAuthorized && env.COMPOSIO_API_KEY) { add('app_tool_search'); add('app_action'); }
   if (spendAuthorized && new ArtifactStore({env}).configured()) add('store_artifact');
   if (spendAuthorized && env.E2B_API_KEY && env.CODERABBIT_API_KEY) add('coderabbit_review');

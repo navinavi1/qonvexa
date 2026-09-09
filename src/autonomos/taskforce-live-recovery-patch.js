@@ -57,7 +57,7 @@ GlobalWorkHunter.prototype.pollTaskForceNotifications = async function pollTaskF
 
 // Use the same free-first capability truth for both discovery and execution. The old
 // TaskForce code still reported Browser/Web/Design/Deploy as unavailable because it only
-// checked the retired Browserbase/Tavily/Firecrawl flags, even though E2B/GitHub/Composio
+// checked obsolete provider flags instead of the current E2B/GitHub/Composio capability layer.
 // already provide the permitted free-first routes.
 GlobalWorkHunter.prototype.capabilityContext = function capabilityContextFreeFirst(){
   return freeCapabilityContext(this.env);

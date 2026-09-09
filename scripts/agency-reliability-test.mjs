@@ -5,12 +5,12 @@ import { normalizeConfig, validateAction } from '../src/autonomos/policy-engine.
 import { runTool } from '../src/autonomos/tools.js';
 
 const contract=buildAcceptanceContract({
-  source:'t2000',
+  source:'workprotocol',
   title:'Build API and provide tests',
   description:'Build a working API, run tests and provide a downloadable report.',
   capability:{skill:'code-analysis',requiresArtifact:true,executable:true}
 });
-assert.equal(contract.source,'t2000');
+assert.equal(contract.source,'workprotocol');
 assert.ok(contract.requirements.some(x=>x.id==='implementation'));
 assert.ok(contract.artifacts.some(x=>x.required));
 assert.equal(validateAcceptanceContract(contract,{content:'plan only',evidence:{toolCalls:[]}}).ok,false);
@@ -27,7 +27,7 @@ assert.notEqual(a.id,b.id);
 
 const cfg=normalizeConfig({enabled:true,zeroSpendMode:false,earnedFundsOnly:true,allowExternalSpending:false,maxPaidProcurementUsd:0.02});
 assert.equal(validateAction({kind:'spend',amountUsd:0.01},cfg).allowed,true);
-const blocked=await runTool('web_search',{query:'test'},{FIRECRAWL_API_KEY:'not-used'},
+const blocked=await runTool('web_search',{query:'test'},{E2B_API_KEY:'not-used'},
   {config:{...cfg,enabled:true},validateAction,remainingBudgetUsd:0.001});
 assert.equal(blocked.ok,false);
 assert.match(String(blocked.error),/job_budget_exceeded/);

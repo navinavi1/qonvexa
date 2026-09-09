@@ -25,7 +25,7 @@ export function buildAcceptanceContract(opportunity = {}) {
   }
   if (research) {
     requirements.push({id:'research-grounded', description:'Base current or externally verifiable claims on actual live sources/tools.'});
-    evidence.push({id:'live-source', type:'successful_tool', tools:['web_search','web_scrape','browser_task']});
+    evidence.push({id:'live-source', type:'successful_tool', tools:['web_search','web_scrape']});
     if (/source|citation|cite|references?/i.test(text)) requirements.push({id:'sources', description:'Include the requested source/citation information.'});
   }
   if (ARTIFACT_RE.test(text) || Boolean(opportunity?.capability?.requiresArtifact)) {
@@ -42,8 +42,6 @@ export function buildAcceptanceContract(opportunity = {}) {
     requirements.push({id:'tests', description:'Actually run the requested tests and preserve the observed result.'});
     evidence.push({id:'test-run', type:'successful_tool', tools:['run_shell','run_python']});
   }
-  if (source === 't2000') requirements.push({id:'marketplace-work-order', description:'Satisfy the authoritative t2000 work order and delivery-body constraints.'});
-  if (source === 'superteam') requirements.push({id:'submission-fields', description:'Submit using the listing-specific required fields and evidence.'});
   if (source === 'dealwork') requirements.push({id:'acceptance-criteria', description:'Satisfy the contract acceptance criteria and required deliverable structure.'});
 
   const unique = xs => [...new Map(xs.map(x => [x.id, x])).values()];
@@ -70,9 +68,9 @@ export function buildPhaseAcceptanceContract(contract = {}, role = '') {
     'content-worker':new Set(['sources','artifact','file-format','links'])
   };
   const evidenceTools={
-    'research-worker':new Set(['web_search','web_scrape','browser_task']),
+    'research-worker':new Set(['web_search','web_scrape']),
     'code-worker':new Set(['run_shell','run_python','coderabbit_review','open_pull_request','store_artifact','deploy_webhook']),
-    'automation-worker':new Set(['app_tool_search','app_action','browser_task','store_artifact']),
+    'automation-worker':new Set(['app_tool_search','app_action','store_artifact']),
     'content-worker':new Set(['store_artifact'])
   };
   const ids=idsByRole[phaseRole]||new Set();const tools=evidenceTools[phaseRole]||new Set();

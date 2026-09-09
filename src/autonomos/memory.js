@@ -104,14 +104,9 @@ export class AgentMemory {
 }
 
 function resolveEmbeddingEndpoint(env){
-  const lite=String(env.LITELLM_BASE_URL||'').replace(/\/$/,'');
   const direct=String(env.AUTONOMOS_LLM_BASE_URL||'').replace(/\/$/,'');
   const openai=String(env.OPENAI_API_KEY||'')?String(env.OPENAI_BASE_URL||'https://api.openai.com/v1').replace(/\/$/,''):'';
-  return{
-    baseUrl:lite||direct||openai,
-    apiKey:String(env.LITELLM_API_KEY||env.AUTONOMOS_LLM_API_KEY||env.OPENAI_API_KEY||''),
-    model:String(env.AUTONOMOS_EMBEDDING_MODEL||'text-embedding-3-small')
-  };
+  return{baseUrl:direct||openai,apiKey:String(env.AUTONOMOS_LLM_API_KEY||env.OPENAI_API_KEY||''),model:String(env.AUTONOMOS_EMBEDDING_MODEL||'text-embedding-3-small')};
 }
 function vectorLiteral(v){return `[${v.map(x=>Number(x)||0).join(',')}]`;}
 function limitSafe(v){return Math.max(1,Math.min(50,Number(v||6)));}

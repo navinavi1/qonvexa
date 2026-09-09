@@ -25,7 +25,7 @@ async function testRestartAfterClaim(){
     if(u.endsWith('clawlancer.ai/api/transactions')){transactionsCalls++;return json({transactions:failDelivery?[]:[{id:'claim_fault_tx',listing_id:'fault_claim_1',status:'settled',amount_usdc_wei:'50000000'}]});}
     if(u.includes('clawlancer.ai/api/wallet/balance')) return json({usdc:'50000000',eth:'0'});
     if(u.includes('agentverse.ai/v1/search/functions')) return json({total:0,functions:[]});
-    if(u==='https://t2000.ai/') return new Response('<html>market</html>',{status:200,headers:{'content-type':'text/html'}});
+    if(u==='https://workprotocol.ai/') return new Response('<html>market</html>',{status:200,headers:{'content-type':'text/html'}});
     if(u.includes('x402/discovery/resources')) return json({items:[]});
     if((opts.method||'GET')==='POST' && /^https:\/\/(mainnet\.base\.org|arb1\.arbitrum\.io\/rpc|polygon-rpc\.com)/.test(u)){const req=JSON.parse(opts.body||'{}');return json({jsonrpc:'2.0',id:req.id,result:'0x0'});}
     throw new Error(`unexpected_fetch:${u}`);
@@ -78,7 +78,7 @@ async function testRestartAfterDeliveryAck({withBlocked=false}={}){
     if(u.endsWith('clawlancer.ai/api/transactions')) return json({transactions:[]});
     if(u.includes('clawlancer.ai/api/wallet/balance')) return json({usdc:'0',eth:'0'});
     if(u.includes('agentverse.ai/v1/search/functions')) return json({total:0,functions:[]});
-    if(u==='https://t2000.ai/') return new Response('<html>market</html>',{status:200,headers:{'content-type':'text/html'}});
+    if(u==='https://workprotocol.ai/') return new Response('<html>market</html>',{status:200,headers:{'content-type':'text/html'}});
     if(u.includes('x402/discovery/resources')) return json({items:[]});
     if((opts.method||'GET')==='POST' && /^https:\/\/(mainnet\.base\.org|arb1\.arbitrum\.io\/rpc|polygon-rpc\.com)/.test(u)){const req=JSON.parse(opts.body||'{}');return json({jsonrpc:'2.0',id:req.id,result:'0x0'});}
     throw new Error(`unexpected_fetch:${u}`);

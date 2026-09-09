@@ -131,7 +131,7 @@ await ok('earning connector list excludes zero-payout discovery-only Agentverse 
   const statuses = connectorStatuses({}, { enabled:false, configured:false, mode:'disabled' }, {});
   assert.equal(statuses.find(x=>x.id==='clawlancer').status, 'auto_bootstrap_available');
   assert.equal(statuses.some(x=>x.id==='agentverse'), false);
-  assert.equal(statuses.some(x=>x.id==='virtuals-acp'), false);
+  assert.equal(statuses.some(x=>x.id==='unknown-retired-source'), false);
 });
 
 await ok('runtime boots without any paid API or private key', async () => {
@@ -197,9 +197,9 @@ await ok('P1: capability engine refuses dev-workstation jobs it cannot actually 
   assert.equal(cap.mode, 'unsupported_missing_tooling');
 });
 
-await ok('retired Firecrawl connector is absent and E2B remains visible', () => {
+await ok('retired RetiredScraper connector is absent and E2B remains visible', () => {
   const statuses = connectorStatuses({}, { enabled:false, configured:false, mode:'disabled' }, {});
-  assert.equal(statuses.some(x=>x.id==='firecrawl'), false);
+  assert.equal(statuses.some(x=>x.id==='retiredscraper'), false);
   assert.ok(statuses.some(x=>x.id==='e2b'));
 });
 
@@ -247,9 +247,9 @@ await ok('P0: x402 only accepts USD-pegged stablecoins, never raw ETH/SOL/BTC at
   assert.ok(gateway.status().acceptedAssets.some(a => a.symbol === 'USDC'));
 });
 
-await ok('retired Superteam connector is absent from the clean earning surface', () => {
+await ok('AgentHansa remains visible as an active configured-market surface', () => {
   const statuses = connectorStatuses({}, { enabled:false, configured:false, mode:'disabled' }, {});
-  assert.equal(statuses.some(x=>x.id==='superteam'), false);
+  assert.equal(statuses.some(x=>x.id==='agenthansa'), true);
 });
 await ok('Dealwork bid-mode jobs are discoverable with the correct shape (claimMode:bid, not escrowed yet)', () => {
   const op = normalizeOpportunity('dealwork', { id:'d1', title:'Write a blog post about AI collaboration', description:'800+ words', category:'writing', budgetUsd:50 }, { escrowed:false, feePercent:10, currency:'USD', claimMode:'bid' });

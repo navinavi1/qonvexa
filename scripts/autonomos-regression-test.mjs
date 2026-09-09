@@ -70,19 +70,22 @@ assert.equal(registry.get(policyOp).status,'policy_hold');
 assert.equal(registry.summary().policyHold,1);
 assert.equal(registry.summary().graveyard,1);
 
-const migrated=normalizeConfig({platformGeneration:5,minJobPayoutUsd:25,clawlancerMinJobPayoutUsd:25,dealworkMinJobPayoutUsd:25,superteamMinJobPayoutUsd:25,t2000MinOpenJobPayoutUsd:35,minMarginPercent:35,maxApiCostPercentOfPayout:25});
-assert.equal(migrated.platformGeneration,8,'v5 policy config must migrate to current generation');
-assert.equal(migrated.minJobPayoutUsd,0.5,'legacy floors must migrate to the owner-requested $0.50 minimum');
-assert.equal(migrated.clawlancerMinJobPayoutUsd,0.5);
-assert.equal(migrated.dealworkMinJobPayoutUsd,0.5);
-assert.equal(migrated.t2000MinOpenJobPayoutUsd,0.5);
-assert.equal(migrated.minMarginPercent,20);
-assert.equal(migrated.maxApiCostPercentOfPayout,35);
-assert.equal(migrated.autoCompetitiveSubmissions,false,'competitive auto-submit must default off');
-assert.equal(migrated.commissioningMode,true,'commissioning lane should default on for controlled crypto canaries');
-assert.equal(migrated.commissioningMinPayoutUsd,0.5);
-assert.equal(migrated.cryptoOnlyEarnings,true,'automatic work should default to crypto-native earnings in the current deployment');
-assert.equal(migrated.maxChildren,20,'dynamic specialist pool should allow up to twenty workers');
+const current=normalizeConfig({enabled:true,minJobPayoutUsd:0.5,clawlancerMinJobPayoutUsd:0.5,dealworkMinJobPayoutUsd:0.5,minMarginPercent:20,maxApiCostPercentOfPayout:60,maxChildren:50,maxConcurrentJobs:6,maxJobsPerCycle:10,maxPaidProcurementUsd:10});
+assert.equal(current.platformGeneration,9,'current clean policy generation is fixed');
+assert.equal(current.earningProfileVersion,18,'current clean earning profile is fixed');
+assert.equal(current.minJobPayoutUsd,0.5);
+assert.equal(current.clawlancerMinJobPayoutUsd,0.5);
+assert.equal(current.dealworkMinJobPayoutUsd,0.5);
+assert.equal(current.minMarginPercent,20);
+assert.equal(current.maxApiCostPercentOfPayout,60);
+assert.equal(current.autoCompetitiveSubmissions,false,'competitive auto-submit remains opt-in');
+assert.equal(current.commissioningMode,true);
+assert.equal(current.commissioningMinPayoutUsd,0.5);
+assert.equal(current.cryptoOnlyEarnings,true);
+assert.equal(current.maxChildren,50);
+assert.equal(current.maxConcurrentJobs,6);
+assert.equal(current.maxJobsPerCycle,10);
+assert.equal(current.maxPaidProcurementUsd,10);
 
 const buyerUnfunded=classifyFailure('http_422:INSUFFICIENT_BALANCE:Job poster wallet insufficient funds, available 0.00',{phase:'claim'});
 assert.equal(buyerUnfunded.reasonCode,'buyer_funding_unavailable');
@@ -113,7 +116,7 @@ const identityJob=classifyOpportunity({title:'Post from your Reddit account',des
 assert.equal(identityJob.executable,false,'jobs requiring operator identity/reputation must not be auto-accepted');
 assert.ok(identityJob.missingTools.includes('human_identity_or_reputation'));
 
-const dispatchOp={source:'t2000',externalId:'dispatch-1',title:'Tiny crypto job',description:'Summarize this public text',budgetUsd:1,currency:'USDC',claimMode:'automatic'};
+const dispatchOp={source:'workprotocol',externalId:'dispatch-1',title:'Tiny crypto job',description:'Summarize this public text',budgetUsd:1,currency:'USDC',claimMode:'automatic'};
 registry.observe(dispatchOp);
 registry.markDispatchPending(dispatchOp,{provider:'trigger',runId:'run-1',leaseId:'lease-new',retryAfter:new Date(Date.now()+60000).toISOString()});
 assert.equal(registry.blockReason(dispatchOp)?.status,'dispatch_pending','a durable-dispatched job must not be redispatched while its callback is pending');
@@ -149,8 +152,8 @@ try{
 {
   const runtimeSource=fs.readFileSync(path.join(process.cwd(),'src/autonomos/runtime.js'),'utf8');
   assert.match(runtimeSource,/return \['clawlancer','dealwork','workprotocol'\]\.includes\(source\)/,'auto-claim allowlist must contain only current full-lifecycle rails');
-  assert.doesNotMatch(runtimeSource,/clawjobs:\{discover:/i,'retired ClawJobs lifecycle must be absent');
-  assert.doesNotMatch(runtimeSource,/moltjobs:\{discover:/i,'retired MoltJobs lifecycle must be absent');
+  assert.doesNotMatch(runtimeSource,/oldsourcea:\{discover:/i,'retired OldSourceA lifecycle must be absent');
+  assert.doesNotMatch(runtimeSource,/oldsourceb:\{discover:/i,'retired OldSourceB lifecycle must be absent');
   assert.match(runtimeSource,/marketplace_lifecycle_not_auto_ready/,'incomplete marketplace lifecycle must be a visible candidacy blocker');
   assert.match(runtimeSource,/const fastSources=config\.cryptoOnlyEarnings\?\['clawlancer','workprotocol'\]/,'Crypto-only mode uses only current crypto-native rails');
   assert.match(runtimeSource,/source==='clawlancer'\)return\['direct_crypto'\]/,'Clawlancer payout must be represented as direct crypto, not a generic marketplace balance');

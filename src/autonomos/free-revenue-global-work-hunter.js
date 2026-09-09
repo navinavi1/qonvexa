@@ -12,7 +12,7 @@ const SOURCE_CONFIG = [
 ];
 
 // Zero-paid-dependency discovery. These sources are public/free-to-query and do not use
-// Tavily, Firecrawl or Browserbase. The parent class is retained for TaskForce lifecycle
+// paid search or cloud-browser providers. The parent class is retained for TaskForce lifecycle
 // logic only; its paid-search searchWorldwide() implementation is deliberately not called.
 export class FreeRevenueGlobalWorkHunter extends RevenueGlobalWorkHunter {
   async searchWorldwide(){

@@ -33,7 +33,7 @@ try{
   assert.equal(restarted.blockReason(ours)?.status,'system_blocked');
 
   // Fresh pre-claim capability/auth holds are reversible after a successful live preflight.
-  const stalePreflight={source:'t2000',externalId:'open-reconnected',title:'Research job',description:'Research current sources',budgetUsd:0.5,currency:'USDC',claimMode:'automatic_mcp'};
+  const stalePreflight={source:'workprotocol',externalId:'open-reconnected',title:'Research job',description:'Research current sources',budgetUsd:0.5,currency:'USDC',claimMode:'automatic_mcp'};
   restarted.observe(stalePreflight);
   restarted.markSystemBlocked(stalePreflight,{reasonCode:'preflight_or_internal_capability_hold',reason:'connector was temporarily unavailable',capabilityVersion:'same-v1'});
   const liveRelease=restarted.releaseSystemBlocked(stalePreflight,{capabilityVersion:'same-v1'});
@@ -41,7 +41,7 @@ try{
   assert.equal(restarted.get(stalePreflight)?.status,'new');
   assert.equal(restarted.get(stalePreflight)?.reasonCode,'live_preflight_revalidated');
 
-  const staleAuth={source:'t2000',externalId:'open-reauthed',title:'Research job 2',description:'Research current sources',budgetUsd:0.5,currency:'USDC',claimMode:'automatic_mcp'};
+  const staleAuth={source:'workprotocol',externalId:'open-reauthed',title:'Research job 2',description:'Research current sources',budgetUsd:0.5,currency:'USDC',claimMode:'automatic_mcp'};
   restarted.observe(staleAuth);
   restarted.markSystemBlocked(staleAuth,{reasonCode:'connector_credentials_or_auth_failure',reason:'oauth expired before claim',capabilityVersion:'same-v1'});
   assert.equal(restarted.releaseSystemBlocked(staleAuth,{capabilityVersion:'same-v1'}).released,true);
@@ -50,7 +50,7 @@ try{
   // Once a marketplace side effect happened, ownership is sticky forever. Even if the
   // later failure happens to be classified as a normally-reversible auth/preflight hold,
   // the normal discovery loop must not get another chance to claim it.
-  const owned={source:'t2000',externalId:'already-claimed',title:'Claimed task',description:'Do work',budgetUsd:0.5,currency:'USDC',claimMode:'automatic_mcp'};
+  const owned={source:'workprotocol',externalId:'already-claimed',title:'Claimed task',description:'Do work',budgetUsd:0.5,currency:'USDC',claimMode:'automatic_mcp'};
   restarted.observe(owned);
   restarted.setState(owned,'claimed',{jobId:'owned-market-job'});
   assert.equal(restarted.get(owned)?.everOwned,true);
@@ -60,7 +60,7 @@ try{
 
   // Durable dispatch itself is only a lease, not an irreversible marketplace side effect.
   // Its callback must be able to release the lease and continue toward the first claim.
-  const dispatched={source:'t2000',externalId:'dispatch-only',title:'Fresh task',description:'Do research',budgetUsd:0.5,currency:'USDC',claimMode:'automatic_mcp'};
+  const dispatched={source:'workprotocol',externalId:'dispatch-only',title:'Fresh task',description:'Do research',budgetUsd:0.5,currency:'USDC',claimMode:'automatic_mcp'};
   restarted.observe(dispatched);
   restarted.markDispatchPending(dispatched,{provider:'trigger',runId:'run-1',leaseId:'lease-1'});
   assert.equal(restarted.get(dispatched)?.everOwned,false);
@@ -87,16 +87,16 @@ try{
   const migrationStore=new AutonomOSStore(path.join(root,'migration'));
   const migrationRegistry=new JobRegistry({store:migrationStore});
   const migration=migrationRegistry.migrateLegacy({
-    handledKeys:['dealwork:done-1','superteam:ours-1'],
+    handledKeys:['dealwork:done-1','agenthansa:ours-1'],
     jobs:[
       {source:'dealwork',externalId:'done-1',title:'Done',status:'delivered',at:'2026-09-01T10:00:00Z'},
-      {source:'superteam',externalId:'ours-1',title:'Failed',status:'execution_failed',error:'llm_empty_response',at:'2026-09-01T11:00:00Z'}
+      {source:'agenthansa',externalId:'ours-1',title:'Failed',status:'execution_failed',error:'llm_empty_response',at:'2026-09-01T11:00:00Z'}
     ]
   });
   assert.equal(migration.tombstoned,0);assert.equal(migration.systemBlocked,1);
   assert.equal(migrationRegistry.blockReason({source:'dealwork',externalId:'done-1'})?.status,'delivered');
   assert.equal(migrationRegistry.get({source:'dealwork',externalId:'done-1'})?.everOwned,true);
-  assert.equal(migrationRegistry.blockReason({source:'superteam',externalId:'ours-1'})?.status,'system_blocked');
+  assert.equal(migrationRegistry.blockReason({source:'agenthansa',externalId:'ours-1'})?.status,'system_blocked');
 
   const repairStore=new AutonomOSStore(path.join(root,'repair-v76'));
   const repairRegistry=new JobRegistry({store:repairStore});
@@ -111,7 +111,7 @@ try{
   assert.equal(repairRegistry.get(unfunded)?.reasonCode,'buyer_funding_unavailable');
   assert.equal(repairRegistry.blockReason(unfunded)?.status,'policy_hold');
 
-  const paid={source:'t2000',externalId:'paid-1',title:'Settled proof',budgetUsd:0.5,currency:'USDC'};
+  const paid={source:'workprotocol',externalId:'paid-1',title:'Settled proof',budgetUsd:0.5,currency:'USDC'};
   repairRegistry.observe(paid);repairRegistry.markPermanent(paid,{owner:'market',reasonCode:'stale_failure',reason:'legacy stale classification'});
   repairRegistry.markPaid(paid,{transactionId:'tx-paid-1',amountUsd:0.5,currency:'USDC'});
   assert.equal(repairRegistry.get(paid)?.status,'paid');

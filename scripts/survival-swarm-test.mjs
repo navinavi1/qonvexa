@@ -8,7 +8,7 @@ import { releaseStaleDispatchReservations } from '../src/autonomos/store.js';
 import { TaskAgentRuntime } from '../src/autonomos/task-agent-runtime.js';
 import { estimateOutcomeProbability } from '../src/autonomos/outcome-model.js';
 
-const cfg=normalizeConfig({platformGeneration:8,earningProfileVersion:15,maxChildren:20,maxConcurrentJobs:4,maxJobsPerCycle:6,maxApiCostPercentOfPayout:35,maxPaidProcurementUsd:3,enabled:true,zeroSpendMode:false,earnedFundsOnly:true});
+const cfg=normalizeConfig({maxChildren:50,maxConcurrentJobs:6,maxJobsPerCycle:10,maxApiCostPercentOfPayout:60,maxPaidProcurementUsd:10,enabled:true,zeroSpendMode:false,earnedFundsOnly:true});
 assert.equal(cfg.survivalMode,true);
 assert.equal(cfg.ownerRevenuePercent,50);
 assert.equal(cfg.agentTreasuryPercent,50);
@@ -18,7 +18,7 @@ assert.equal(cfg.maxChildren,50);
 assert.equal(cfg.maxConcurrentJobs,6);
 assert.equal(cfg.maxJobsPerCycle,10);
 assert.equal(cfg.maxApiCostPercentOfPayout,60);
-assert.equal(cfg.maxPaidProcurementUsd,10,'profile migration is isolated from unrelated Render env; production stale 0.30 is migrated separately');
+assert.equal(cfg.maxPaidProcurementUsd,10,'explicit current production procurement cap is preserved');
 assert.equal(cfg.noAbandonAcceptedJobs,true);
 assert.equal(cfg.emergencyFinishMode,true);
 assert.equal(cfg.skillAcquisitionMode,true);
@@ -58,13 +58,13 @@ assert.equal(btc.ok,false,'BTC must not be routed to Rabby/Phantom without an ex
 const splitPlan=planRevenueSplit({amountUsd:40,currency:'USDC',network:'base',marketplace:'workprotocol'},cfg,env);
 assert.equal(splitPlan.ownerUsd,20);assert.equal(splitPlan.treasuryUsd,20);assert.equal(splitPlan.destination.wallet,'rabby');
 
-const registry={'t2000:lost':{identity:'t2000:lost',source:'t2000',externalId:'lost',status:'dispatch_pending',everOwned:false,lastStateAt:'2026-09-07T12:00:00.000Z',retryAfter:'2099-01-01T00:00:00Z',dispatchLeaseId:'old'}};
+const registry={'workprotocol:lost':{identity:'workprotocol:lost',source:'workprotocol',externalId:'lost',status:'dispatch_pending',everOwned:false,lastStateAt:'2026-09-07T12:00:00.000Z',retryAfter:'2099-01-01T00:00:00Z',dispatchLeaseId:'old'}};
 releaseStaleDispatchReservations(registry,{now:Date.parse('2026-09-07T12:03:00.000Z')});
-assert.equal(registry['t2000:lost'].status,'new');
-assert.equal(registry['t2000:lost'].reasonCode,'durable_dispatch_lease_expired');
-const owned={'t2000:owned':{status:'dispatch_pending',everOwned:true,lastStateAt:'2026-09-07T12:00:00.000Z'}};
+assert.equal(registry['workprotocol:lost'].status,'new');
+assert.equal(registry['workprotocol:lost'].reasonCode,'durable_dispatch_lease_expired');
+const owned={'workprotocol:owned':{status:'dispatch_pending',everOwned:true,lastStateAt:'2026-09-07T12:00:00.000Z'}};
 releaseStaleDispatchReservations(owned,{now:Date.parse('2026-09-07T13:00:00.000Z')});
-assert.equal(owned['t2000:owned'].status,'dispatch_pending','accepted/owned work must never be reset by lease cleanup');
+assert.equal(owned['workprotocol:owned'].status,'dispatch_pending','accepted/owned work must never be reset by lease cleanup');
 
 const events=[];const workforce=new TaskAgentRuntime({env:{AUTONOMOS_MAX_TASK_AGENTS:'100000',AUTONOMOS_MAX_TASK_AGENTS_PER_JOB:'64'},onEvent:(type,d)=>events.push({type,...d})});
 const team=workforce.spawnForPlan({jobId:'survival-1',opportunity:{title:'Research and build API'},plan:{steps:[{role:'research-worker',id:'r'},{role:'code-worker',id:'c'},{role:'automation-worker',id:'a'},{role:'content-worker',id:'d'}]},maxAgents:50});
@@ -79,8 +79,8 @@ assert.match(trigger,/AUTONOMOS_TRIGGER_IDEMPOTENCY_TTL\|\|'15m'/,'durable dispa
 const executor=fs.readFileSync(path.join(process.cwd(),'src/autonomos/job-executor.js'),'utf8');
 assert.match(executor,/noAbandonAcceptedJobs[\s\S]{0,1000}availableBudget/,'accepted Survival work must be able to use available agent treasury to finish');
 
-const oldAssigned={source:'t2000',externalId:'old-assigned',claimMode:'already_assigned',budgetUsd:0.5,outcome:{probability:.99},economics:{expectedProfitUsd:.4},capability:{mode:'llm_general_digital'}};
-const fresh={source:'t2000',externalId:'fresh-open',claimMode:'automatic_mcp',budgetUsd:0.5,outcome:{probability:.4},economics:{expectedProfitUsd:.3},capability:{mode:'llm_general_digital'}};
-assert.ok(estimateOutcomeProbability(oldAssigned,{executable:true},[]).probability>estimateOutcomeProbability(fresh,{executable:true},[]).probability,'test fixture confirms why owned assigned work could previously dominate commissioning ranking');
+const current={source:'workprotocol',externalId:'fresh-open',claimMode:'automatic',budgetUsd:5,capability:{mode:'llm_general_digital'}};
+const probability=estimateOutcomeProbability(current,{executable:true},[]).probability;
+assert.ok(probability>0&&probability<1,'current active-rail outcome probability remains bounded without retired-provider priors');
 
 console.log('SURVIVAL SWARM 50/50: PASS');

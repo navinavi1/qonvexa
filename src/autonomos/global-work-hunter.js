@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { tavilySearch } from './tavily-tool.js';
+import { freeWebSearch } from './free-web-tool.js';
 import { createLlmClient } from './llm.js';
 import { classifyOpportunity } from './capabilities.js';
 
@@ -41,8 +41,6 @@ const GLOBAL_QUERIES = [
   'remote freelance microtasks digital tasks paid USD EUR worldwide',
   'remote freelance digital jobs paid USDT USDC crypto worldwide',
   'AI agent work marketplace paid tasks USDC USDT API worldwide',
-  'site:laborx.com/jobs freelance writing translation design development marketing',
-  'site:laborx.com/jobs automation research data entry testing crypto freelance',
   'site:upwork.com/freelance-jobs remote translation writing data automation',
   'site:freelancer.com/jobs remote writing translation data software',
   'site:peopleperhour.com freelance remote writing design development marketing',
@@ -132,7 +130,7 @@ export class GlobalWorkHunter {
     let cursor=Number(this.state.queryCursor||0)%GLOBAL_QUERIES.length,newLeads=0;
     for(let i=0;i<perCycle;i++){
       const query=GLOBAL_QUERIES[(cursor+i)%GLOBAL_QUERIES.length];
-      const result=await tavilySearch(query,this.env);
+      const result=await freeWebSearch(query,this.env);
       if(!result.ok){this.event('global_search_failed',{query,error:result.error||''});continue;}
       for(const row of result.results||[]){
         const url=String(row?.url||'').trim();if(!/^https?:\/\//i.test(url))continue;
@@ -157,11 +155,11 @@ export class GlobalWorkHunter {
     const amount=Number(String(rawAmount).replace(/,/g,''))||0;
     let explicitCurrency=String(money?.[5]||'').toUpperCase();
     if(!explicitCurrency&&money?.[1])explicitCurrency='USD';if(!explicitCurrency&&money?.[2])explicitCurrency='EUR';if(!explicitCurrency&&money?.[3])explicitCurrency='GBP';
-    const cryptoMatch=text.match(CRYPTO);const laborx=/\blaborx\.com$/i.test(host);
-    const cryptoPayout=Boolean(cryptoMatch)||laborx;
-    const payoutCurrency=explicitCurrency||String(cryptoMatch?.[1]||'').toUpperCase()||(laborx?'CRYPTO':'UNKNOWN');
+    const cryptoMatch=text.match(CRYPTO);
+    const cryptoPayout=Boolean(cryptoMatch);
+    const payoutCurrency=explicitCurrency||String(cryptoMatch?.[1]||'').toUpperCase()||'UNKNOWN';
     const humanGate=HUMAN_GATE.test(text);const terminal=TERMINAL_TEXT.test(text);
-    return{id:`webwork_${hash(url)}`,source:host,title:String(row?.title||'Paid digital work').slice(0,220),url,category,amountUsd:amount,payoutCurrency,cryptoPayout,payoutVerified:cryptoPayout&&laborx,worldwide:/worldwide|remote|global/i.test(text)||laborx,humanGate,terminal,applyReady:false,applyMode:laborx?'browser_account_required':'connector_or_browser_required',blocker:humanGate?'protected_registration_or_identity_step_required':'account/application connector not yet authenticated',searchScore:Number(row?.score||0),discoveredBy:query,snippet:String(row?.snippet||'').slice(0,1500)};
+    return{id:`webwork_${hash(url)}`,source:host,title:String(row?.title||'Paid digital work').slice(0,220),url,category,amountUsd:amount,payoutCurrency,cryptoPayout,payoutVerified:false,worldwide:/worldwide|remote|global/i.test(text),humanGate,terminal,applyReady:false,applyMode:'direct_or_native_route_required',blocker:humanGate?'protected_registration_or_identity_step_required':'verified application route required',searchScore:Number(row?.score||0),discoveredBy:query,snippet:String(row?.snippet||'').slice(0,1500)};
   }
 
   async runTaskForce(){
@@ -218,7 +216,7 @@ export class GlobalWorkHunter {
     if(this.state.taskforce.events.length>300)this.state.taskforce.events.length=300;this.persist();if(ids.length)await fetch('https://task-force.app/api/agent/notifications/read',{method:'POST',headers:{...headers,'content-type':'application/json'},body:JSON.stringify({notificationIds:ids}),signal:AbortSignal.timeout(12000)}).catch(()=>{});
   }
 
-  capabilityContext(){return{llmEnabled:Boolean(this.llm?.enabled),hasGithubPrTool:Boolean(this.env.GITHUB_TOKEN),hasShellTool:Boolean(this.env.E2B_API_KEY),hasBrowserTool:Boolean(this.env.BROWSERBASE_API_KEY&&this.env.BROWSERBASE_PROJECT_ID),hasDeployTool:Boolean(this.env.AUTONOMOS_DEPLOY_WEBHOOK_URL),hasArtifactTool:Boolean((this.env.S3_ENDPOINT||this.env.R2_ENDPOINT)&&(this.env.S3_BUCKET||this.env.R2_BUCKET)),hasAppTool:Boolean(this.env.COMPOSIO_API_KEY),connectedApps:[],hasWebSearchTool:Boolean(this.env.FIRECRAWL_API_KEY||this.env.TAVILY_API_KEY),hasDesignMediaTool:Boolean(this.env.AUTONOMOS_DESIGN_MEDIA_ENABLED)};}
+  capabilityContext(){return{llmEnabled:Boolean(this.llm?.available??this.llm?.enabled),hasGithubPrTool:Boolean(this.env.GITHUB_TOKEN),hasShellTool:Boolean(this.env.E2B_API_KEY),hasBrowserTool:false,hasDeployTool:Boolean(this.env.AUTONOMOS_DEPLOY_WEBHOOK_URL),hasArtifactTool:Boolean((this.env.S3_ENDPOINT||this.env.R2_ENDPOINT)&&(this.env.S3_BUCKET||this.env.R2_BUCKET)),hasAppTool:Boolean(this.env.COMPOSIO_API_KEY),connectedApps:[],hasWebSearchTool:true,hasDesignMediaTool:false};}
   saveTaskForceCredential(credential){const secrets=this.read(this.secretFile,{});secrets.taskforce=credential;this.writeSecret(this.secretFile,secrets);}
   archiveLead(id,reason,row={}){if(!id)return;this.state.ignored[id]={id,reason,source:row.source||'',title:String(row.title||'').slice(0,180),url:String(row.url||''),archivedAt:new Date().toISOString()};delete this.state.leads[id];if(Object.keys(this.state.ignored).length>10000){const oldest=Object.entries(this.state.ignored).sort((a,b)=>Date.parse(a[1].archivedAt||0)-Date.parse(b[1].archivedAt||0));for(const [key] of oldest.slice(0,1000))delete this.state.ignored[key];}}
   pruneLeads(){const cutoff=Date.now()-14*24*60*60_000;for(const [key,row] of Object.entries(this.state.leads)){if(Date.parse(String(row.lastSeenAt||row.firstSeenAt||0))<cutoff)this.archiveLead(key,'stale_14_days',row);}const rows=Object.entries(this.state.leads).sort((a,b)=>Date.parse(b[1].firstSeenAt||0)-Date.parse(a[1].firstSeenAt||0));for(const [key,row] of rows.slice(5000))this.archiveLead(key,'feed_capacity_archive',row);}

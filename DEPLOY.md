@@ -60,3 +60,4 @@ connect `NOTIFICATION_WEBHOOK_URL` to Make, Zapier, n8n or another workflow so y
 9. Review legal/contact/delivery text live.
 10. Switch to Stripe live keys + live webhook.
 11. Repeat one small live end-to-end transaction if appropriate for your setup.
+

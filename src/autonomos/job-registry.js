@@ -170,7 +170,7 @@ export class JobRegistry {
       if(String(tomb?.failureOwner||'')!=='policy')continue;
       const reason=String(tomb?.reason||'');
       const keepPermanent=/demo_or_test_opportunity|status_not_open:(?:closed|expired|cancelled|canceled|removed|rejected|filled|completed)\b/i.test(reason);
-      const wasOverbroad=/budget_below_|_job_below_floor:|t2000_open_job_below_floor:|economics_blocked:|not_escrowed_and_escrow_required|status_not_open:/i.test(reason);
+      const wasOverbroad=/budget_below_|_job_below_floor:|economics_blocked:|not_escrowed_and_escrow_required|status_not_open:/i.test(reason);
       if(!wasOverbroad||keepPermanent)continue;
       delete this.tombstones[identity];
       const row=this.records[identity]||{identity,source:tomb.source||identity.split(':')[0],externalId:tomb.externalId||identity.slice(identity.indexOf(':')+1),firstSeenAt:now,lastSeenAt:now,seenCount:1};
@@ -294,7 +294,7 @@ export class JobRegistry {
 function suppressRediscoveredOwnedAssignedOpportunity(opportunity,row){
   if(!opportunity||typeof opportunity!=='object')return;
   const source=String(opportunity.source||'').toLowerCase();
-  const assigned=['t2000','dealwork'].includes(source)&&String(opportunity.claimMode||'')==='already_assigned';
+  const assigned=['dealwork'].includes(source)&&String(opportunity.claimMode||'')==='already_assigned';
   if(!assigned)return;
   const status=String(row?.status||'');
   const ownedOrBlocked=Boolean(row?.everOwned||row?.terminal)||OWNED_STATUSES.has(status)||SYSTEM_BLOCKED_STATUSES.has(status)||['retry','graveyard','archived','stale_check'].includes(status);
@@ -310,7 +310,6 @@ export function jobFingerprint(opportunity={}){const stable=[opportunity.source,
 export function classifyFailure(errorLike,{phase='execution'}={}){
   const text=String(errorLike?.message||errorLike||'').toLowerCase();
   const result=(owner,reasonCode,permanent=false)=>({owner,reasonCode,permanent});
-  if(/superteam_listing_not_agent_eligible|agents are not eligible for this listing/.test(text))return result('market','market_agent_not_eligible');
   if(/execution_checkpoint_uncertain|submission_uncertain|ack_missing/.test(text))return result('our_system','external_effect_requires_reconciliation');
   if(/emergency_stop|job_cancelled|aborterror|aborted/.test(text))return result('our_system','execution_stopped');
   if(/api[_ -]?key[_ -]?missing|unauthorized|forbidden|http_401|http_403|(?:token|credential|session).{0,25}expired/.test(text))return result('our_system','connector_credentials_or_auth_failure');

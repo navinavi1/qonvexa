@@ -7,11 +7,10 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { createAutonomOS } from './src/autonomos/runtime.js';
-import { verifyAuth0Bearer } from './src/autonomos/auth0.js';
 import {verifyMarketplaceWebhook} from './src/autonomos/marketplace-webhook.js';
-import { hydrateExternalSecrets } from './src/autonomos/secret-provider.js';
+import { hydrateWorkProtocolRegistration } from './src/autonomos/workprotocol-bootstrap.js';
 
-await hydrateExternalSecrets(process.env,{logger:console});
+await hydrateWorkProtocolRegistration(process.env,{logger:console});
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -150,17 +149,6 @@ app.post('/api/webhooks/taskbounty',rateLimit({windowMs:60000,max:120}),express.
 });
 app.use(express.json({ limit: '50kb' }));
 app.use(express.urlencoded({ extended: false, limit: '50kb' }));
-
-app.post('/api/internal/autonomos/temporal/execute', async (req,res)=>{
-  res.setHeader('Cache-Control','no-store');
-  const expected=String(process.env.AUTONOMOS_TEMPORAL_WORKER_TOKEN||'');
-  const supplied=String(req.get('authorization')||'').replace(/^Bearer\s+/i,'');
-  if(!expected||!supplied||expected.length!==supplied.length||!crypto.timingSafeEqual(Buffer.from(expected),Buffer.from(supplied))){
-    return res.status(401).json({ok:false,error:'unauthorized_temporal_worker'});
-  }
-  try{return res.json(await autonomos.processDurableOpportunity(req.body?.opportunity));}
-  catch(error){return res.status(500).json({ok:false,error:clean(error?.message||error,300)});}
-});
 
 function stableJsonForSignature(value){
   if(Array.isArray(value))return `[${value.map(stableJsonForSignature).join(',')}]`;
@@ -1078,20 +1066,7 @@ function getAdminSession(req) {
 
 function requireAdmin(req, res, next) {
   if (getAdminSession(req)) return next();
-  const bearer=String(req.get('authorization')||'').match(/^Bearer\s+(.+)$/i)?.[1]||'';
-  if(!bearer||!process.env.AUTH0_DOMAIN||!process.env.AUTH0_AUDIENCE)return res.status(401).json({ error: 'Unauthorized' });
-  verifyAuth0Bearer(bearer,process.env).then(result=>{
-    if(!result.ok)return res.status(401).json({error:'Unauthorized'});
-    const requiredPermission=String(process.env.AUTH0_ADMIN_PERMISSION||'').trim();
-    const requiredRole=String(process.env.AUTH0_ADMIN_ROLE||'').trim();
-    const scopes=new Set(String(result.scope||'').split(/\s+/).filter(Boolean));
-    const permissions=new Set(Array.isArray(result.permissions)?result.permissions.map(String):[]);
-    const hasPermission=!requiredPermission||permissions.has(requiredPermission)||scopes.has(requiredPermission);
-    const roles=new Set(Array.isArray(result.roles)?result.roles.map(String):[]);
-    const hasRole=!requiredRole||roles.has(requiredRole);
-    if(!hasPermission||!hasRole)return res.status(403).json({error:'Forbidden'});
-    req.auth0=result;next();
-  }).catch(()=>res.status(401).json({error:'Unauthorized'}));
+  return res.status(401).json({ error: 'Unauthorized' });
 }
 
 function safeCredentialEqual(a, b) {

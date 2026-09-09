@@ -11,7 +11,6 @@ import { SkillLibraryWorker } from '../src/autonomos/skill-library-worker.js';
 import { AdaptiveSkillAcquirer } from '../src/autonomos/adaptive-skill-acquirer.js';
 import { DailyMoneyReporter } from '../src/autonomos/daily-money-reporter.js';
 import { FiatCryptoRoutePlanner } from '../src/autonomos/fiat-crypto-route-planner.js';
-import { ReliableGlobalLeadActioner } from '../src/autonomos/reliable-global-lead-actioner.js';
 import { FreeRevenueLeadActioner } from '../src/autonomos/free-revenue-lead-actioner.js';
 import { GmailJobMonitor } from '../src/autonomos/gmail-job-monitor.js';
 import { migrateGlobalActionerState } from '../src/autonomos/global-actioner-migrations.js';
@@ -34,7 +33,6 @@ const skillLibrary=new SkillLibraryWorker({env:process.env,storageDir:process.en
 const skillAcquirer=enabled(process.env.AUTONOMOS_SKILL_ACQUISITION_MODE,'true')?new AdaptiveSkillAcquirer({env:process.env,storageDir:process.env.STORAGE_DIR,logger:console}):null;
 const moneyReporter=new DailyMoneyReporter({env:process.env,storageDir:process.env.STORAGE_DIR,logger:console});
 const fiatRoutePlanner=new FiatCryptoRoutePlanner({env:process.env,storageDir:process.env.STORAGE_DIR,logger:console});
-const browserActioner=enabled(process.env.AUTONOMOS_GLOBAL_ACTIONER_ENABLED,'false')?new ReliableGlobalLeadActioner({env:process.env,storageDir:process.env.STORAGE_DIR,logger:console}):null;
 const outboundEmailRequested=enabled(process.env.AUTONOMOS_BROWSERLESS_ACTIONER_ENABLED,'true');
 let browserlessActioner=null,gmailJobMonitor=null,emailGateTimer=null,emailGateRunning=false;
 const taskForceVerifier=new TaskForceVerifier({env:process.env,storageDir:process.env.STORAGE_DIR,logger:console});
@@ -50,10 +48,10 @@ async function ensureRevenueEmailLane(){
   }catch(error){console.error('[RevenueEmailGate] '+JSON.stringify({ready:false,error:String(error?.message||error).slice(0,180)}));return false;}finally{emailGateRunning=false;}
 }
 
-internetHunter?.start();globalHunter.start();agrentingWorker?.start();marketScout?.start();marketExpansion?.start();skillLibrary.start();skillAcquirer?.start();moneyReporter.start();fiatRoutePlanner.start();browserActioner?.start();
+internetHunter?.start();globalHunter.start();agrentingWorker?.start();marketScout?.start();marketExpansion?.start();skillLibrary.start();skillAcquirer?.start();moneyReporter.start();fiatRoutePlanner.start();
 if(outboundEmailRequested){await ensureRevenueEmailLane();if(!browserlessActioner){const every=Math.max(30_000,Number(process.env.AUTONOMOS_EMAIL_REAUTH_POLL_MS||60_000));emailGateTimer=setInterval(()=>ensureRevenueEmailLane().catch(()=>{}),every);emailGateTimer.unref?.();}}
 taskForceVerifier.start();if(enabled(process.env.AUTONOMOS_TASKFORCE_WORKER_ENABLED,'true'))taskForceWorker.start();globalFeedPublisher.start();
 
-const stop=()=>{internetHunter?.stop();globalHunter.stop();agrentingWorker?.stop();marketScout?.stop();marketExpansion?.stop();skillLibrary.stop();skillAcquirer?.stop();moneyReporter.stop();fiatRoutePlanner.stop();browserActioner?.stop();browserlessActioner?.stop();gmailJobMonitor?.stop();taskForceVerifier.stop();taskForceWorker.stop();globalFeedPublisher.stop();if(emailGateTimer)clearInterval(emailGateTimer);emailGateTimer=null;};
+const stop=()=>{internetHunter?.stop();globalHunter.stop();agrentingWorker?.stop();marketScout?.stop();marketExpansion?.stop();skillLibrary.stop();skillAcquirer?.stop();moneyReporter.stop();fiatRoutePlanner.stop();browserlessActioner?.stop();gmailJobMonitor?.stop();taskForceVerifier.stop();taskForceWorker.stop();globalFeedPublisher.stop();if(emailGateTimer)clearInterval(emailGateTimer);emailGateTimer=null;};
 process.on('SIGTERM',stop);process.on('SIGINT',stop);await import('../server.js');
 function enabled(value,fallback='false'){return !/^(0|false|no|off)$/i.test(String(value??fallback));}

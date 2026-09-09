@@ -1,5 +1,5 @@
 import { ExpandedFreeRevenueGlobalWorkHunter } from './expanded-free-revenue-global-work-hunter.js';
-import { tavilySearch } from './tavily-tool.js';
+import { freeWebSearch } from './free-web-tool.js';
 
 const EMPLOYMENT_SOURCES=new Set(['jobicy','remoteok','weworkremotely','remotive']);
 const CONTRACT_SIGNAL=/\b(freelance|freelancer|contractor|independent contractor|contract project|fixed[- ]price|project budget|project fee|bounty|reward|paid task|gig|rfp|request for proposals|consulting project|one[- ]off|milestone)\b/i;
@@ -52,7 +52,7 @@ export class ProfitFirstGlobalWorkHunter extends ExpandedFreeRevenueGlobalWorkHu
     const query=SEARCH_QUERIES[index];
     let newLeads=0,rows=0,error='';
     try{
-      const result=await tavilySearch(query,this.env);
+      const result=await freeWebSearch(query,this.env);
       if(!result.ok)throw new Error(String(result.error||'free_search_failed'));
       for(const row of (result.results||[]).slice(0,8)){
         const text=`${row.title||''} ${row.snippet||''}`;

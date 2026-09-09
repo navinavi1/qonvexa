@@ -10,11 +10,11 @@ export async function planJob(opportunity,{llm=null,env=process.env,abortSignal=
   const survival=`\nSURVIVAL SWARM RULES:\n- This is accepted paid work: plan for verified completion, not a partial answer.\n- If knowledge is missing, add a research-worker step to acquire it from public documentation/current sources.\n- If the task spans research + code/automation/content, use multiple specialist roles so helper agents can collaborate.\n- Prefer evidence-producing tools and explicit verification before QA.\n- Reuse existing connected tools and skills; never invent credentials, private keys, KYC, identity, or unverified paid services.\n- Do not plan an external purchase merely to finish the job unless the work order explicitly requires it and policy already authorizes it.\n- Minimize cost, but keep enough verification/repair work to actually finish the accepted job.`;
   const request=`Create a concise execution plan for this marketplace job. Return ONLY JSON with keys goal and steps; each step has id, role, action, doneWhen. Roles must be planner, research-worker, code-worker, automation-worker, content-worker, qa-evaluator, job-router. Choose real verification tools for claims/code and do not invent access you do not have.${survival}\nTITLE: ${opportunity.title}\nTASK: ${String(opportunity.description||'').slice(0,6000)}${memory}`;
   try{
-    const directOpenAIKey=String(env.OPENAI_API_KEY||(!env.LITELLM_BASE_URL&&!env.AUTONOMOS_LLM_BASE_URL?env.AUTONOMOS_LLM_API_KEY:'')||'');
-    if(env.AUTONOMOS_USE_OPENAI_AGENTS_SDK!=='false'&&directOpenAIKey&&!env.LITELLM_BASE_URL&&!env.AUTONOMOS_LLM_BASE_URL&&!llm.budgeted){
+    const directOpenAIKey=String(env.OPENAI_API_KEY||env.AUTONOMOS_LLM_API_KEY||'');
+    if(env.AUTONOMOS_USE_OPENAI_AGENTS_SDK!=='false'&&directOpenAIKey&&!env.AUTONOMOS_LLM_BASE_URL&&!llm.budgeted){
       try{
         const {Agent,run,setDefaultOpenAIKey}=await import('@openai/agents');setDefaultOpenAIKey(directOpenAIKey);
-        const route=resolveLlmEndpoint({...env,LITELLM_BASE_URL:'',AUTONOMOS_LLM_BASE_URL:''},{task:'planning'});
+        const route=resolveLlmEndpoint({...env,AUTONOMOS_LLM_BASE_URL:''},{task:'planning'});
         const agent=new Agent({name:'AutonomOS Survival Planner',instructions:'Plan legitimate accepted paid work to verified completion. Add specialist helpers when useful. Never invent capabilities, credentials, identity, or evidence. Output JSON only.',model:String(route.model||env.AUTONOMOS_LLM_MODEL||'gpt-5-mini')});
         const out=await run(agent,request,{maxTurns:3,signal:planningSignal});const parsed=parseJson(out.finalOutput);if(Array.isArray(parsed?.steps)&&parsed.steps.length)return{...parsed,source:'openai_agents_sdk'};
       }catch{}

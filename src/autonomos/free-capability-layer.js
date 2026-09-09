@@ -58,7 +58,7 @@ export function freeCapabilityContext(env=process.env){
     hasAppTool:hasComposio,
     connectedApps:[...FREE_CONNECTED_APPS],
     // E2B gives agents a real public-HTTP execution environment. Current-fact work must
-    // still cite actual URLs/API responses; this flag does not re-enable Tavily/Firecrawl.
+    // still cite actual URLs/API responses; this flag does not enable paid search.
     hasWebSearchTool:hasE2B||Boolean(env.GITHUB_TOKEN),
     hasDesignMediaTool:hasE2B
   };
@@ -89,5 +89,5 @@ export function freeSkillPlan(op={}){
 
 export function paidToolForbidden(name=''){
   const n=String(name).toLowerCase();
-  return /tavily|firecrawl|browserbase|premium|paid_search|paid_browser|purchase|subscription|connects|credits_purchase/.test(n);
+  return /premium|paid_search|paid_browser|purchase|subscription|connects|credits_purchase/.test(n);
 }

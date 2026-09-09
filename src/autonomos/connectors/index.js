@@ -15,12 +15,8 @@ const CONNECTOR_DEFS = Object.freeze([
   { id:'workprotocol', name:'WorkProtocol', kind:'jobs', description:'Verified work exchange with Base/USDC escrow: discover → claim → deliver → verified → payment released.', requiredEnv:['WORKPROTOCOL_API_KEY','WORKPROTOCOL_AGENT_ID'], optionalEnv:['WORKPROTOCOL_API_URL'] },
   // The remaining sources are intentionally feed-gated: we never invent undocumented
   // claim endpoints or pretend a human-first marketplace is autonomously claimable.
-  // P1 fix: Firecrawl/E2B previously had no entry here at all, so the dashboard could show
-  // a fully green AutonomOS while one or both tool keys were missing, unauthorized, or
   // dropped — job-executor would then silently run with fewer tools than the operator
   // assumed. These follow the same requiredEnv-presence pattern as the other simple
-  // connectors below; it confirms the key is SET, not that Firecrawl/E2B have accepted it
-  // or that the account has remaining quota (that requires a live, billable call this
   // audit intentionally avoids making just to render a status dot).
   { id:'e2b', name:'E2B (run_python tool)', kind:'tool', description:'Sandboxed Python execution tool available to worker agents during job execution.', requiredEnv:['E2B_API_KEY'] },
   { id:'github-pr', name:'GitHub (open_pull_request tool)', kind:'tool', description:'Lets worker agents propose code changes to a GitHub repo via Pull Request — never merges automatically. Needs a fine-grained PAT (Contents + Pull requests permission) for a dedicated bot account, not a personal account.', requiredEnv:['GITHUB_TOKEN'] }
@@ -117,21 +113,6 @@ export async function bootstrapMarketCredentials({ env=process.env, credentials=
         health.dealwork={ok:true,bootstrapped:true,recovered:Boolean(data.recovered),agentAccountId:value.agentAccountId};
       } else health.dealwork={ok:false,error:response.ok?'onboard_response_missing_api_key':`http_${response.status}`,detail:data?.error?.message||body?.error||''};
     } catch(error){ health.dealwork={ok:false,error:String(error?.message||error).slice(0,180)}; }
-  }
-  // is a single POST returning an apiKey + a claimCode. The claimCode is NOT a secret to
-  // protect like an API key — it's meant to be handed to the human owner so THEY can claim
-  // payouts (agents never hold funds here: "Agents do not complete OAuth, wallet signing,
-  // or KYC"). We store it so the dashboard can show the owner exactly which URL to visit.
-  if (!credentials?.superteam?.apiKey) {
-    try {
-      const response=await fetch('https://superteam.fun/api/agents',{method:'POST',headers:{'content-type':'application/json','accept':'application/json','user-agent':'AutonomOS/7.7'},body:JSON.stringify({name:String(env.AUTONOMOS_AGENT_NAME||'AutonomOS').slice(0,48)}),signal:AbortSignal.timeout(15000)});
-      const body=await safeJson(response);
-      if (response.ok && body?.apiKey) {
-        const value={ apiKey:String(body.apiKey), claimCode:String(body.claimCode||''), agentId:String(body.agentId||''), username:String(body.username||''), createdAt:new Date().toISOString(), source:'auto_registration' };
-        storeCredential('superteam',value); credentials.superteam=value;
-        health.superteam={ok:true,bootstrapped:true,claimCode:value.claimCode,username:value.username};
-      } else health.superteam={ok:false,error:response.ok?'registration_response_missing_api_key':`http_${response.status}`,detail:body?.error||body?.message||''};
-    } catch(error){ health.superteam={ok:false,error:String(error?.message||error).slice(0,180)}; }
   }
   return health;
 }
