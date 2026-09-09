@@ -1,7 +1,7 @@
 import 'dotenv/config';
 import '../src/autonomos/taskforce-live-recovery-patch.js';
 import '../src/autonomos/revenue-lifecycle-hardening-patch.js';
-import { cleanLegacyAutonomOSState } from '../src/autonomos/legacy-state-cleaner.js';
+import { cleanLegacyState } from '../src/autonomos/legacy-state-cleaner.js';
 import { LeanInternetHunter } from '../src/autonomos/lean-internet-hunter.js';
 import { ProfitFirstGlobalWorkHunter } from '../src/autonomos/profit-first-global-work-hunter.js';
 import { FreeAgrentingLiveWorker } from '../src/autonomos/free-agrenting-live-worker.js';
@@ -22,7 +22,7 @@ import { probeRuntimeEmailChannel } from '../src/autonomos/email-channel-probe.j
 
 if (/^(1|true|yes|on)$/i.test(String(process.env.AUTONOMOS_PRODUCTION_SWARM_MODE||''))) process.env.AUTONOMOS_RUNTIME_ENV_OVERRIDES='true';
 
-cleanLegacyAutonomOSState({env:process.env,storageDir:process.env.STORAGE_DIR,logger:console});
+cleanLegacyState({storageDir:process.env.STORAGE_DIR,logger:console});
 migrateGlobalActionerState({env:process.env,storageDir:process.env.STORAGE_DIR,logger:console});
 
 const internetHunter=enabled(process.env.AUTONOMOS_INTERNET_HUNTER_ENABLED,'true')?new LeanInternetHunter({env:process.env,storageDir:process.env.STORAGE_DIR,logger:console}):null;
