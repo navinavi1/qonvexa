@@ -25,3 +25,4 @@ if(a>=0){const b=s.indexOf("el('#autonomos-config-form')?.addEventListener",a);i
 write('public/admin.js',s);
 
 console.log('[cleanup-postfix] retired-source orphan statements, paid-search/browser paths, and legacy UI controls removed');
+// Re-run final verification after migrating resilient-search coverage to the free search path.
