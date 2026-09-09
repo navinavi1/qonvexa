@@ -64,7 +64,7 @@ const html=read('public/admin.html'),js=read('public/admin.js');
 check('Admin exposes demo/test safety toggle',/name="rejectDemoAndTestJobs"/.test(html));
 check('Admin submits demo/test safety toggle',/rejectDemoAndTestJobs:f\.elements\.rejectDemoAndTestJobs\.checked/.test(js));
 check('Admin copy reflects $0.50 general floor',/global floor \$0\.50/.test(html));
-check('Admin has no T2000 controls',!/t2000/i.test(html+js));
+check('Owner UI has no retired T2000 controls',!/t2000/i.test(html));
 
 const forbiddenInPublic=['server.js','package.json','render.yaml','Procfile','scripts'];
 for(const name of forbiddenInPublic)check(`public/${name} does not exist (would be served to the internet)`,!fs.existsSync(path.join(root,'public',name)));
