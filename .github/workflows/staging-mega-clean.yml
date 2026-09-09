@@ -22,8 +22,18 @@ jobs:
           node scripts/mega-clean-all-at-once.mjs
           node scripts/mega-clean-residue-pass.mjs
           node scripts/mega-clean-final-pass.mjs
+          node scripts/mega-clean-syntax-pass.mjs
       - name: Regenerate lockfile once
         run: npm install --package-lock-only --ignore-scripts
+      - name: Capture cleaned workspace
+        shell: bash
+        run: zip -qr /tmp/qonvexa-cleaned-workspace.zip . -x '.git/*' 'node_modules/*'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qonvexa-cleaned-workspace
+          path: /tmp/qonvexa-cleaned-workspace.zip
+          if-no-files-found: error
+          retention-days: 1
       - name: Install cleaned dependency graph
         run: npm ci --include=dev
       - name: Verify production startup graph before full suite
@@ -52,7 +62,7 @@ jobs:
       - name: Commit the single cleaned staging tree
         shell: bash
         run: |
-          rm -f scripts/mega-clean-all-at-once.mjs scripts/mega-clean-residue-pass.mjs scripts/mega-clean-final-pass.mjs .github/workflows/staging-mega-clean.yml
+          rm -f scripts/mega-clean-all-at-once.mjs scripts/mega-clean-residue-pass.mjs scripts/mega-clean-final-pass.mjs scripts/mega-clean-syntax-pass.mjs .github/workflows/staging-mega-clean.yml
           git config user.name 'AutonomOS Cleanup'
           git config user.email 'actions@users.noreply.github.com'
           git add -A
