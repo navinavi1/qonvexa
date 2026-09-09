@@ -25,22 +25,30 @@ jobs:
           node scripts/one-time-mega-cleanup.mjs
           node scripts/cleanup-postfix.mjs
           node scripts/cleanup-repair.mjs
-      - name: Check transformed runtime syntax
+      - name: Check transformed source syntax
         run: |
-          set +e
-          OUT=$(node --check src/autonomos/runtime.js 2>&1)
-          CODE=$?
-          echo "$OUT"
-          if [ "$CODE" -ne 0 ]; then
-            LINE=$(printf '%s\n' "$OUT" | sed -n 's#.*runtime.js:\([0-9][0-9]*\).*#\1#p' | head -n1)
-            if [ -n "$LINE" ]; then
-              START=$((LINE>25 ? LINE-25 : 1))
-              END=$((LINE+25))
-              echo "--- transformed runtime context $START..$END ---"
-              nl -ba src/autonomos/runtime.js | sed -n "${START},${END}p"
+          check_file() {
+            FILE="$1"
+            set +e
+            OUT=$(node --check "$FILE" 2>&1)
+            CODE=$?
+            set -e
+            echo "$OUT"
+            if [ "$CODE" -ne 0 ]; then
+              LINE=$(printf '%s\n' "$OUT" | sed -n 's#.*:\([0-9][0-9]*\).*#\1#p' | head -n1)
+              if [ -n "$LINE" ]; then
+                START=$((LINE>25 ? LINE-25 : 1))
+                END=$((LINE+25))
+                echo "--- transformed $FILE context $START..$END ---"
+                nl -ba "$FILE" | sed -n "${START},${END}p"
+              fi
+              exit "$CODE"
             fi
-            exit "$CODE"
-          fi
+          }
+          check_file src/autonomos/runtime.js
+          check_file src/autonomos/connectors/index.js
+          check_file src/autonomos/tools.js
+          check_file public/admin.js
       - name: Refresh lockfile
         run: npm install --package-lock-only --ignore-scripts
       - name: Install clean dependencies
