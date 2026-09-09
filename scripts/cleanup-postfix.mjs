@@ -10,3 +10,4 @@ s=s.replace(/^.*(?:Superteam min|t2000 min|t2000 priority|t2000 premium).*\n/gmi
 write('public/admin.html',s);
 
 console.log('[cleanup-postfix] remaining paid-search/browser and obsolete dashboard controls removed');
+// audit-alignment-2
