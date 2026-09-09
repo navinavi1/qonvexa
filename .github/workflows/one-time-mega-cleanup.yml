@@ -4,6 +4,7 @@ on:
     paths:
       - 'scripts/one-time-mega-cleanup.mjs'
       - 'scripts/cleanup-postfix.mjs'
+      - 'scripts/cleanup-repair.mjs'
       - '.github/workflows/one-time-mega-cleanup.yml'
 permissions:
   contents: write
@@ -23,6 +24,7 @@ jobs:
         run: |
           node scripts/one-time-mega-cleanup.mjs
           node scripts/cleanup-postfix.mjs
+          node scripts/cleanup-repair.mjs
       - name: Check transformed runtime syntax
         run: |
           set +e
@@ -47,7 +49,7 @@ jobs:
         run: npm run verify
       - name: Commit only if verification passed
         run: |
-          rm -f scripts/one-time-mega-cleanup.mjs scripts/cleanup-postfix.mjs .github/workflows/one-time-mega-cleanup.yml
+          rm -f scripts/one-time-mega-cleanup.mjs scripts/cleanup-postfix.mjs scripts/cleanup-repair.mjs .github/workflows/one-time-mega-cleanup.yml
           git config user.name 'AutonomOS Cleanup'
           git config user.email 'actions@users.noreply.github.com'
           git add -A
