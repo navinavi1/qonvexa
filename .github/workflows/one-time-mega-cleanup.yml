@@ -23,6 +23,9 @@ jobs:
         run: |
           node scripts/one-time-mega-cleanup.mjs
           node scripts/cleanup-postfix.mjs
+      - name: Check transformed runtime syntax
+        run: |
+          node --check src/autonomos/runtime.js || { nl -ba src/autonomos/runtime.js | sed -n '500,545p'; exit 1; }
       - name: Refresh lockfile
         run: npm install --package-lock-only --ignore-scripts
       - name: Install clean dependencies
