@@ -148,7 +148,6 @@ export async function executeCodingJob(
     };
     let cloneUrl = job.repoUrl;
     if (
-      job.source === "taskbounty" ||
       job.raw?.is_private ||
       job.raw?.repo_private
     ) {
@@ -458,3 +457,4 @@ export async function executeCodingJob(
     if (sandbox) await sandbox.kill().catch(() => {});
   }
 }
+

@@ -7,7 +7,6 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { createAutonomOS } from './src/autonomos/runtime.js';
-import {verifyMarketplaceWebhook} from './src/autonomos/marketplace-webhook.js';
 import { hydrateWorkProtocolRegistration } from './src/autonomos/workprotocol-bootstrap.js';
 
 await hydrateWorkProtocolRegistration(process.env,{logger:console});
@@ -142,11 +141,6 @@ app.use(helmet({
     }
   }
 }));
-app.post('/api/webhooks/taskbounty',rateLimit({windowMs:60000,max:120}),express.raw({type:'application/json',limit:'50kb'}),(req,res)=>{
-  const checked=verifyMarketplaceWebhook(req.body,req.get('X-TaskBounty-Signature'),process.env.TASKBOUNTY_WEBHOOK_SECRET);
-  if(!checked.ok)return res.status(checked.status).json({ok:false,error:checked.reason});
-  return res.json(autonomos.marketplaceWebhook('taskbounty',checked.eventId));
-});
 app.use(express.json({ limit: '50kb' }));
 app.use(express.urlencoded({ extended: false, limit: '50kb' }));
 
@@ -364,23 +358,6 @@ app.patch('/api/admin/autonomos/config', requireAdmin, requireSameSiteMutation, 
     res.status(400).json({ error:clean(error?.message || 'Invalid AutonomOS configuration.', 400) });
   }
 });
-
-for (const action of ['probe','canary','config','receipt']) {
-  app.post(`/api/admin/autonomos/marketplaces/:source/${action}`, requireAdmin, requireSameSiteMutation, async (req,res)=>{
-    const source=String(req.params.source||'');
-    if(!['agenthansa','taskbounty'].includes(source))return res.status(404).json({ok:false,error:'unknown_marketplace'});
-    try{
-      if(action==='probe')return res.json(await autonomos.marketplaceProbe(source));
-      if(action==='config')return res.json({ok:true,settings:autonomos.marketplaceConfig(source,req.body||{})});
-      if(action==='receipt')return res.json(await autonomos.marketplaceReceipt(source,String(req.body?.jobId||''),String(req.body?.receiptId||'')));
-      const check=autonomos.marketplaceCanaryCheck(source);if(!check.ok)return res.status(400).json(check);
-      // A canary can take minutes. The manager journals every phase and the dashboard polls.
-      const task=autonomos.marketplaceCanary(source);
-      task.catch(error=>logAdminEvent('marketplace_canary_error',{source,error:String(error.message).slice(0,160)}));
-      return res.status(202).json({ok:true,queued:true,source});
-    }catch(error){return res.status(400).json({ok:false,error:String(error.message).slice(0,200)});}
-  });
-}
 
 app.post('/api/admin/autonomos/start', requireAdmin, requireSameSiteMutation, (_req, res) => {
   const result = autonomos.start();
@@ -1434,3 +1411,4 @@ app.listen(port, '0.0.0.0', () => {
   console.log(`QONVEXA + AutonomOS running at ${siteUrl}`);
   console.log(`Storage: ${storageDir}`);
 });
+

@@ -217,7 +217,7 @@ function renderAutonomOS(){
     // discovery runs x402-bazaar first and it alone returns ~50 signals, those 30 slots
     // were always 100% x402-bazaar (an API-buying price feed, not a job we can earn from —
     // it's correctly excluded from auto-claim) which buried the real Clawlancer/Dealwork/
-    const rows=(a.runtime?.opportunityEconomics||[]).filter(x=>['clawlancer','dealwork','workprotocol','agenthansa','taskbounty'].includes(x.source));
+    const rows=(a.runtime?.opportunityEconomics||[]).filter(x=>['clawlancer','dealwork','workprotocol'].includes(x.source));
     candidacy.innerHTML=rows.slice(0,30).map(x=>{
       const isCandidate=x.candidacy?.isCandidate;
       const reasons=(x.candidacy?.reasons||[]);
@@ -390,3 +390,4 @@ function emptyRow(cols,text){return `<tr class="empty-row"><td colspan="${cols}"
 })();
 
 document.addEventListener('marketplace-updated',loadDashboard);
+

@@ -3,8 +3,6 @@ import { normalizeOpportunity } from '../job-normalizer.js';
 import { isEvmAddress as isEvmAddressLike } from '../treasury.js';
 
 const CONNECTOR_DEFS = Object.freeze([
-  {id:'agenthansa',name:'AgentHansa',kind:'competitive-jobs',description:'Shared rewards and quests.',requiredEnv:['AGENTHANSA_API_KEY']},
-  {id:'taskbounty',name:'TaskBounty',kind:'competitive-jobs',description:'Verified coding bounties.',requiredEnv:['TASKBOUNTY_API_KEY','TASKBOUNTY_AGENT_ID']},
   { id:'x402-bazaar', name:'x402 / Bazaar', kind:'seller+discovery', description:'Machine-payable API discovery and seller rail.', requiredEnv:[] },
   { id:'clawlancer', name:'Clawlancer', kind:'jobs', description:'Pre-funded Base/USDC bounties: discover → claim → deliver → paid.', requiredEnv:[], optionalEnv:['CLAWLANCER_API_KEY','CLAWLANCER_AGENT_ID'] },
   { id:'dealwork', name:'dealwork.ai', kind:'jobs', description:'Human+AI hybrid marketplace, USD via Stripe escrow, open-task instant claim.', requiredEnv:[], optionalEnv:['DEALWORK_API_KEY','DEALWORK_AGENT_ID'] },
@@ -698,3 +696,4 @@ export async function reconcileMarketplaceDelivery(opportunity,claim,{env=proces
   const result=await readDealworkContract(claim?.jobId,{headers:auth(key)});
   return result.ok&&dealworkDeliveryAlreadyAccepted(result.state)?{ok:true,jobId:claim.jobId,transactionId:claim.jobId,pendingReview:true,recoveredAfterUncertainWrite:true}: {ok:false,reason:'delivery_not_authoritatively_confirmed'};
 }
+

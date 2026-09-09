@@ -10,8 +10,6 @@ import {buildAcceptanceContract,validateAcceptanceContract} from '../src/autonom
 import {SandboxSession} from '../src/autonomos/sandbox-session.js';
 import {e2bRunShell,e2bRunPython,parseCodeRabbitReview} from '../src/autonomos/tools.js';
 import {reviewWithRepair} from '../src/autonomos/orchestration.js';
-import {AgentHansaConnector} from '../src/autonomos/agenthansa-connector.js';
-import {MarketplaceManager,marketplaceSettings} from '../src/autonomos/marketplace-manager.js';
 let passed=0;
 async function test(name,fn){await fn();console.log('PASS '+name);passed++;}
 const root=fs.mkdtempSync(path.join(os.tmpdir(),'earning-lifecycle-'));
@@ -61,32 +59,6 @@ await test('Shell and Python share files until execution cleanup; jobs stay isol
  assert.equal((await e2bRunPython('read',env,null,session)).stdout,'persisted');
  assert.equal(creates,1);assert.equal(kills,0);await session.close();assert.equal(kills,1);await assert.rejects(()=>session.get(),/closed/);
 });
-await test('AgentHansa reads the second page and independent community tasks',async()=>{
- const seen=[];
- const c=new AgentHansaConnector({env:{AGENTHANSA_API_KEY:'test'},fetchImpl:async url=>{
-   const u=new URL(url);seen.push(u.pathname+u.search);let data;
-   if(u.pathname.endsWith('/agents/work'))data={items:[{id:'offer'+u.searchParams.get('page'),type:'offer',title:'Offer'}],pagination:{has_more:u.searchParams.get('page')==='1'}};
-   else if(u.pathname.endsWith('/collective/bounties'))data={bounties:[{id:'task',title:'Community task',status:'in_progress',reward_pool:100}],pagination:{has_more:false}};
-   else if(u.pathname.endsWith('/alliance-war/quests'))data={quests:[],pagination:{has_more:false}};
-   else data={engagement:{items:[]},alliance_war_quests:{items:[]},reddit_karma_quest:{locked_reason:'unverified'},personal:{items:[]},side_quests:{items:[]}};
-   return new Response(JSON.stringify(data),{status:200});
- }});
- const r=await c.discover();assert.equal(r.ok,true);assert.equal(r.complete,true);assert.equal(r.rows.length,3);assert(seen.some(u=>u.includes('page=2')));assert(r.rows.some(j=>j.kind==='task'));
-});
-await test('A claimed job is not claimed again after execution failure and rescan',async()=>{
- const env={TASKBOUNTY_API_KEY:'test',TASKBOUNTY_AGENT_ID:'agent',TASKBOUNTY_PAYOUT_ADDRESS:'11111111111111111111111111111111'};
- const j={...job,source:'taskbounty',externalId:'tb',kind:'competitive',status:'open',netPayoutUsd:40,category:'coding'};
- let claims=0,executes=0;
- const connector={profile:async()=>({ok:true}),discover:async()=>({ok:true,rows:[j],complete:true}),inspect:async()=>({ok:true,authenticated:true,job:j}),claim:async()=>{claims++;return {ok:true};},status:async()=>({ok:false}),submit:async()=>({ok:true,id:'receipt'})};
- const m=new MarketplaceManager({store:new AutonomOSStore(path.join(root,'manager')),env,connectors:{taskbounty:connector,agenthansa:connector},classify:()=>({executable:true}),getConfig:()=>({enabled:true,allowExternalSpending:true}),execute:async()=>{executes++;throw new Error('qa_failed');}});
- m.update('taskbounty',{mode:'canary',walletConfirmed:true,competitiveAllowed:true});await m.probe('taskbounty');const row=m.pick('taskbounty');assert(row);
- await m.run(row,true);assert.equal(row.status,'system_blocked');await m.probe('taskbounty');await m.run(row,true);
- assert.equal(claims,1);assert.equal(executes,1);assert.equal(m.pick('taskbounty'),undefined);
- m.fail(row,'network timeout',{phase:'submit'});assert.equal(row.status,'retry');assert.equal(row.resumeStatus,'delivery_ready');assert(Date.parse(row.retryAfter)>Date.now());
-});
-await test('Default floor is $0.50 and explicit higher owner floor is preserved',()=>{
- assert.equal(marketplaceSettings('taskbounty',{},{}).minPayoutUsd,.5);assert.equal(marketplaceSettings('taskbounty',{}, {minPayoutUsd:12}).minPayoutUsd,12);
-});
 await test('CodeRabbit must finish a real review, including structured findings',()=>{
  assert.equal(parseCodeRabbitReview('').completed,false);
  assert.equal(parseCodeRabbitReview('{"type":"action_required","status":"awaiting_confirmation"}').completed,false);
@@ -100,21 +72,6 @@ await test('QA repairs once; an externally published result is never repeated',a
  assert.equal(r.qa.ok,true);assert.equal(repairs,1);assert.equal(r.deliverable.evidence.qaRepairAttempts,1);
  calls=0;await assert.rejects(()=>reviewWithRepair(job,{...result,evidence:{toolCalls:[{tool:'open_pull_request',ok:true}]}},{llm,execute:async()=>{throw new Error('must not run');}}),/qa_failed/);
 });
-await test('The earning profile migrates old defaults once and preserves owner changes',()=>{
- const s=new AutonomOSStore(path.join(root,'profile'));s.writeJson('marketplace-manager.json',{settings:{agenthansa:{minPayoutUsd:5,mode:'read_only'},taskbounty:{minPayoutUsd:12}},jobs:{},health:{},circuits:{},metrics:{},canaries:{}});
- const opts={store:s,env:{AGENTHANSA_API_KEY:'test'},getConfig:()=>({earningProfileVersion:15}),connectors:{}};
- const m=new MarketplaceManager(opts);assert.equal(m.settings('agenthansa').minPayoutUsd,.5);assert.equal(m.settings('agenthansa').mode,'canary');assert.equal(m.settings('agenthansa').walletConfirmed,false);assert.equal(m.settings('taskbounty').minPayoutUsd,12);
- m.update('agenthansa',{minPayoutUsd:8,mode:'read_only'});const again=new MarketplaceManager(opts);assert.equal(again.settings('agenthansa').minPayoutUsd,8);assert.equal(again.settings('agenthansa').mode,'read_only');assert.equal(again.data.settingsBeforeV15.agenthansa.minPayoutUsd,5);
-});
-await test('Automatic commissioning runs one job, waits for acceptance and respects Pause',async()=>{
- const env={TASKBOUNTY_API_KEY:'test',TASKBOUNTY_AGENT_ID:'agent',TASKBOUNTY_PAYOUT_ADDRESS:'11111111111111111111111111111111'};
- const j={...job,source:'taskbounty',externalId:'commission',kind:'competitive',status:'open',netPayoutUsd:40};
- const c={discover:async()=>({ok:true,rows:[j],complete:true}),inspect:async()=>({ok:true,job:j}),profile:async()=>({ok:true}),status:async()=>({ok:false})};
- let enabled=false,launches=0;
- const m=new MarketplaceManager({store:new AutonomOSStore(path.join(root,'commission')),env,connectors:{taskbounty:c,agenthansa:c},classify:()=>({executable:true}),getConfig:()=>({earningProfileVersion:15,enabled,allowExternalSpending:true})});
- m.update('taskbounty',{walletConfirmed:true});m.launch=row=>{launches++;m.set(row,'submitted');};
- await m.tick();assert.equal(launches,0);enabled=true;await m.tick();assert.equal(launches,1);assert.equal(m.data.canaries.taskbounty.status,'queued');
- await m.tick();assert.equal(launches,1);m.data.canaries.taskbounty.accepted=true;await m.tick();assert.equal(m.settings('taskbounty').mode,'live');
-});
 console.log(`EARNING LIFECYCLE: ${passed}/${passed} passed`);
 }finally{fs.rmSync(root,{recursive:true,force:true});}
+

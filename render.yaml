@@ -156,18 +156,7 @@ services:
         value: '["USDC","USDT"]'
 
       # New competitive marketplaces start in read-only mode in persisted settings.
-      - key: AGENTHANSA_API_KEY
-        sync: false
-      - key: AGENTHANSA_PAYOUT_ADDRESS
-        sync: false
-      - key: AGENTHANSA_PAYOUT_NETWORK
-        sync: false
-      - key: TASKBOUNTY_API_KEY
-        sync: false
-      - key: TASKBOUNTY_AGENT_ID
-        sync: false
-      - key: TASKBOUNTY_PAYOUT_ADDRESS
-        sync: false
       - key: AUTONOMOS_MARKETPLACE_MAX_CONCURRENT_JOBS
         value: "1"
+
 

@@ -247,9 +247,9 @@ await ok('P0: x402 only accepts USD-pegged stablecoins, never raw ETH/SOL/BTC at
   assert.ok(gateway.status().acceptedAssets.some(a => a.symbol === 'USDC'));
 });
 
-await ok('AgentHansa remains visible as an active configured-market surface', () => {
+await ok('Retired AgentHansa is absent from the active connector surface', () => {
   const statuses = connectorStatuses({}, { enabled:false, configured:false, mode:'disabled' }, {});
-  assert.equal(statuses.some(x=>x.id==='agenthansa'), true);
+  assert.equal(statuses.some(x=>x.id==='agenthansa'), false);
 });
 await ok('Dealwork bid-mode jobs are discoverable with the correct shape (claimMode:bid, not escrowed yet)', () => {
   const op = normalizeOpportunity('dealwork', { id:'d1', title:'Write a blog post about AI collaboration', description:'800+ words', category:'writing', budgetUsd:50 }, { escrowed:false, feePercent:10, currency:'USD', claimMode:'bid' });
@@ -294,3 +294,4 @@ await ok('P0: a genuinely unrecoverable LLM error now reports the real message i
 
 console.log(`AutonomOS audit PASS: ${checks.length}/${checks.length} checks`);
 for (const check of checks) console.log(`  ✓ ${check.name}`);
+

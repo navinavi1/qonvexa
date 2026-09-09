@@ -1,3 +1,4 @@
+import { isRetiredMarket } from './retired-markets.js';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -43,7 +44,7 @@ export class FreeMarketScout{
         const text=`${repo.name||''} ${repo.description||''} ${(repo.topics||[]).join(' ')}`;if(!SIGNAL_WORK.test(text)||!SIGNAL_AGENT.test(text))continue;
         const readme=await githubReadme(repo.full_name,this.env).catch(()=> '');const evidence=`${text}\n${readme}`.slice(0,30000);if(!SIGNAL_WORK.test(evidence)||!SIGNAL_PAYOUT.test(evidence))continue;
         const score=(SIGNAL_WORK.test(evidence)?2:0)+(SIGNAL_PAYOUT.test(evidence)?2:0)+(SIGNAL_AGENT.test(evidence)?2:0)+(SIGNAL_REGISTER.test(evidence)?2:0)+(repo.homepage?1:0)-(HUMAN_GATE.test(evidence)?3:0);
-        const id=String(repo.full_name||repo.html_url||'');if(!id)continue;seen++;if(score>=6)verified++;const prior=this.state.candidates[id]||{};
+        if(isRetiredMarket({homepage:repo.homepage,marketName:repo.name}))continue;const id=String(repo.full_name||repo.html_url||'');if(!id)continue;seen++;if(score>=6)verified++;const prior=this.state.candidates[id]||{};
         this.state.candidates[id]={...prior,id,name:String(repo.name||id),repoUrl:String(repo.html_url||''),homepage:String(repo.homepage||''),score,status:score>=6?'verified_candidate':'watch',workSignal:true,payoutSignal:SIGNAL_PAYOUT.test(evidence),registrationSignal:SIGNAL_REGISTER.test(evidence),humanGate:HUMAN_GATE.test(evidence),firstSeenAt:prior.firstSeenAt||new Date().toISOString(),lastSeenAt:new Date().toISOString(),evidence:String(evidence).replace(/\s+/g,' ').slice(0,1800),source:'github_discovery'};
       }
     }
@@ -59,3 +60,4 @@ async function githubReadme(fullName,env){if(!fullName)return'';const headers={a
 function parseQueries(value){try{const x=JSON.parse(String(value||''));return Array.isArray(x)?x.map(String).filter(Boolean):null;}catch{return null;}}
 function read(file,fallback){try{return JSON.parse(fs.readFileSync(file,'utf8'));}catch{return structuredClone(fallback);}}
 function safe(error){return String(error?.message||error||'').slice(0,240);}
+

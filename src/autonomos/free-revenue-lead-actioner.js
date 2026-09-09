@@ -1,3 +1,4 @@
+import { isRetiredMarket } from './retired-markets.js';
 import { RevenueLeadActioner } from './revenue-lead-actioner.js';
 import { freeCapabilityContext } from './free-capability-layer.js';
 
@@ -7,6 +8,7 @@ export class FreeRevenueLeadActioner extends RevenueLeadActioner{
   capabilityContext(){return freeCapabilityContext(this.env);}
 
   shouldBrowserlessInspect(lead){
+    if(isRetiredMarket(lead))return false;
     const action=this.state?.actions?.[lead?.id];
     const source=normalizedSource(lead);
     if(TRUSTED_PAID_TASK_SOURCES.has(source)&&String(action?.status||'')==='archived'&&/not a specific paid work listing|not_specific_work_listing/i.test(String(action?.reason||'')))return true;
@@ -18,6 +20,7 @@ export class FreeRevenueLeadActioner extends RevenueLeadActioner{
   }
 
   async inspectAndActBrowserless(lead){
+    if(isRetiredMarket(lead))return {ok:false,reason:'marketplace_retired'};
     const source=normalizedSource(lead);
     if(source==='issuehunt-funded'){
       const github=issueHuntToGithub(lead?.url);
@@ -30,6 +33,7 @@ export class FreeRevenueLeadActioner extends RevenueLeadActioner{
 
   async sendApplicationEmailOnce(args){
     const lead=args?.lead||{};
+    if(isRetiredMarket(lead))return {ok:false,reason:'marketplace_retired'};
     const source=normalizedSource(lead);
     if(TRUSTED_PAID_TASK_SOURCES.has(source)){
       const enriched={
@@ -52,3 +56,4 @@ function issueHuntToGithub(value){
     return m?`https://github.com/${m[1]}/${m[2]}/issues/${m[3]}`:'';
   }catch{return '';}
 }
+

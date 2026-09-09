@@ -1,3 +1,4 @@
+import { isRetiredMarket } from './retired-markets.js';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -21,7 +22,7 @@ export class MarketExpansionEngine{
   start(){if(this.timer)return;const every=Math.max(60*60_000,Number(this.env.AUTONOMOS_MARKET_EXPANSION_MS||2*60*60_000));setTimeout(()=>this.tick().catch(e=>this.event('market_expansion_error',{error:safe(e)})),90_000).unref?.();this.timer=setInterval(()=>this.tick().catch(e=>this.event('market_expansion_error',{error:safe(e)})),every);this.timer.unref?.();this.event('market_expansion_started',{intervalMs:every,autoRegister:enabled(this.env.AUTONOMOS_AUTO_REGISTER_MARKETS,'true'),paidSearch:false});}
   stop(){if(this.timer)clearInterval(this.timer);this.timer=null;}
   async tick(){if(this.running||!enabled(this.env.AUTONOMOS_MARKET_EXPANSION_ENABLED,'true'))return;this.running=true;try{
-    const scout=readJson(this.scoutFile,{candidates:{}});const candidates=Object.values(scout.candidates||{}).sort((a,b)=>Number(b.score||0)-Number(a.score||0));
+    const scout=readJson(this.scoutFile,{candidates:{}});const candidates=Object.values(scout.candidates||{}).filter(candidate=>!isRetiredMarket(candidate)).sort((a,b)=>Number(b.score||0)-Number(a.score||0));
     const credentials=readJson(this.credentialsFile,{});let checked=0,integrated=0,registered=0,jobs=0;const feed=[];
     for(const candidate of candidates.slice(0,Math.max(5,Math.min(40,Number(this.env.AUTONOMOS_MARKETS_PER_EXPANSION_CYCLE||20))))){
       if(Number(candidate.score||0)<5)continue;
@@ -107,3 +108,4 @@ function writeJson(file,value){const tmp=`${file}.${process.pid}.${Date.now()}.t
 function writeSecretJson(file,value){const tmp=`${file}.${process.pid}.${Date.now()}.tmp`;fs.writeFileSync(tmp,JSON.stringify(value,null,2),{mode:0o600});fs.renameSync(tmp,file);}
 function enabled(v,f='false'){return !/^(0|false|no|off)$/i.test(String(v??f));}
 function safe(error){return String(error?.message||error||'').slice(0,240);}
+

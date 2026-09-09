@@ -1,3 +1,4 @@
+import { isRetiredMarket } from './retired-markets.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -146,6 +147,7 @@ export class GlobalWorkHunter {
   }
 
   classifyWebLead(row,query){
+    if(isRetiredMarket(row))return null;
     const url=String(row?.url||'').trim();if(!/^https?:\/\//i.test(url))return null;
     let host='';try{host=new URL(url).hostname.toLowerCase().replace(/^www\./,'');}catch{return null;}
     const text=`${row?.title||''} ${row?.snippet||''}`;if(UNSAFE.test(text)||!WORK_SIGNAL.test(text))return null;
@@ -234,3 +236,4 @@ function extractTaskId(link){const match=String(link||'').match(/\/tasks\/([^/?#
 function safeError(error){return String(error?.message||error||'').slice(0,240);}
 function publicError(value){if(typeof value==='string')return value.slice(0,240);return String(value?.error?.message||value?.error||value?.message||'').slice(0,240);}
 async function safeJson(response){const raw=await response.text().catch(()=>'');try{return JSON.parse(raw);}catch{return{message:raw.slice(0,500)}}}
+
