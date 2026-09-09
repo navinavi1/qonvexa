@@ -21,6 +21,7 @@ jobs:
         run: |
           node scripts/mega-clean-all-at-once.mjs
           node scripts/mega-clean-residue-pass.mjs
+          node scripts/mega-clean-final-pass.mjs
       - name: Regenerate lockfile once
         run: npm install --package-lock-only --ignore-scripts
       - name: Install cleaned dependency graph
@@ -51,7 +52,7 @@ jobs:
       - name: Commit the single cleaned staging tree
         shell: bash
         run: |
-          rm -f scripts/mega-clean-all-at-once.mjs scripts/mega-clean-residue-pass.mjs .github/workflows/staging-mega-clean.yml
+          rm -f scripts/mega-clean-all-at-once.mjs scripts/mega-clean-residue-pass.mjs scripts/mega-clean-final-pass.mjs .github/workflows/staging-mega-clean.yml
           git config user.name 'AutonomOS Cleanup'
           git config user.email 'actions@users.noreply.github.com'
           git add -A
