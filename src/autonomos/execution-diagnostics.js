@@ -29,8 +29,10 @@ function buildRevenueSourceDiagnostics(state={},marketRows=[],registryRows=[]){
     if(!bySource.has(id))bySource.set(id,{source:id,discovered:0,sampled:0,executable:0,candidates:0,maxPayoutUsd:0,blockers:{},registryBlockers:{}});
     return bySource.get(id);
   };
-  const legacyIds=['clawlancer','t2000','dealwork','workprotocol','superteam'];
-  for(const source of legacyIds){
+  // Only current full-lifecycle/core earning rails are pre-seeded here. Other active
+  // sources still appear automatically when they have live market rows or economics.
+  const coreIds=['clawlancer','dealwork','workprotocol'];
+  for(const source of coreIds){
     const row=get(source);const health=state.connectorHealth?.[source]||{};const lifecycle=state.marketplaceLifecycle?.[source]||{};
     row.discovered=Math.max(row.discovered,Number(health.count||health.openCount||health.signals||0));
     row.healthy=health.ok===true;
