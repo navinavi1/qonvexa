@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { isRetiredMarket } from './retired-markets.js';
 
 const TERMINAL_STATUSES=new Set(['graveyard','delivered','paid','settled','completed','expired','cancelled','rejected']);
 const OWNED_STATUSES=new Set(['dispatch_pending','bid_submitted','claimed','executing','qa','delivered','paid','settled','completed']);
@@ -144,29 +145,16 @@ export class JobRegistry {
   }
 
   repairV76LegacyPollution(){
-    let removedSignals=0,rescuedDealwork=0;const now=new Date().toISOString();
-    for(const identity of Object.keys(this.records))if(identity.startsWith('x402-bazaar:')){delete this.records[identity];removedSignals++;}
-    for(const identity of Object.keys(this.tombstones))if(identity.startsWith('x402-bazaar:')){delete this.tombstones[identity];removedSignals++;}
-    for(const [identity,tomb] of Object.entries({...this.tombstones})){
-      if(!identity.startsWith('dealwork:'))continue;
-      const text=`${tomb?.reasonCode||''} ${tomb?.reason||''}`;
-      const buyerFunding=/insufficient[_ -]?balance|poster(?:'s)? wallet.*insufficient|available\s*0(?:\.0+)?|http_402|http_422/i.test(text);
-      const badBudget=/budgetmax|fixedprice|maxconcurrent|under-funded|underfunded/i.test(text);
-      if(!buyerFunding&&!badBudget)continue;
-      delete this.tombstones[identity];
-      const old=this.records[identity]||{identity,source:'dealwork',externalId:identity.slice(identity.indexOf(':')+1),firstSeenAt:now,lastSeenAt:now,seenCount:1};
-      const reasonCode=buyerFunding?'buyer_funding_unavailable':'market_job_configuration_invalid';
-      const waitMs=buyerFunding?6*60*60_000:24*60*60_000;
-      this.records[identity]={...old,status:'policy_hold',terminal:false,failureOwner:'market',reasonCode,reason:`Rescued by v7.6 market-state migration: ${String(tomb?.reason||reasonCode)}`.slice(0,500),closedAt:'',retryAfter:new Date(Date.now()+waitMs).toISOString(),lastStateAt:now};
-      rescuedDealwork++;
-    }
-    if(removedSignals||rescuedDealwork){this.store.writeJson('job-tombstones.json',this.tombstones);this.persist();}
-    return{ok:true,removedSignals,rescuedDealwork};
+    let removedSignals=0;
+    for(const rows of [this.records,this.tombstones])for(const id of Object.keys(rows))if(id.startsWith('x402-bazaar:')){delete rows[id];removedSignals++;}
+    if(removedSignals){this.store.writeJson('job-tombstones.json',this.tombstones);this.persist();}
+    return {ok:true,removedSignals};
   }
 
   rescueOverbroadPolicyTombstones(){
     let rescued=0;const now=new Date().toISOString();
     for(const [identity,tomb] of Object.entries(this.tombstones)){
+      if(isRetiredMarket(tomb.source||identity.split(':')[0]))continue;
       if(String(tomb?.failureOwner||'')!=='policy')continue;
       const reason=String(tomb?.reason||'');
       const keepPermanent=/demo_or_test_opportunity|status_not_open:(?:closed|expired|cancelled|canceled|removed|rejected|filled|completed)\b/i.test(reason);
@@ -184,6 +172,7 @@ export class JobRegistry {
   repairMisclassifiedFailures(){
     let repaired=0;
     for(const [identity,tomb] of Object.entries({...this.tombstones})){
+      if(isRetiredMarket(tomb.source||identity.split(':')[0]))continue;
       const legacy=String(tomb.reasonCode||'').match(/^legacy_(delivered|paid|settled|completed|bid_submitted|claimed)_job$/);
       const internal=/(?:tool_.*not_found|sandbox.*(?:expired|closed)|token.*expired|connection closed|job_cancelled|emergency_stop)/i.test(`${tomb.reasonCode} ${tomb.reason}`);
       if(!legacy&&!internal)continue;
@@ -263,7 +252,7 @@ export class JobRegistry {
     for(const key of handledKeys||[]){
       const identity=String(key||'');if(!identity.includes(':')||this.tombstones[identity])continue;
       const latest=(jobs||[]).filter(j=>`${j.source}:${j.externalId}`===identity).sort((a,b)=>Date.parse(b.at||b.startedAt||0)-Date.parse(a.at||a.startedAt||0))[0];
-      if(!latest)continue;
+      if(!latest||isRetiredMarket(latest)&&!['paid','settled','completed','delivered'].includes(latest.status))continue;
       const latestStatus=String(latest.status||'').toLowerCase();
       if(['delivered','paid','settled','completed','bid_submitted','claimed'].includes(latestStatus)){
         this.setState(legacyOpportunity(latest),latestStatus,{reasonCode:`legacy_${latestStatus}_job`,reason:'Preserved legacy ownership; never claim again.'});continue;
@@ -294,7 +283,7 @@ export class JobRegistry {
 function suppressRediscoveredOwnedAssignedOpportunity(opportunity,row){
   if(!opportunity||typeof opportunity!=='object')return;
   const source=String(opportunity.source||'').toLowerCase();
-  const assigned=['dealwork'].includes(source)&&String(opportunity.claimMode||'')==='already_assigned';
+  const assigned=!isRetiredMarket(source)&&String(opportunity.claimMode||'')==='already_assigned';
   if(!assigned)return;
   const status=String(row?.status||'');
   const ownedOrBlocked=Boolean(row?.everOwned||row?.terminal)||OWNED_STATUSES.has(status)||SYSTEM_BLOCKED_STATUSES.has(status)||['retry','graveyard','archived','stale_check'].includes(status);

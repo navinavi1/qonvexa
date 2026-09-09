@@ -1,15 +1,16 @@
+import { isRetiredMarket } from './retired-markets.js';
 import { gmailMessageIdentity } from './gmail-mailbox.js';
 import { GlobalLeadActioner } from './global-lead-actioner.js';
 import { classifyOpportunity } from './capabilities.js';
 import { composioSearch, composioExecute } from './composio-tool.js';
 
 const TERMINAL_STATUSES=new Set([
-  'archived','human_gate','ai_prohibited','physical_or_employment','paid_registration_required',
+  'expired','rejected','github_closed','github_rejected','retired','archived','human_gate','ai_prohibited','physical_or_employment','paid_registration_required',
   'capability_blocked','needs_capability','applied','applied_email','application_uncertain',
   'email_send_in_progress','accepted','executing','accepted_repair_exhausted','submitted','paid',
   'native_api_route'
 ]);
-const NATIVE_HOSTS=/(^|\.)(task-force\.app|agentlancer\.io|workprotocol\.ai|dealwork\.ai)$/i;
+const NATIVE_HOSTS=/(^|\.)(task-force\.app|agentlancer\.io)$/i;
 const APPLY_CONTEXT=/\b(apply|application|proposal|freelanc(?:e|er)|project|job|hiring|hire|contract|contractor|send\s+(?:your\s+)?(?:cv|resume|portfolio)|submit\s+(?:your\s+)?(?:cv|resume|portfolio))\b/i;
 const BAD_EMAIL_LOCAL=/^(?:no-?reply(?:[+.-].*)?|donotreply|notifications?|support|help|helpdesk|candidatehelpdesk|reasonable-accommodations|.*helpdesk.*|.*accommodations.*|privacy|security|abuse|billing|invoice|legal|dpo|press|media|webmaster)$/i;
 const EMAIL_RE=/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/ig;
@@ -40,6 +41,7 @@ export class BrowserlessLeadActioner extends GlobalLeadActioner{
   }
 
   shouldBrowserlessInspect(lead){
+    if(isRetiredMarket(lead))return false;
     if(!lead?.id||!/^https?:\/\//i.test(String(lead.url||'')))return false;
     const host=hostname(lead.url);if(!host||NATIVE_HOSTS.test(host))return false;
     const action=this.state.actions?.[lead.id];

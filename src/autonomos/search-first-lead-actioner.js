@@ -1,3 +1,4 @@
+import { isRetiredMarket } from './retired-markets.js';
 import { githubApplication, parseGithubIssue, issueApi } from './github-application.js';
 import { githubAvailable, githubRequest } from './github-transport.js';
 import path from 'node:path';
@@ -16,6 +17,7 @@ const SEARCH_STOPWORDS=new Set(['the','and','for','with','from','this','that','y
 
 export class SearchFirstLeadActioner extends BrowserlessLeadActioner{
   shouldBrowserlessInspect(lead){
+    if(isRetiredMarket(lead))return false;
     const action=this.state?.actions?.[lead?.id];
     if(['needs_capability','capability_blocked'].includes(String(action?.status||''))){
       if(classifyLeadCapability(lead,this.capabilityContext()).executable)return true;

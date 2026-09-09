@@ -48,7 +48,7 @@ export async function hardenedGmailTick(){
     const entries=Object.entries(this.actioner.state?.actions||{}).filter(([,a])=>{
       const s=String(a?.status||'');
       if(a.route==='github_issue_comment')return false;
-      if(a.acceptedAt&&['qa','repairing','delivery_ready'].includes(s))return ageMs(a.updatedAt)>15*60_000;
+      if(a.acceptedAt&&['planning','qa','repairing','delivery_ready'].includes(s))return ageMs(a.updatedAt)>15*60_000;
       if(EMAIL_MONITOR.has(s)||EMAIL_ACCEPTED_RETRY.has(s)||s==='submission_uncertain')return due(a?.nextCheckAt);
       if(s==='executing_email'||s==='delivery_email_in_progress')return ageMs(a?.updatedAt)>15*60_000;
       return false;
@@ -59,7 +59,7 @@ export async function hardenedGmailTick(){
         if(EMAIL_ACCEPTED_RETRY.has(status)){
           await this.executeAndDeliver(id,action);continue;
         }
-        if(status==='executing_email'||action.acceptedAt&&['qa','repairing','delivery_ready'].includes(status)){
+        if(status==='executing_email'||action.acceptedAt&&['planning','qa','repairing','delivery_ready'].includes(status)){
           this.actioner.setAction(id,{status:'accepted_email',recoveredFrom:'stale_executing_email',nextCheckAt:''});
           this.log('email_execution_recovered_after_restart',{id});
           await this.executeAndDeliver(id,this.actioner.state.actions[id]);continue;

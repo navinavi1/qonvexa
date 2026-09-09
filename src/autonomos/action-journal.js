@@ -12,5 +12,16 @@ export class ActionJournal {
  finish(id,status,proof={}){if(!['confirmed','uncertain','definite_failure'].includes(status))throw Error('invalid_action_status');if(status==='confirmed'&&!proof.externalId&&!proof.url)throw Error('external_proof_required');const rows=this.read();if(!rows[id])throw Error('missing_action_intent');rows[id]={...rows[id],status,proof,updatedAt:new Date().toISOString()};this.write(rows);return rows[id];}
 }
 export function classifyFailure(status,error=''){
- const n=Number(status);if(n===401||n===403)return{type:'AUTH',retryable:false};if(n===402)return{type:'PAID_REQUIREMENT',retryable:false};if(n===404||n===410)return{type:'JOB_EXPIRED',retryable:false};if(n===422)return{type:'SCHEMA_DRIFT',retryable:false};if(n===429)return{type:'RATE_LIMIT',retryable:true};if(n>=500||n===408||!n)return{type:'TEMPORARY',retryable:true};return{type:'PERMANENT',retryable:false};
+ const n=Number(status),text=String(error||'');
+ if(/captcha|\b2fa\b|\bkyc\b|human.verification/i.test(text))return {type:'HUMAN_GATE',retryable:false};
+ if(n===429||n===403&&/rate.limit|abuse|secondary/i.test(text))return {type:'RATE_LIMIT',retryable:true};
+ if(n===401||n===403||/authenticated.account.required|api.key.missing|credentials?.(?:required|missing)|unauthorized/i.test(text))return{type:'AUTH',retryable:false};
+ if(n===402||/subscription.required|payment.required/i.test(text))return{type:'PAID_REQUIREMENT',retryable:false};
+ if(n===404||n===410)return{type:'JOB_EXPIRED',retryable:false};
+ if(n===422||/schema|required.field|unknown.field/i.test(text))return{type:'SCHEMA_DRIFT',retryable:false};
+ if(/tool.missing|command.not.found/i.test(text))return{type:'TOOL_MISSING',retryable:true};
+ if(/capability/i.test(text))return{type:'CAPABILITY_MISSING',retryable:true};
+ if(n===502||n===503||/ENOTFOUND|ECONNREFUSED/i.test(text))return{type:'MARKET_DOWN',retryable:true};
+ if(n>=500||n===408||!n)return{type:'TEMPORARY',retryable:true};
+ return{type:'PERMANENT',retryable:false};
 }

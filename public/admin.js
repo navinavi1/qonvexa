@@ -184,7 +184,7 @@ function renderAutonomOS(){
   const taskAgents=el('#autonomos-task-agents');
   if(taskAgents){
     const liveJobIds=new Set((a.runtime?.activeJobs||[]).map(x=>String(x.id)));
-    const rows=(a.taskAgents||[]).filter(x=>x.status==='active'&&liveJobIds.has(String(x.jobId))).slice(0,16);
+    const rows=[...(a.taskAgents||[]).filter(x=>x.status==='active'&&liveJobIds.has(String(x.jobId))),...(a.business?.workforce?.squads||[]).filter(x=>x.status==='active')].slice(0,24);
     taskAgents.innerHTML=rows.map(x=>`<article class="autonomos-event"><div class="event-row"><b>${esc(pretty(x.role))}</b><span class="status s-in_progress">${esc(pretty(x.phase||'active'))}</span></div><p>${esc(x.jobId)} · ${esc(x.specialization||'task execution')} · ${Number(x.stepIds?.length||1)} planned step${Number(x.stepIds?.length||1)===1?'':'s'}</p></article>`).join('')||emptyCard('No workers are running. Specialists appear only after a real job is accepted and disappear when it closes.');
   }
 

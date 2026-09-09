@@ -7,9 +7,11 @@ import { computeEarnedSpendBudgetUsd } from './profit-engine.js';
 // Reservations are persisted before calls. They are estimates, not provider invoices.
 export function createJobBudget(
   limitUsd,
-  { onCost = () => {}, env = process.env } = {},
+  { onCost = () => {}, env = process.env, jobId = '' } = {},
 ) {
-  let spent = 0;
+  const storeRoot=path.join(env.STORAGE_DIR||'data','autonomos');
+  const recorded=()=>jobId?new AutonomOSStore(storeRoot).readNdjson('ledger.ndjson',-1).filter(r=>r.type==='cost'&&r.jobId===jobId).reduce((n,r)=>n+Number(r.amountUsd||0),0):0;
+  let spent = recorded();
   return {
     get remaining() {
       return Math.max(0, Number(limitUsd) - spent);
@@ -23,6 +25,7 @@ export function createJobBudget(
         throw new Error("job_spend_limit");
       const root=path.join(env.STORAGE_DIR||'data','autonomos');
       const apply=()=>{
+        spent=Math.max(spent,recorded());if(value>this.remaining+1e-9)throw new Error('job_spend_limit');
         if(fs.existsSync(path.join(root,'config.json'))){
           const store=new AutonomOSStore(root),config=normalizeConfig(store.readJson('config.json',{}));
           if(!config.enabled||config.killSwitch)throw new Error('job_cancelled_by_emergency_stop');

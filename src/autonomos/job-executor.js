@@ -20,6 +20,7 @@ const VERIFY_TOOLS_BY_SKILL = Object.freeze({
 const TOOL_RETRY_SAFE = new Set(['web_search','web_scrape','app_tool_search']);
 const TOOL_RETRY_DELAY_MS = 600;
 const executionControllers=new Set();
+export function registerAcceptedExecution(){const controller=new AbortController();executionControllers.add(controller);return {controller,release:()=>executionControllers.delete(controller)};}
 export function stopAcceptedExecutions(){for(const controller of executionControllers)controller.abort(new Error('runtime_stopping'));}
 
 

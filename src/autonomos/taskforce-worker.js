@@ -65,7 +65,7 @@ export class TaskForceWorker {
     const treasuryUsd=computeEarnedSpendBudgetUsd(ledger,config);
     if(treasuryUsd<=0.000001){this.state.tasks[taskId]={...this.state.tasks[taskId],status:'waiting_agent_treasury',updatedAt:new Date().toISOString()};this.persist();return;}
     const spendLimit=Math.min(treasuryUsd,Number(opportunity.budgetUsd||0)*.35,Number(config.maxPaidProcurementUsd||3));if(!(spendLimit>0))return;
-    const budget=createJobBudget(spendLimit,{env:this.env,onCost:amount=>this.recordCost(taskId,amount)});
+    const budget=createJobBudget(spendLimit,{env:this.env,jobId:'taskforce_'+taskId,onCost:amount=>this.recordCost(taskId,amount)});
     const budgetedLlm=budget.llm(this.llm);
     const executionConfig={...config,availableSpendUsd:spendLimit,maxPaidProcurementUsd:spendLimit};
     let briefing='';let deliverable=null;let qa=null;const maxRepairs=Math.max(1,Math.min(5,Number(this.env.AUTONOMOS_TASKFORCE_QA_REPAIRS||3)));

@@ -51,7 +51,7 @@ export class NativeMarketAdapter{
  async write(action,job,values){
   if(this.analysis.automationPermitted!==true)throw Error('automation_permission_unverified');
   const op=this.analysis[action];
-  const body=operationBody(op,values); // Validate before intent; schema errors cause no write.
+  const body=operationBody(op,{...values,client_reference:this.journal.key(this.id,job.id,action+':'+Number(job.revision||0)),revision:Number(job.revision||0)}); // Validate before intent; schema errors cause no write.
   const intent=this.journal.begin(this.id,job.id,action+':'+Number(job.revision||0));
   if(!intent.ok)return {ok:intent.status==='confirmed',uncertain:intent.status!=='confirmed',proof:intent.proof,intentId:intent.id};
   try{
@@ -60,7 +60,7 @@ export class NativeMarketAdapter{
     if(r.ok&&externalId){const proof={externalId:String(externalId),url:r.url};this.journal.finish(intent.id,'confirmed',proof);return {...r,ok:true,proof,intentId:intent.id,row};}
     const definite=[400,401,403,404,410,422,429].includes(r.status);
     this.journal.finish(intent.id,definite?'definite_failure':'uncertain',{httpStatus:r.status});
-    return {...r,ok:false,uncertain:!definite,intentId:intent.id,failure:classifyFailure(r.status)};
+    return {...r,ok:false,uncertain:!definite,intentId:intent.id,failure:classifyFailure(r.status,JSON.stringify(r.data))};
   }catch(e){this.journal.finish(intent.id,'uncertain');return {ok:false,uncertain:true,intentId:intent.id,error:String(e.message)};}
  }
  async reconcile(action,job){
@@ -69,7 +69,7 @@ export class NativeMarketAdapter{
   const r=await this.request(operation,{jobId:job.externalId,applicationId:job.applicationId});if(!r.ok)return null;
   const agentId=String(this.credential.agentId||this.credential.agent_id||this.credential.id||'');
   if(!agentId)return null;
-  const row=responseRows(r.data).find(x=>String(x.job_id||x.jobId||x.task_id||x.taskId||'')===String(job.externalId)&&String(x.agent_id||x.agentId||x.provider_id||'')===agentId&&x.id);
+  const row=responseRows(r.data).find(x=>String(x.job_id||x.jobId||x.task_id||x.taskId||'')===String(job.externalId)&&String(x.agent_id||x.agentId||x.provider_id||'')===agentId&&x.id&&(action!=='delivery'||!Number(job.revision||0)||Number(x.revision)===Number(job.revision)||x.client_reference===this.journal.key(this.id,job.id,'delivery:'+Number(job.revision))));
   if(!row)return null;
   const intentId=this.journal.key(this.id,job.id,action+':'+Number(job.revision||0));
   if(this.journal.read()[intentId])this.journal.finish(intentId,'confirmed',{externalId:String(row.id),url:r.url});

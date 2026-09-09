@@ -19,7 +19,7 @@ class JsonStore {
 const dir=fs.mkdtempSync(path.join(os.tmpdir(),'autonomos71-'));
 const store=new JsonStore(dir);
 const registry=new JobRegistry({store,maxRecords:1000});
-const op={source:'dealwork',externalId:'stable-1',title:'Build and research an API',description:'Research current sources, implement the API, run tests, and deliver a repository.',budgetUsd:150,currency:'USD',claimMode:'open'};
+const op={source:'retained-fixture',externalId:'stable-1',title:'Build and research an API',description:'Research current sources, implement the API, run tests, and deliver a repository.',budgetUsd:150,currency:'USD',claimMode:'open'};
 registry.observe(op);
 registry.markPermanent(op,{owner:'market',reasonCode:'already_claimed',reason:'taken elsewhere'});
 registry.observe({...op,title:'Updated title',budgetUsd:250,deadline:new Date(Date.now()+86400000).toISOString()});
@@ -60,7 +60,7 @@ assert.equal(result.evidence.usage.prompt_tokens,20);
 assert.equal(result.evidence.toolCostUsd,0.02);
 assert.ok(result.evidence.evidencePack,'canonical final evidence pack must be created after all phases');
 
-const policyOp={source:'dealwork',externalId:'policy-rescue-1',title:'Research report',description:'Research and deliver a report',budgetUsd:50,currency:'USD',claimMode:'bid'};
+const policyOp={source:'retained-fixture',externalId:'policy-rescue-1',title:'Research report',description:'Research and deliver a report',budgetUsd:50,currency:'USD',claimMode:'bid'};
 registry.observe(policyOp);
 registry.markPermanent(policyOp,{owner:'policy',reasonCode:'discovery_policy_rejection',reason:'status_not_open:error'});
 assert.equal(registry.summary().graveyard,2);
@@ -74,8 +74,8 @@ const current=normalizeConfig({enabled:true,minJobPayoutUsd:0.5,clawlancerMinJob
 assert.equal(current.platformGeneration,9,'current clean policy generation is fixed');
 assert.equal(current.earningProfileVersion,18,'current clean earning profile is fixed');
 assert.equal(current.minJobPayoutUsd,5);
-assert.equal(current.clawlancerMinJobPayoutUsd,5);
-assert.equal(current.dealworkMinJobPayoutUsd,5);
+assert.equal(current.clawlancerMinJobPayoutUsd,undefined);
+assert.equal(current.dealworkMinJobPayoutUsd,undefined);
 assert.equal(current.minMarginPercent,20);
 assert.equal(current.maxApiCostPercentOfPayout,60);
 assert.equal(current.autoCompetitiveSubmissions,false,'competitive auto-submit remains opt-in');
@@ -94,8 +94,8 @@ const invalidDealwork=classifyFailure('http_400:BAD_REQUEST:budgetMax (50.0000) 
 assert.equal(invalidDealwork.reasonCode,'market_job_configuration_invalid');
 assert.equal(invalidDealwork.permanent,false);
 
-const claimNoise=Array.from({length:100},(_,i)=>({id:`claim-${i}`,source:'dealwork',status:'claim_failed',error:'INSUFFICIENT_BALANCE'}));
-const outcome=estimateOutcomeProbability({source:'dealwork',claimMode:'bid',escrowed:false},{executable:true,missingTools:[]},claimNoise);
+const claimNoise=Array.from({length:100},(_,i)=>({id:`claim-${i}`,source:'retained-fixture',status:'claim_failed',error:'INSUFFICIENT_BALANCE'}));
+const outcome=estimateOutcomeProbability({source:'retained-fixture',claimMode:'bid',escrowed:false},{executable:true,missingTools:[]},claimNoise);
 assert.equal(outcome.history.samples,0,'buyer-side claim failures must not poison worker completion/acceptance history');
 
 const procurement=classifyOpportunity({title:'Job loop — post, hire, settle a peer',description:'Hire another service and pay the provider'},{llmEnabled:true,hasWebSearchTool:true,hasAppTool:true,hasShellTool:true,hasArtifactTool:true});

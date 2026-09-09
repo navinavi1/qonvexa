@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { executeCodingJob } from './coding-job.js';
+import { runAcceptedJob } from './accepted-job-engine.js';
 import { openVerifiedPullRequest, updateVerifiedPullRequest } from './verified-github-pr.js';
 import { createJobBudget } from './job-budget.js';
 import { computeEarnedSpendBudgetUsd } from './profit-engine.js';
@@ -58,19 +58,19 @@ export class GithubJobMonitor {
     if(!(limit>0)){a.setAction(id,{status:'accepted_github',acceptedAt:row.acceptedAt||stamp(),reason:'execution_budget_unavailable',nextCheckAt:due(900000)});return;}
     const revisionKey=row.revisionId||'initial',file='github-proof-'+id+'.json';
     a.setAction(id,{status:'executing_github',acceptedAt:row.acceptedAt||stamp(),acceptedEvidenceUrl:detail.html_url,nextCheckAt:due(1800000)});
-    const budget=createJobBudget(limit,{env,onCost:n=>a.recordCost(jobId,n)});
+    const budget=createJobBudget(limit,{env,jobId,onCost:n=>a.recordCost(jobId,n)});
     const op={source:'github-bounties',externalId:id,jobId,deadline:detail.due_on||'',budgetUsd:Number(row.payout?.amountUsd||0)};
     await coordinateExecution(op,env,async()=>{
       let deliverable=a.store.readJson(file,null);
       if(!deliverable||deliverable.revisionKey!==revisionKey){
-        deliverable=await executeCodingJob({title:detail.title,description:`${detail.body}\n${row.qaRepair||''}`,repoUrl:pr?pr.head.repo.html_url:`https://github.com/${issue.owner}/${issue.repo}`,ref:pr?.head?.ref},{env,llm:budget.llm(a.llm),onCost:n=>budget.charge(n),maxSpendUsd:limit});
+        ({deliverable}=await runAcceptedJob({opportunity:{...op,title:detail.title,description:detail.body||'',claimMode:'already_assigned',executionKind:'repository',repoUrl:pr?pr.head.repo.html_url:`https://github.com/${issue.owner}/${issue.repo}`,ref:pr?.head?.ref},capability:{skill:'code-analysis'},env,llm:budget.llm(a.llm),budget,store:a.store,config:c,revision:revisionKey,feedback:row.qaRepair||'',onPhase:phase=>a.setAction(id,{status:phase})}));
         deliverable.revisionKey=revisionKey;a.store.writeJson(file,deliverable);
       }
       // Deterministic QA is in the proof: complete project suite and failing base regression.
       const proof=deliverable.evidence?.repositoryVerification;
       if(!proof?.ok||!proof.testsPassOnFix||!proof.regressionFailsOnBase)throw Error('repository_QA_failed');
       a.setAction(id,{status:'qa',qaScore:1,proofFile:file});
-      const result=pr?await updateVerifiedPullRequest(proof,pr,{env}):await openVerifiedPullRequest(proof,{env,jobId,issueNumber:issue.number,opire:/\bopire\b/i.test(detail.body||'')});
+      const result=pr?await updateVerifiedPullRequest(proof,pr,{env}):await openVerifiedPullRequest(proof,{env,jobId,issueNumber:issue.number,opire:/\bopire\b|\balgora\b|\/bounty/i.test(detail.body||'')});
       if(!result.ok){a.setAction(id,{status:'github_execution_uncertain',reason:result.reason,nextCheckAt:due(900000)});return;}
       a.setAction(id,{status:'submitted',submittedAt:stamp(),deliveryUrl:result.prUrl,qaScore:1,lastRevisionId:row.revisionId||'',payoutStatus:'PAYOUT_PENDING',nextCheckAt:due(900000)});
       new DynamicMarketRegistry(a.root).observe('github-bounties',{name:'GitHub paid issues',evidence:{authentication:{verified:true,externalId:row.githubLogin,verifiedAt:stamp()},application:{verified:true,externalId:row.commentId,verifiedAt:stamp()},execution:{verified:true,externalId:proof.patchSha256,verifiedAt:stamp()},delivery:{verified:true,url:result.prUrl,verifiedAt:stamp()}}});

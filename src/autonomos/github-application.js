@@ -34,13 +34,16 @@ export async function githubApplication(issue, { lead, proposal = '', payout = {
   if(/proposed reward|no reward or assignment is assumed|please confirm.{0,80}(?:reward|bounty)|would.{0,80}(?:bounty|reward).{0,50}useful/i.test(text))return {ok:false,error:'reward_is_only_a_proposal'};
   if (!/\bbounty\b|\breward\b|\bpaid task\b|opire\.dev|algora\.io|issuehunt\.io/i.test(text)) return { ok: false, error: 'github_paid_task_not_verified' };
   if(/(?:must|required to|first).{0,60}(?:fund a bounty|pay a deposit|send.{0,30}(?:USDC|USDT)|buy tokens)/i.test(text))return {ok:false,error:'upfront_funding_not_authorized'};
-  const rewardBot=comments.some(c=>c.user?.type==='Bot'&&/^(?:opire|algora|issuehunt)(?:\[bot\])?$/i.test(c.user?.login||'')&&/reward|bounty|funded/i.test(c.body||''));
+  const rewardBot=comments.some(c=>c.user?.type==='Bot'&&/^(?:opire|algora(?:-pbc)?|issuehunt)(?:\[bot\])?$/i.test(c.user?.login||'')&&/reward|bounty|funded/i.test(c.body||''));
   if(!['OWNER','MEMBER','COLLABORATOR'].includes(d.author_association)&&!rewardBot)return {ok:false,error:'reward_authority_unverified'};
+  if((d.labels||[]).some(l=>/^rewarded$/i.test(l.name||l))||comments.some(c=>c.user?.type==='Bot'&&/^(?:algora-pbc|opire|issuehunt)(?:\[bot\])?$/i.test(c.user.login)&&/(?:you.ve|has|have) been awarded|bounty (?:has been )?(?:paid|claimed)|reward (?:has been )?paid/i.test(c.body||'')))return {ok:false,error:'bounty_already_rewarded'};
+  if(/(?:source|original)(?: issue| bounty| url)?\s*:\s*https:\/\/github\.com\//i.test(d.body||''))return {ok:false,error:'mirror_requires_original_project_route'};
   const intent = journal.begin('github', url, 'apply');
   if (!intent.ok) return { ok: false, uncertain: true, error: 'application_intent_exists' };
   const opire = /opire\.dev|\bopire\b/i.test(text);
   if(opire&&!comments.some(c=>c.user?.type==='Bot'&&/opire/i.test(c.user?.login||''))){journal.finish(key,'definite_failure',{reason:'opire_bot_not_verified'});return {ok:false,error:'opire_bot_not_verified'};}
-  const body = [opire ? '/try' : '', proposal, '', 'AutonomOS is an AI-assisted digital-services agency. This is an application, not a claim of assignment or completed work. We can provide a tested pull request after assignment.', '', marker].filter(Boolean).join('\n').slice(0,6500);
+  const algora=comments.some(c=>c.user?.type==='Bot'&&/^algora(?:-pbc)?(?:\[bot\])?$/i.test(c.user.login));
+  const body = [opire ? '/try' : algora?'/attempt #'+issue.number:'', proposal, '', 'AutonomOS is an AI-assisted digital-services agency. This is an application, not a claim of assignment or completed work. We can provide a tested pull request after assignment.', '', marker].filter(Boolean).join('\n').slice(0,6500);
   try {
     const r = await githubRequest(issueApi(issue) + '/comments', { method: 'POST', body: { body }, env });
     if (r.ok && r.value?.id && r.value.html_url) {

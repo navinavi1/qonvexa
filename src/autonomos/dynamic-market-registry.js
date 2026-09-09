@@ -7,15 +7,20 @@ export function deriveMarketState(row={}){
  if(isRetiredMarket(row))return 'RETIRED';
  if(row.automationPermitted===false)return 'AUTOMATION_FORBIDDEN';
  if(row.paidSubscriptionRequired)return 'PAID_ONLY';
- if(row.humanGate)return 'OWNER_ACTION_REQUIRED';
+ if(row.humanGate||row.ownerActionRequired)return 'OWNER_ACTION_REQUIRED';
  const evidence=row.evidence||{};
  const verified=k=>evidence[k]?.verified===true&&Boolean(evidence[k]?.externalId||evidence[k]?.url)&&Date.parse(evidence[k]?.verifiedAt||'')>Date.now()-7*86400000;
  if(REQUIRED.every(verified))return 'FULL_AUTO_READY';
  if(row.lastError)return 'BROKEN';
+ if(verified('payout'))return 'PAYOUT_READY';
+ if(Number(row.dryStreak)>=3&&Number(row.lastJobsCount)===0)return 'NO_REAL_WORK';
  if(verified('delivery'))return 'DELIVERY_READY';
  if(verified('application'))return 'APPLICATION_READY';
+ if(verified('details')&&row.claimRouteVerified)return 'CLAIM_READY';
  if(verified('jobs'))return 'DISCOVER_READY';
  if(verified('authentication'))return 'REGISTERED';
+ if(row.automationPermitted===true&&row.registration?.path)return 'REGISTRATION_READY';
+ if(row.inspecting)return 'INSPECTING';
  return 'DISCOVERED';
 }
 export class DynamicMarketRegistry {

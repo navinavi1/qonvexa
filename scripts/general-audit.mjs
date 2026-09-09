@@ -44,8 +44,6 @@ for(const key of ['OPENAI_API_KEY','DATABASE_URL','REDIS_URL','TRIGGER_SECRET_KE
 
 const cfg=normalizeConfig({...DEFAULT_AUTONOMOS_CONFIG});
 check('Global minimum payout defaults to at least $5.00',Number(cfg.minJobPayoutUsd)>=5,`value=${cfg.minJobPayoutUsd}`);
-check('Clawlancer minimum defaults to at least $5.00',Number(cfg.clawlancerMinJobPayoutUsd)>=5,`value=${cfg.clawlancerMinJobPayoutUsd}`);
-check('Dealwork minimum defaults to at least $5.00',Number(cfg.dealworkMinJobPayoutUsd)>=5,`value=${cfg.dealworkMinJobPayoutUsd}`);
 check('Demo/test protection defaults ON',cfg.rejectDemoAndTestJobs===true);
 check('Explicit demo opportunity is rejected',isDemoOrTestOpportunity({title:'DEMO ONLY - no payment',environment:'sandbox'})===true);
 check('Legitimate software testing title is not rejected solely for word test',isDemoOrTestOpportunity({title:'QA engineer to test production web app',budgetUsd:500})===false);

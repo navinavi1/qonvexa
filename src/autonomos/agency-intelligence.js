@@ -24,7 +24,7 @@ export const JOB_STATES = Object.freeze([
 const TRANSITIONS = Object.freeze({
   bidding:['bid_failed','bid_submitted'],
   bid_failed:['bidding'],
-  bid_submitted:['claimed'], // an accepted dealwork bid re-enters the normal claim pipeline
+  bid_submitted:['claimed'], // an accepted bid re-enters the normal claim pipeline
   claiming:['claim_failed','claimed'],
   claim_failed:['claiming'],
   claimed:['delivered','execution_failed'],

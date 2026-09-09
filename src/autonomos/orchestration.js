@@ -45,10 +45,10 @@ async function orchestrateJobCore(opportunity,{llm,execute,memory=null,taskAgent
   onEvent('job_memory_started',{jobId});const memoryPack=memory?.contextForOpportunity?await memory.contextForOpportunity(opportunity,{limit:Number(env.AUTONOMOS_MEMORY_RECALL_LIMIT||5)}).catch(()=>({context:'',hits:[]})):{context:'',hits:[]};
   if(memoryPack.hits?.length)onEvent('memory_recalled',{count:memoryPack.hits.length,keys:memoryPack.hits.map(x=>x.key).slice(0,8)});
   onEvent('job_planning_started',{jobId});const plan=await checkpoint('plan',async()=>{try{return await planJob(opportunity,{llm,env,abortSignal,memoryContext:memoryPack.context});}catch(error){error.safeToRetry=true;throw error;}},{retrySafe:true});
-  onEvent('job_planned',{source:plan.source,steps:plan.steps?.length||0});const spawned=taskAgents?.spawnForPlan({jobId,opportunity,plan,maxAgents:maxTaskAgents})||[];if(spawned.length)onEvent('task_team_ready',{jobId,count:spawned.length,roles:spawned.map(x=>x.role)});const handoffRoles=distinctExecutionRoles(plan);
+  onEvent('job_planned',{source:plan.source,steps:plan.steps?.length||0});const spawned=taskAgents?.spawnForPlan({jobId,opportunity,plan,maxAgents:maxTaskAgents})||[];if(spawned.length)onEvent('task_team_ready',{jobId,count:spawned.length,roles:spawned.map(x=>x.role)});const handoffRoles=distinctExecutionRoles(plan).slice(0,Math.max(1,Number(maxTaskAgents||8)));
   let ok=false;try{
     onEvent('job_graph_setup_started',{jobId});const runner=await buildGraphRunner({llm,execute,memoryPack,taskAgents,jobId,env,abortSignal,onEvent,handoffRoles}).catch(error=>{onEvent('langgraph_unavailable',{error:String(error?.message||error).slice(0,180)});return null;});
-    onEvent('job_execution_started',{jobId});const result=runner?await runner(opportunity,plan):await runSequential(opportunity,plan,{llm,execute,memoryPack,taskAgents,jobId,env,abortSignal,onEvent,handoffRoles});ok=true;return result;
+    onEvent('job_execution_started',{jobId});const result=await checkpoint('verified-result',()=>runner?runner(opportunity,plan):runSequential(opportunity,plan,{llm,execute,memoryPack,taskAgents,jobId,env,abortSignal,onEvent,handoffRoles}),{retrySafe:true});ok=true;return result;
   }finally{taskAgents?.retireJob(jobId,{ok,error:ok?'':'job_execution_failed'});}
 }
 
@@ -75,7 +75,7 @@ export async function reviewWithRepair(opportunity,deliverable,{llm,abortSignal,
     const prior=deliverable.evidence||{};
     // Never repeat a phase after an irreversible side effect. Such jobs go to durable
     // recovery/reconciliation, not a blind repair that might double-post/deploy/submit.
-    const externalEffect=(prior.toolCalls||[]).some(t=>['open_pull_request','app_action','deploy_webhook','browser_task'].includes(t.tool));
+    const externalEffect=(prior.toolCalls||[]).some(t=>['open_pull_request','app_action','deploy_webhook','browser_task','browser_action'].includes(t.tool));
     if(externalEffect)break;
     repairs++;
     onEvent('qa_repair_started',{attempt:repairs,reasons:qa.reasons});

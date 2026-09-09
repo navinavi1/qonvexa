@@ -14,6 +14,7 @@ export function buildProofLog(toolCalls){
 }
 
 export async function evaluateDeliverable(opportunity,deliverable,{llm=null,abortSignal=null,env=process.env}={}){
+  if(opportunity?.executionKind==='repository'){const p=deliverable?.evidence?.repositoryVerification;const ok=Boolean(p?.ok&&p.testsPassOnFix&&p.regressionFailsOnBase&&p.patchSha256&&Array.isArray(p.files)&&p.files.length);return {ok,score:ok?1:0,reasons:ok?[]:['repository_verification_required'],mode:'verified_repository'};}
   const content=String(deliverable?.content||'').trim();
   const deterministic=[];
   if(content.length<(['deterministic_dictionary','deterministic_product'].includes(deliverable?.evidence?.mode)?1:20))deterministic.push('too_short');

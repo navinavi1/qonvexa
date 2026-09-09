@@ -109,16 +109,9 @@ assert.equal(shouldReportSuccessToDurableDispatcher({claimed:false,delivered:fal
 assert.equal(shouldReportSuccessToDurableDispatcher({claimed:true,delivered:false,retryScheduled:true}),true,'an already-claimed job must recover via recoverInFlightJobs, not a fresh re-claim');
 assert.equal(shouldReportSuccessToDurableDispatcher({claimed:true,delivered:true}),true,'full success');
 
-const commissioningRows=[
-  {source:'workprotocol',externalId:'hard',budgetUsd:10,capability:{skill:'code-analysis',estimatedModelCostUsd:0.3},economics:{outOfPocketCostUsd:0.3,expectedProfitUsd:8.7},outcome:{probability:.9}},
-  {source:'clawlancer',externalId:'simple',budgetUsd:.5,capability:{skill:'translation',estimatedModelCostUsd:0.01},economics:{outOfPocketCostUsd:0.01,expectedProfitUsd:.36},outcome:{probability:.75}},
-  {source:'dealwork',externalId:'usd',budgetUsd:50,capability:{skill:'translation',estimatedModelCostUsd:0.01},economics:{outOfPocketCostUsd:0.01,expectedProfitUsd:45},outcome:{probability:.95}}
-];
-const commissioningPicked=applyCommissioningCandidateGate(commissioningRows,{commissioningMode:true},{ledger:[],activeCount:0});
-assert.equal(commissioningPicked.length,1,'before first confirmed payment commissioning must run one job at a time');
-assert.equal(commissioningPicked[0].externalId,'hard','commissioning must treat $0.50 as a floor, not a target, and prefer the stronger higher-value active-rail candidate');
-assert.equal(applyCommissioningCandidateGate(commissioningRows,{commissioningMode:true},{ledger:[],activeCount:1}).length,0,'a commissioning job already in flight must block a second claim');
-assert.equal(applyCommissioningCandidateGate(commissioningRows,{commissioningMode:true},{ledger:[{type:'revenue',source:'workprotocol',amountUsd:.5,status:'settled'}],activeCount:0}).length,3,'after a real settlement normal concurrency may resume');
+const commissioningRows=[{source:'github',externalId:'a',budgetUsd:10},{source:'taskforce',externalId:'b',budgetUsd:50},{source:'workprotocol',externalId:'retired',budgetUsd:50}];
+assert.equal(applyCommissioningCandidateGate(commissioningRows).length,2,'retired candidates are excluded');
+assert.equal(applyCommissioningCandidateGate(commissioningRows,{commissioningMode:true},{activeCount:1}).length,2,'accepted jobs do not stop discovery or new claims');
 
 const events=[];
 const workforce=new TaskAgentRuntime({env:{AUTONOMOS_MAX_TASK_AGENTS_PER_JOB:'4'},onEvent:(type,detail)=>events.push({type,detail})});

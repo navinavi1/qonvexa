@@ -42,7 +42,7 @@ export function buildAcceptanceContract(opportunity = {}) {
     requirements.push({id:'tests', description:'Actually run the requested tests and preserve the observed result.'});
     evidence.push({id:'test-run', type:'successful_tool', tools:['run_shell','run_python']});
   }
-  if (source === 'dealwork') requirements.push({id:'acceptance-criteria', description:'Satisfy the contract acceptance criteria and required deliverable structure.'});
+  if (opportunity?.claimMode === 'already_assigned') requirements.push({id:'acceptance-criteria', description:'Satisfy the contract acceptance criteria and required deliverable structure.'});
 
   const unique = xs => [...new Map(xs.map(x => [x.id, x])).values()];
   return {

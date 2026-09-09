@@ -8,7 +8,7 @@ import { JobRegistry, classifyFailure } from '../src/autonomos/job-registry.js';
 const root=fs.mkdtempSync(path.join(os.tmpdir(),'autonomos-job-registry-'));
 try{
   const store=new AutonomOSStore(root);
-  const job={source:'dealwork',externalId:'job-1',title:'Paid research',description:'Research 20 companies',budgetUsd:80,currency:'USD',deadline:'2026-09-10T12:00:00Z',claimMode:'automatic'};
+  const job={source:'retained-fixture',externalId:'job-1',title:'Paid research',description:'Research 20 companies',budgetUsd:80,currency:'USD',deadline:'2026-09-10T12:00:00Z',claimMode:'automatic'};
   const registry=new JobRegistry({store,maxRecords:1000});
   registry.observe(job);assert.equal(registry.get(job).status,'new');
   registry.setState(job,'ready',{reasonCode:'qualified_ready'});
@@ -22,7 +22,7 @@ try{
   assert.equal(restarted.get(changed).status,'graveyard');
   assert.equal(restarted.blockReason(changed)?.status,'graveyard');
 
-  const ours={source:'dealwork',externalId:'job-2',title:'Build API',description:'Build and test API',budgetUsd:100,currency:'USD',claimMode:'automatic'};
+  const ours={source:'retained-fixture',externalId:'job-2',title:'Build API',description:'Build and test API',budgetUsd:100,currency:'USD',claimMode:'automatic'};
   restarted.observe(ours);
   restarted.markSystemBlocked(ours,{reasonCode:'execution_or_capability_failure',reason:'llm_empty_response',attempts:3,capabilityVersion:'abc'});
   assert.equal(restarted.blockReason(ours)?.status,'system_blocked');
@@ -71,7 +71,7 @@ try{
 
   // Transient claim retry can be released. Once execution has begun, everOwned keeps the
   // retry blocked from normal discovery even though its public block label is simply retry.
-  const transient={source:'dealwork',externalId:'job-3',title:'Research',description:'Research',budgetUsd:60,currency:'USD',claimMode:'automatic'};
+  const transient={source:'retained-fixture',externalId:'job-3',title:'Research',description:'Research',budgetUsd:60,currency:'USD',claimMode:'automatic'};
   restarted.observe(transient);
   restarted.markRetry(transient,{owner:'transient',reasonCode:'network_timeout',reason:'timeout',retryAfter:'2099-01-01T00:00:00Z'});
   assert.equal(restarted.blockReason(transient)?.status,'retry_wait');
@@ -87,29 +87,29 @@ try{
   const migrationStore=new AutonomOSStore(path.join(root,'migration'));
   const migrationRegistry=new JobRegistry({store:migrationStore});
   const migration=migrationRegistry.migrateLegacy({
-    handledKeys:['dealwork:done-1','agenthansa:ours-1'],
+    handledKeys:['retained-fixture:done-1','retained-second:ours-1'],
     jobs:[
-      {source:'dealwork',externalId:'done-1',title:'Done',status:'delivered',at:'2026-09-01T10:00:00Z'},
-      {source:'agenthansa',externalId:'ours-1',title:'Failed',status:'execution_failed',error:'llm_empty_response',at:'2026-09-01T11:00:00Z'}
+      {source:'retained-fixture',externalId:'done-1',title:'Done',status:'delivered',at:'2026-09-01T10:00:00Z'},
+      {source:'retained-second',externalId:'ours-1',title:'Failed',status:'execution_failed',error:'llm_empty_response',at:'2026-09-01T11:00:00Z'}
     ]
   });
   assert.equal(migration.tombstoned,0);assert.equal(migration.systemBlocked,1);
-  assert.equal(migrationRegistry.blockReason({source:'dealwork',externalId:'done-1'})?.status,'delivered');
-  assert.equal(migrationRegistry.get({source:'dealwork',externalId:'done-1'})?.everOwned,true);
-  assert.equal(migrationRegistry.blockReason({source:'agenthansa',externalId:'ours-1'})?.status,'system_blocked');
+  assert.equal(migrationRegistry.blockReason({source:'retained-fixture',externalId:'done-1'})?.status,'delivered');
+  assert.equal(migrationRegistry.get({source:'retained-fixture',externalId:'done-1'})?.everOwned,true);
+  assert.equal(migrationRegistry.blockReason({source:'retained-second',externalId:'ours-1'})?.status,'system_blocked');
 
   const repairStore=new AutonomOSStore(path.join(root,'repair-v76'));
   const repairRegistry=new JobRegistry({store:repairStore});
   const x402={source:'x402-bazaar',externalId:'https://buyer.example/tool',title:'Buyer API',budgetUsd:0.001,currency:'USDC'};
   repairRegistry.observe(x402);repairRegistry.markSystemBlocked(x402,{reasonCode:'unsupported_unrecognized',reason:'old pollution'});
-  const unfunded={source:'dealwork',externalId:'unfunded-1',title:'Open job',budgetUsd:25,currency:'USD'};
+  const unfunded={source:'retained-fixture',externalId:'unfunded-1',title:'Open job',budgetUsd:25,currency:'USD'};
   repairRegistry.observe(unfunded);repairRegistry.markPermanent(unfunded,{owner:'market',reasonCode:'old_claim_failure',reason:"http_422:INSUFFICIENT_BALANCE: Job poster's wallet has insufficient funds (available 0.00)"});
   const repaired=repairRegistry.repairV76LegacyPollution();
-  assert.ok(repaired.removedSignals>=1);assert.equal(repaired.rescuedDealwork,1);
+  assert.ok(repaired.removedSignals>=1);
   assert.equal(repairRegistry.get(x402),null);
-  assert.equal(repairRegistry.get(unfunded)?.status,'policy_hold');
-  assert.equal(repairRegistry.get(unfunded)?.reasonCode,'buyer_funding_unavailable');
-  assert.equal(repairRegistry.blockReason(unfunded)?.status,'policy_hold');
+  assert.equal(repairRegistry.get(unfunded)?.status,'graveyard');
+  assert.equal(repairRegistry.get(unfunded)?.reasonCode,'old_claim_failure');
+  assert.equal(repairRegistry.blockReason(unfunded)?.status,'graveyard');
 
   const paid={source:'workprotocol',externalId:'paid-1',title:'Settled proof',budgetUsd:0.5,currency:'USDC'};
   repairRegistry.observe(paid);repairRegistry.markPermanent(paid,{owner:'market',reasonCode:'stale_failure',reason:'legacy stale classification'});
