@@ -28,4 +28,15 @@ s=s.replace(/await ok\('Superteam Earn is a visible connector and is exempt from
 s=s.replace(/Firecrawl\/E2B/g,'external-tool');
 fs.writeFileSync(p,s);
 
-console.log('[cleanup-repair] retired function tails/connectors removed and audits aligned to clean architecture');
+// The regression suite used to require T2000/Superteam and explicit discovery-only
+// ClawJobs/MoltJobs lifecycle entries. Those rails are now intentionally deleted. Keep
+// the same behavioral intent: only current full-lifecycle rails can enter auto-claim.
+p='scripts/autonomos-regression-test.mjs';
+s=fs.readFileSync(p,'utf8');
+s=s.replace(/assert\.match\(runtimeSource,\/return \\\['clawlancer','t2000','dealwork','workprotocol','superteam'\\\]\\\.includes\\\(source\\\)\/,'auto-claim allowlist must exclude ClawJobs and MoltJobs until their full lifecycle exists'\);/,"assert.match(runtimeSource,/return \\['clawlancer','dealwork','workprotocol'\\]\\.includes\\(source\\)/,'auto-claim allowlist must contain only current full-lifecycle rails');");
+s=s.replace(/\s*assert\.match\(runtimeSource,\/clawjobs:[^\n]+\n/,'\n  assert.doesNotMatch(runtimeSource,/clawjobs:\\{discover:/i,\'retired ClawJobs lifecycle must be absent\');\n');
+s=s.replace(/\s*assert\.match\(runtimeSource,\/moltjobs:[^\n]+\n/,'\n  assert.doesNotMatch(runtimeSource,/moltjobs:\\{discover:/i,\'retired MoltJobs lifecycle must be absent\');\n');
+s=s.replace(/assert\.match\(runtimeSource,\/const fastSources=config\\\.cryptoOnlyEarnings\\\?\\\['clawlancer','t2000','workprotocol'\\\]\/,'Crypto-only mode excludes new fiat contracts'\);/,"assert.match(runtimeSource,/const fastSources=config\\.cryptoOnlyEarnings\\?\\['clawlancer','workprotocol'\\]/,'Crypto-only mode uses only current crypto-native rails');");
+fs.writeFileSync(p,s);
+
+console.log('[cleanup-repair] retired function tails/connectors removed and audits/regressions aligned to clean architecture');
