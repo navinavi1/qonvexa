@@ -1,136 +1,68 @@
-# AutonomOS — production batch, 2026-09-09
+# AutonomOS — завершальний пакет lifecycle, 2026-09-09
 
-## Статус і межа доказів
+Цей пакет продовжує main `752db433c8708e7d9a55dfbb2afbd2f2a50a5583`. Усі зміни підготовлено разом; ZIP створюється з точного staged Git tree до єдиного коміту. Фінальний SHA, CI та Render фіксуються в окремій копії звіту після публікації.
 
-Це звіт про конкретний пакет виправлень, а не підтвердження виконання всіх 73 acceptance criteria. Реальну нову оплачувану роботу, прийняту клієнтом доставку та прибуток цей пакет до публікації не довів. Відсутні native application/bid adapters для всього каталогу Scout; універсальний повний lifecycle для всіх ринків ще не реалізований. Ці прогалини є незавершеною розробкою, а не лише зовнішніми блокерами.
+## Результат розробки
 
-Initial SHA: `8e2011ea11650bfa0535344d94e82f8a1416700d`.
-Final SHA і результат Render додаються до окремої фінальної копії звіту після одного коміту. Архів містить точний staged source tree цього пакета; runtime data, credentials та node_modules до нього не входять.
-
-## Що змінено
-
-- Централізований retired-resources registry для семи видалених ринків і Browserbase; перевірки в discovery, execution і tool recovery. Фінансові receipts збережені. Невідомі власницькі ID видалених tools/skills не вигадувалися.
-- Видалено виконувані retired connectors, WorkProtocol bootstrap, Dealwork bid poller, два side-effect monkey patches. Їхню потрібну актуальну логіку перенесено в explicit lifecycle functions. Залишкові історичні згадки не є активними інтеграціями.
-- Durable journal перед TaskForce registration/application/delivery, Agrenting registration, GitHub application. Відсутність external ID не рахується успіхом; невизначений результат блокує сліпий повтор. Restart GitHub execution переводиться у reconciliation-required, автоматичне повне відновлення цієї гілки ще потребує реалізації.
-- Виправлено фактичний розрив Gmail monitor: actioner не мав currentConfig/store/recordCost. Gmail delivery вимагає message ID; revision loop і QA використовують існуючий executor.
-- Додано GitHub assignment monitor незалежно від Gmail. Коментар є лише заявкою; виконання потребує реального assignee. Доставка потребує QA та PR URL цільового repo. Автоматичне settlement/revision polling цієї гілки не завершене.
-- Реєстр readiness вимагає свіжих зовнішніх доказів, а не лише URL чи API key. Scout seeds позначено неперевіреними. Expansion зберігає результати джерел, які не вдалося оновити, і не реєструється без explicit automation permission.
-- USD-equivalent floor $5: USD/USDC/USDT/DAI; інші монети потребують відомого USD еквівалента. Невідома win probability не перетворюється на вигадану прибутковість.
-- Додано bounded shared execution coordinator, поточні записи реальних workers, SIGTERM cancellation. Це task executions у поточному процесі, не автоматичне масштабування Render instances. Типова concurrency 2, upper bound 8, додаткові CPU/RAM обмеження. Глобальні фінансові reservations між усіма паралельними lanes ще не уніфіковані.
-- Додано browser action layer для accepted jobs: navigation, type, click, select, upload, wait, extract, screenshot, cookie session у тому самому sandbox. Це не готові перевірені signup/bidding workflows усіх платформ; session persistence після знищення sandbox не реалізовано.
-- Free search coalescing/cache, дедуплікація quota errors, retired-provider recovery guard. Нових платних підписок не створено.
-- Business snapshot і головні dashboard counters відокремлюють application evidence, execution, delivery і finalized payouts. CanonicalOpportunity додано, але всі старі provider state machines ще не замінено єдиним canonical engine.
-- GitHub CI: Node production line, npm ci, verify, real Chromium probe. Render чинний build також виконує verify перед запуском.
-
-## BEFORE — спостереження production
-
-Джерела: /health, /version, /autonomos-global-feed.json, /autonomos-money-report.json та Render logs 2026-09-09.
-
-| Показник | До пакета | Інтерпретація |
-|---|---:|---|
-| Знайдено (money report) | 2635 | Не кількість контрактів |
-| Routeable / eligible | невідомо | Старий звіт не дає узгодженого evidence-based числа |
-| Applications (money report) | 65 | Старий агрегат, не перевірено кожний external ID |
-| Applications (actioner/feed) | 87 / 58 | Різні джерела/час; не можна складати |
-| Claimed | невідомо | Немає окремого узгодженого доказу |
-| Accepted | 0 | Немає підтвердженого прийняття |
-| Working (money report) | 0 | Feed показував 3 inspections як working — виправлено |
-| Delivered/submitted | 0 | Доставку не підтверджено |
-| Paid | 0 | Виплат не підтверджено |
-| Gross / net | 0 / 0 | Старий cost accounting неповний; нуль не доводить відсутність витрат |
-
-TaskForce діагностика: open 5, eligible 0, below floor 5, applied 0. ResourceRecovery повторював public_http quota errors; actioner часто мав lead_no_direct_route на Freelancer.
-
-## Ринки
-
-| Група | Стан |
-|---|---|
-| TaskForce / Agrenting | Збережено існуючі workers; посилено evidence і persistence. Повний paid production cycle не доведено |
-| Global web / GitHub / direct permitted email | Пошук збережено; GitHub acceptance monitor додано; route має відповідати конкретній роботі |
-| Freelancer, Guru, Workana, Contra, PeoplePerHour, Truelancer, Opire, Algora, IssueHunt, BOSS | Каталог для перевірки, не FULL_AUTO_READY. Native signup/bid/delivery workflows не завершені |
-| Newly integrated live markets | 0 підтверджених нових end-to-end інтеграцій |
-| Retired | T2000, Dealwork, WorkProtocol, TaskBounty, AgentHansa, Superteam, ClawJobs/Clawlancer заблоковані |
-
-Opire /try — лише намір працювати, не гарантія claim; /claim вимагає review PR. Документація: https://docs.opire.dev/overview/commands . Випадкові support/help emails не використовуються як application route.
-
-## Tools, wallets, agents
-
-Збережено поточні Chromium/E2B, shell/Python, GitHub, Gmail, artifact tools, LLM, memory/QA. Нових платних providers не додано; Browserbase не відновлено. Нових live-validated acquired skills не заявлено. Відомі безкоштовні recovery recipes залишені з retired checks.
-
-Локальний реальний Chromium 152.0.7977.0: JavaScript, form filling, click, screenshot — PASS. networkVerified=false; це не live E2B/marketplace proof.
-
-Wallets, secrets і payout destinations не змінювалися. На стартовому /health stripeConfigured=false, manualPayment=true, persistentStorage=true. Наявність маршруту не є доказом автоматичної fiat→crypto conversion; конверсія не проводилася. Нові виплати та net profit не підтверджено.
-
-Core service loops не рахуються як task squads. Число production workers/активних jobs буде взято з післярелізного snapshot; синтетичних completed workers не створювали.
+- Спільний `runAcceptedJob` для TaskForce, Agrenting, Gmail та native API: виконання, acceptance QA, до п’яти ремонтних спроб, збереження результатів фаз і навчальних записів. GitHub використовує спеціалізований repository executor з реальною тестовою перевіркою.
+- Єдина обмежена черга виконання: за замовчуванням два одночасні виконання, максимум вісім із урахуванням ресурсів. Прийняті роботи та найближчі deadlines мають пріоритет. Виправлено гонку повторної постановки одного job і резервування слотів. Це динамічні task workers у чинному сервісі, а не нові платні Render instances.
+- Глобальна перевірка бюджету і запис витрат під одним durable lock. Паралельні роботи не можуть незалежно витратити той самий доступний залишок. Витрати clarification, execution і QA враховуються; повторно збережений результат не викликає LLM.
+- GitHub працює з чинним токеном або підключеним GitHub через Composio без експорту OAuth credentials. Перевіряє власника облікового запису, справжній статус API, призначення issue, повноваження автора винагороди. Пропозиція створити bounty, непідтверджений Opire bot та вимога попереднього фінансування не є оплачуваним контрактом.
+- GitHub application має стабільний marker. Втрата відповіді відновлюється читанням реального коментаря того самого автора. PR використовує стабільну job branch та доказ тестів. Правки із CHANGES_REQUESTED виконуються на поточній гілці, проходять QA і доставляються без force push; втрачений push відновлюється звіркою tree і parent.
+- Native API adapter використовує перевірену OpenAPI-схему, дозволені поля, необхідні IDs, коректні альтернативні/складені security requirements, same-origin endpoints, durable application/delivery intent і зовнішні receipts. Без підтвердженої automation permission write не виконується. Реєстрація не вигадує callback на /health.
+- Додано окремий Freelancer adapter за офіційним SDK: власний OAuth account, fixed-price bid, перевірка award/accepted/funded milestone, project-thread delivery, відновлення доставки за sender/project/revision marker, облік окремих released milestones. Він активується лише за наявності справжнього FREELANCER_OAUTH_TOKEN. Нової підписки чи покупки bids не створює.
+- Agrenting отримав durable delivery snapshots, reconciliation після timeout, revisions, паралельну чергу та backoff. Completed без payment transaction не зараховується як дохід. TaskForce зберігає зв’язок ledger receipts із конкретною роботою.
+- Gmail зберігає sender/thread binding і зовнішній delivery message ID. Повідомлення про оплату є лише підказкою: для наявного EVM owner wallet додано read-only перевірку receipt, chain ID, статусу, configured stablecoin contract, адреси одержувача, часу та підтверджень. Одна транзакція не розподіляється на дві роботи. Часткова оплата не закриває повний рахунок.
+- Browser action layer: navigate, JS/DOM, type/click/select, upload/download, screenshots, extraction зовнішнього ID. Приватна cookie session зберігається на persistent disk; повторна неоднозначна дія не надсилається сліпо. Чужий origin та human verification gates зупиняють відповідну операцію.
+- Пошук залишається широким. Порожні джерела опитуються рідше; GitHub discovery використовує чинне підключення. Невідомий USD-equivalent, несвіжа робота, employment listing або payout нижче $5 не стають eligible. Безкоштовна application не означає виграний контракт чи дозвіл витрачати на execution.
+- Єдиний business snapshot об’єднує native/GitHub/email/TaskForce/Agrenting, дедуплікує receipts і jobs, відокремлює applications, acceptance, execution, QA, delivery, client review, pending payout та paid. Dashboard показує all-time revenue/cost/fees/net окремо від 24H показників.
+- Owner-retired markets/tools залишаються заблокованими у runtime, discovery, diagnostics і recovery. Історичні фінансові записи не видалялися. Нових платних providers/subscriptions не додано.
 
 ## Перевірки
 
-Остаточний повний npm run verify після всіх code changes — PASS (exit 0). До suite додано 13 перевірок: crash journal, uncertain actions, classified retries, floor/currency, unknown win rate, readiness evidence, retired registry, Gmail infrastructure, missing application/delivery IDs, feed retention, duplicate execution і old notification ordering. Застарілі тести, які вимагали запускати видалені ринки, прибрані; provider-independent persistence/fault tests залишені.
+Повний `npm run verify` завершився exit 0. Додатково `remaining-lifecycle-test` — 18/18, `production-lifecycle-test` — 13/13. Після фінального уточнення підрахунку оплат і deadline знову перевірено ці два відповідні набори. Реальний Chromium пройшов upload/select/submit/receipt/download/screenshot, відновлення cookie session і блокування переходу на інший origin. Новий browser regression включено до GitHub CI. Render build також виконує повний verify.
 
-## Що ще потрібно для заявленого результату
+Ці тести є доказами реалізації та відновлення після збоїв. Вони не є вигаданими платними контрактами чи production receipts.
 
-1. Реальні permitted accounts/credentials та ≥$5 jobs з конкретним application route. Наявність цих прав/роботи на всіх ринках не підтверджена.
-2. Завершити native adapters для catalog markets, дозволені browser registration/application workflows, status/settlement/revision reconciliation. Це розробка, яку не можна замінити налаштуванням ENV.
-3. Уніфікувати всі provider state machines, deadlines, глобальні бюджетні reservations, автоматичне connector schema repair та restart reconciliation невизначених зовнішніх дій.
-4. Провести дозволений live canary з external ID, acceptance, реальним artifact/PR, delivery proof і settlement. Локальні тести цього не замінюють.
-5. KYC/CAPTCHA/2FA або підтвердження умов конкретної платформи потребуватимуть власника лише там, де це реально виникне. Не заявляємо вигадані account blockers для неперевірених ринків.
+## Live BEFORE
 
-Отже, пакет усуває конкретні критичні збої й хибні показники. Повна автономна прибуткова агенція та всі 73 вимоги поки не підтверджені.
+Спостереження `/autonomos-global-feed.json`, 2026-09-09 18:38 UTC:
 
-## Змінені файли
+| Показник | Значення |
+|---|---:|
+| Discovered | 2689 |
+| Routable | 41 |
+| Eligible за попереднім алгоритмом | 38 |
+| Applications із збереженими IDs | 41 |
+| Accepted / executing / QA / delivered / paid | 0 / 0 / 0 / 0 / 0 |
+| Gross revenue | $0 |
+| Recorded costs | $0.686 |
+| Net | −$0.686 |
 
-M	package.json
-M	public/admin.js
-M	scripts/admin-integration-test.mjs
-M	scripts/autonomos-audit.mjs
-M	scripts/autonomos-fault-injection-test.mjs
-M	scripts/autonomos-regression-test.mjs
-D	scripts/autonomos2-flow-test.mjs
-M	scripts/final-mega-regression-test.mjs
-M	scripts/marketplace-hardening-test.mjs
-M	scripts/retired-markets-test.mjs
-M	scripts/start-autonomos.mjs
-D	scripts/workprotocol-bootstrap-test.mjs
-M	server.js
-M	src/autonomos/agrenting-worker.js
-M	src/autonomos/browserless-lead-actioner.js
-M	src/autonomos/connectors/index.js
-M	src/autonomos/daily-money-reporter.js
-M	src/autonomos/expanded-free-revenue-global-work-hunter.js
-M	src/autonomos/free-market-scout.js
-M	src/autonomos/free-tool-recovery.js
-M	src/autonomos/free-web-tool.js
-M	src/autonomos/global-feed-publisher.js
-M	src/autonomos/global-lead-actioner.js
-M	src/autonomos/global-work-hunter.js
-M	src/autonomos/gmail-job-monitor.js
-M	src/autonomos/job-executor.js
-M	src/autonomos/legacy-state-cleaner.js
-M	src/autonomos/market-expansion-engine.js
-M	src/autonomos/resource-control.js
-M	src/autonomos/retired-markets.js
-M	src/autonomos/revenue-global-work-hunter.js
-M	src/autonomos/revenue-lead-actioner.js
-D	src/autonomos/revenue-lifecycle-hardening-patch.js
-M	src/autonomos/runtime.js
-M	src/autonomos/search-first-lead-actioner.js
-M	src/autonomos/task-agent-runtime.js
-D	src/autonomos/taskforce-live-recovery-patch.js
-M	src/autonomos/taskforce-worker.js
-M	src/autonomos/tools.js
-M	src/autonomos/unified-runtime-bootstrap.js
-D	src/autonomos/workprotocol-bootstrap.js
-.github/workflows/verify.yml
-AUTONOMOS-FINAL-AUTONOMOUS-PRODUCTION-REPORT.md
-scripts/production-lifecycle-test.mjs
-src/autonomos/action-journal.js
-src/autonomos/browser-actions.js
-src/autonomos/business-snapshot.js
-src/autonomos/canonical-opportunity.js
-src/autonomos/dynamic-market-registry.js
-src/autonomos/execution-coordinator.js
-src/autonomos/github-job-monitor.js
-src/autonomos/retired-resources.js
-src/autonomos/retired-resources.json
-src/autonomos/revenue-lifecycle.js
-src/autonomos/taskforce-notifications.js
+Після виправлення eligibility числа не обов’язково зростають: конкурентна робота без оцінки економіки та старий listing не означають придатний контракт.
+
+## Ринки та зовнішні умови
+
+| Ринок / маршрут | Реалізація та встановлений стан |
+|---|---|
+| TaskForce | Чинний account/worker. Останнє production спостереження: 4 jobs, усі нижче $5; applications на них не надсилаються |
+| Agrenting | Чинний зареєстрований provider; assigned hirings 0. Worker продовжує polling |
+| GitHub / Opire / Algora / IssueHunt / BOSS | Discovery та GitHub application/assignment/verified PR/revision pipeline. Account або payout onboarding окремої платформи не підміняється GitHub login; оплата не вважається автоматичною після merge |
+| Freelancer | Public API дав 100 listings в останньому poll. Native lifecycle реалізовано, але OAuth provider account має існувати у production; public listings не доводять authenticated bidding |
+| Нові API marketplaces | Dynamic registry + schema-driven acquisition/execution/delivery. Реальні endpoint, permission, account та receipts мають пройти перевірку до readiness |
+| Guru / Workana / Contra / PeoplePerHour / Truelancer | Каталог збережено. Ця сесія не підтвердила авторизовані signup/bidding/payout accounts і дозволений повний browser workflow; ці ринки не оголошуються FULL_AUTO_READY |
+| Direct client / Gmail | Прив’язаний до конкретного замовника маршрут; жодна відповідь autoresponder не стає прийняттям контракту |
+
+Відсутність доступного акаунта або призначення замовником не можна усунути вигаданою реєстрацією. Browser capability не дорівнює перевіреній інтеграції кожного сайту. Fiat-to-crypto conversion не заявляється виконаною: чинні wallets/routes збережені, але без авторизованого cashout route/receipt новий переказ не створюється.
+
+## Джерела контрактів API та обмежень
+
+- [Офіційний Freelancer SDK](https://github.com/freelancer/freelancer-sdk-python) — provider bids, awards, milestones і project messages.
+- [Composio proxy execute](https://docs.composio.dev/docs/extending-sessions/proxy-execute) — використання чинного connected account.
+- [Opire commands](https://docs.opire.dev/overview/commands) — GitHub claim workflow; наявність bot перевіряється окремо.
+- [Contra Terms](https://contra.com/policies/terms) — account identity, перевірка особи та обмеження автоматизованого доступу. Відсутність KYC-доказу не обходиться.
+- [Workana Terms](https://www.workana.com/pages/view/terms), [Guru Terms](https://www.guru.com/terms-of-service/), [PeoplePerHour Terms](https://www.peopleperhour.com/static/terms), [Truelancer Terms](https://www.truelancer.com/legal/terms-service) — посилання для account-specific перевірки; неповне читання цих сторінок не використовується як доказ дозволу automation.
+
+## Умови бізнес-приймання
+
+Технічний реліз не означає, що всі 73 вимоги доведено реальним платним циклом. Acceptance → delivery → settled revenue потребує справжнього призначеного замовлення та зовнішнього підтвердження оплати. Показники AFTER, точний commit і результат Render додаються після розгортання; нульовий дохід залишається нульовим, поки receipt не підтверджено.

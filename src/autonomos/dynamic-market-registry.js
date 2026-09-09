@@ -21,5 +21,5 @@ export function deriveMarketState(row={}){
 export class DynamicMarketRegistry {
  constructor(root){this.file=path.join(root,'dynamic-market-registry.json');fs.mkdirSync(root,{recursive:true});}
  read(){try{return JSON.parse(fs.readFileSync(this.file,'utf8'));}catch(e){if(e.code==='ENOENT')return{};throw e;}}
- observe(id,update){const rows=this.read(),row={...rows[id],...update,id,updatedAt:new Date().toISOString()};row.status=deriveMarketState(row);row.fullAutoReady=row.status==='FULL_AUTO_READY';rows[id]=row;const tmp=this.file+'.tmp';fs.writeFileSync(tmp,JSON.stringify(rows,null,2),{mode:0o600});fs.renameSync(tmp,this.file);return row;}
+ observe(id,update){const rows=this.read(),row={...rows[id],...update,evidence:{...rows[id]?.evidence,...update.evidence},id,updatedAt:new Date().toISOString()};row.status=deriveMarketState(row);row.fullAutoReady=row.status==='FULL_AUTO_READY';rows[id]=row;const tmp=this.file+'.tmp';fs.writeFileSync(tmp,JSON.stringify(rows,null,2),{mode:0o600});fs.renameSync(tmp,this.file);return row;}
 }

@@ -1,4 +1,5 @@
-import { ActionJournal } from './action-journal.js';
+import { githubApplication, parseGithubIssue, issueApi } from './github-application.js';
+import { githubAvailable, githubRequest } from './github-transport.js';
 import path from 'node:path';
 import { minimumJobPayoutUsd } from './payout-floor.js';
 import { BrowserlessLeadActioner, discoverEmailRoutes, discoverApplyLinks } from './browserless-lead-actioner.js';
@@ -29,7 +30,14 @@ export class SearchFirstLeadActioner extends BrowserlessLeadActioner{
     this.setAction(id,{status:'inspecting_direct',host,title:lead.title,url:lead.url,category:lead.category,lastAttemptAt:now(),attempts:Number(this.state.actions?.[id]?.attempts||0)+1,error:''});
     try{
       let page={ok:false,html:'',text:'',finalUrl:String(lead.url||''),error:''};
-      if(!AGGREGATOR_HOST.test(host))page=await fetchPage(lead.url);
+      const issueRef=parseGithubIssue(lead.url);
+      if(issueRef&&githubAvailable(this.env)){
+        const detail=await githubRequest(issueApi(issueRef),{env:this.env});
+        if(!detail.ok){this.setAction(id,{status:'github_access_blocked',reason:detail.error||'github_http_'+detail.status,nextRetryAt:new Date(Date.now()+1800000).toISOString()});return;}
+        if(detail.value.state!=='open'||detail.value.locked){this.archive(id,'expired','github_issue_closed_or_locked');return;}
+        page={ok:true,html:'',text:detail.value.title+'\n'+detail.value.body,finalUrl:lead.url,error:''};
+        lead={...lead,title:detail.value.title,snippet:detail.value.body,observedAt:now()};
+      }else if(!AGGREGATOR_HOST.test(host))page=await fetchPage(lead.url);
       const searchFallback=!page.ok||AGGREGATOR_HOST.test(host)
         ? await searchForOriginalApplication(lead,host,this.env)
         : {ok:true,text:'',html:'',urls:[]};
@@ -52,10 +60,10 @@ export class SearchFirstLeadActioner extends BrowserlessLeadActioner{
       // application comment exactly once. This turns many previous no_direct_route rows
       // into real applications without browser automation or paid search.
       const githubIssue=parseGithubIssue(lead.url);
-      if(githubIssue&&String(this.env.GITHUB_TOKEN||'').trim()){
+      if(githubIssue&&githubAvailable(this.env)){
         this.setAction(id,{status:'application_uncertain',route:'github_issue_comment',applicationUrl:lead.url,payout,skill:capability.skill,nextCheckAt:new Date(Date.now()+1800000).toISOString()});
         const proposal=await this.makeProposal(lead,evidenceText,capability,payout);
-        const githubApply=await tryGitHubIssueApplication(githubIssue,{lead,proposal,payout,env:{...this.env,STORAGE_DIR:path.dirname(this.root)}});
+        const githubApply=await githubApplication(githubIssue,{lead,proposal,payout,env:{...this.env,STORAGE_DIR:path.dirname(this.root)}});
         if(githubApply.ok){
           this.setAction(id,{status:'applied',appliedAt:now(),applicationUrl:lead.url,proposal:proposal.slice(0,1800),payout,skill:capability.skill,route:'github_issue_comment',commentId:String(githubApply.commentId||''),githubLogin:String(githubApply.login||''),nextCheckAt:new Date(Date.now()+30*60_000).toISOString()});
           this.state.stats.applied=Number(this.state.stats.applied||0)+1;
@@ -65,6 +73,7 @@ export class SearchFirstLeadActioner extends BrowserlessLeadActioner{
           this.setAction(id,{status:'application_uncertain',reason:githubApply.error||'github_comment_outcome_uncertain',applicationUrl:lead.url,nextCheckAt:new Date(Date.now()+60*60_000).toISOString()});
           this.event('lead_github_application_uncertain',{id,host});return;
         }
+        this.setAction(id,{status:'github_application_blocked',reason:githubApply.error,failure:githubApply.failure,nextRetryAt:new Date(Date.now()+3600000).toISOString()});return;
       }
 
       if(/(^|\.)(freelancer\.com|guru\.com|workana\.com|contra\.com|peopleperhour\.com|truelancer\.com|upwork\.com)$/.test(host)){this.setAction(id,{status:'native_marketplace_auth_required',reason:'Verified native account and application workflow required',payout,skill:capability.skill,nextRetryAt:new Date(Date.now()+86400000).toISOString()});return;}
@@ -145,25 +154,6 @@ function searchRowRelevant(row,lead){
   return hits>=required;
 }
 function significantTitleTerms(value){return [...new Set(String(value||'').toLowerCase().replace(/[^a-z0-9+#. -]/g,' ').split(/\s+/).map(x=>x.replace(/^[.+#-]+|[.+#-]+$/g,'')).filter(x=>x.length>=4&&!SEARCH_STOPWORDS.has(x)))].slice(0,10);}
-
-function parseGithubIssue(url){
-  try{const u=new URL(String(url));if(!/(^|\.)github\.com$/i.test(u.hostname))return null;const m=u.pathname.match(/^\/([^/]+)\/([^/]+)\/issues\/(\d+)(?:\/|$)/i);if(!m)return null;return{owner:m[1],repo:m[2],number:Number(m[3])};}catch{return null;}
-}
-async function tryGitHubIssueApplication(issue,{lead,proposal,payout,env}){
-  const journal=new ActionJournal(path.join(env.STORAGE_DIR||'data','autonomos'));const intent=journal.begin('github',lead.url,'apply');if(!intent.ok)return{ok:intent.status==='confirmed',uncertain:intent.status!=='confirmed',commentId:intent.proof?.externalId,url:intent.proof?.url,login:intent.proof?.login};
-  const token=String(env.GITHUB_TOKEN||'').trim();if(!token)return{ok:false,error:'github_token_missing'};
-  const api=`https://api.github.com/repos/${encodeURIComponent(issue.owner)}/${encodeURIComponent(issue.repo)}/issues/${issue.number}`;
-  const headers={accept:'application/vnd.github+json',authorization:`Bearer ${token}`,'x-github-api-version':'2022-11-28','user-agent':'AutonomOS-WorkHunter/15'};
-  try{
-    const inspect=await fetch(api,{headers,signal:AbortSignal.timeout(12000)});if(!inspect.ok)return{ok:false,error:`github_issue_http_${inspect.status}`};
-    const detail=await inspect.json().catch(()=>({}));if(String(detail?.state||'').toLowerCase()!=='open'||detail?.locked===true)return{ok:false,error:'github_issue_not_open_for_comment'};
-    const body=[proposal,'',`AutonomOS application for this paid task. Expected payout: ${payout.amountUsd||'stated in issue'} ${payout.currency||''}.`,'','AutonomOS is an AI-assisted digital-services agency. We do not claim a human identity or unverifiable credentials. If this issue is still available, we can begin immediately and deliver with QA evidence.'].join('\n').slice(0,5000);
-    const response=await fetch(`${api}/comments`,{method:'POST',headers:{...headers,'content-type':'application/json'},body:JSON.stringify({body}),signal:AbortSignal.timeout(12000)});
-    if(response.ok){const data=await response.json().catch(()=>({}));if(!data.id||!data.html_url){journal.finish(intent.id,'uncertain');return{ok:false,uncertain:true,error:'external_comment_proof_missing'};}journal.finish(intent.id,'confirmed',{externalId:String(data.id),url:data.html_url,login:data.user?.login||''});return{ok:true,commentId:data.id,url:data.html_url,login:data.user?.login||''};}
-    if([401,403,404,422].includes(response.status)){journal.finish(intent.id,'definite_failure',{httpStatus:response.status});return{ok:false,error:`github_comment_http_${response.status}`};}
-    journal.finish(intent.id,'uncertain');return{ok:false,uncertain:true,error:`github_comment_http_${response.status}`};
-  }catch(error){return{ok:false,uncertain:true,error:`github_comment_network:${safeError(error)}`};}
-}
 
 async function fetchPage(url){
   let response;try{response=await fetch(String(url),{redirect:'follow',headers:{accept:'text/html,application/xhtml+xml,text/plain;q=0.8','user-agent':'Mozilla/5.0 (compatible; AutonomOS-WorkHunter/15; +https://qonvexa.co)'},signal:AbortSignal.timeout(12_000)});}catch(error){return{ok:false,error:`fetch_network:${safeError(error)}`,html:'',text:'',finalUrl:String(url||'')};}

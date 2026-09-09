@@ -22,3 +22,5 @@ jobs:
       - run: npm run verify
       - name: Actual Chromium form and screenshot probe
         run: node src/autonomos/browser-runtime.cjs
+      - name: Browser delivery and session regression
+        run: node scripts/browser-workflow-test.cjs

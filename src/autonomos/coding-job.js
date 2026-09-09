@@ -174,7 +174,7 @@ export async function executeCodingJob(
         throw new Error("clone_url_repository_mismatch");
     }
     const cloned = await run(
-      `git -c core.hooksPath=/dev/null clone --depth 1 -- ${quote(cloneUrl)} /home/user/repo && cd /home/user/repo && git remote set-url origin ${quote(job.repoUrl)}`,
+      `git -c core.hooksPath=/dev/null clone --depth 1 ${job.ref ? '--branch '+quote(job.ref) : ''} -- ${quote(cloneUrl)} /home/user/repo && cd /home/user/repo && git remote set-url origin ${quote(job.repoUrl)}`,
       120000,
     );
     cloneUrl = "";
@@ -258,7 +258,7 @@ export async function executeCodingJob(
           inputRate +
           5000 * outputRate) /
         1e6;
-      reserve(ceiling);
+      if (!llm.budgeted) reserve(ceiling);
       const result = await llm.complete({
         messages,
         tools,

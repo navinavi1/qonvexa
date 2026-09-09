@@ -1,3 +1,4 @@
+import { githubAvailable, githubRequest } from './github-transport.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -14,7 +15,7 @@ export function unifiedCapabilityContext(env=process.env,{llm=null}={}){
   const connected=app?(state.apps.connectedApps||[]).filter(name=>available(name)):[];
   const localArtifact=Boolean(env.STORAGE_DIR&&(env.SITE_URL||env.RENDER_EXTERNAL_URL||env.PUBLIC_URL))&&available('local_artifact');
   const deploy=Boolean(env.AUTONOMOS_DEPLOY_WEBHOOK_URL)&&fresh(state.deploy);
-  return{registryVersion:1,llmEnabled:Boolean(llm?(llm.available??llm.enabled):env.OPENAI_API_KEY)&&available('openai'),hasGithubPrTool:Boolean(env.GITHUB_TOKEN)&&available('github')&&fresh(state.github),hasShellTool:shell,hasBrowserTool:shell&&fresh(state.browser),hasDesignMediaTool:shell&&fresh(state.media),hasAppTool:app,connectedApps:connected,hasDeployTool:deploy,hasArtifactTool:localArtifact||(available('r2')&&fresh(state.artifact)),hasWebSearchTool:available('public_http')||available('github'),verifiedAt:state.updatedAt||'',strictCapabilityProof:true};
+  return{registryVersion:1,llmEnabled:Boolean(llm?(llm.available??llm.enabled):env.OPENAI_API_KEY)&&available('openai'),hasGithubPrTool:githubAvailable(env)&&available('github')&&fresh(state.github),hasShellTool:shell,hasBrowserTool:shell&&fresh(state.browser),hasDesignMediaTool:shell&&fresh(state.media),hasAppTool:app,connectedApps:connected,hasDeployTool:deploy,hasArtifactTool:localArtifact||(available('r2')&&fresh(state.artifact)),hasWebSearchTool:available('public_http')||available('github'),verifiedAt:state.updatedAt||'',strictCapabilityProof:true};
 }
 const pending=new Map();
 export async function refreshCapabilities(env=process.env,{force=false,fetchImpl=fetch,shellProbe=null}={}){
@@ -26,8 +27,8 @@ export async function refreshCapabilities(env=process.env,{force=false,fetchImpl
       try{let cursor='',accounts=[],pages=0;do{const qs=new URLSearchParams({statuses:'ACTIVE',limit:'100'});if(cursor)qs.set('cursor',cursor);const response=await fetchImpl('https://backend.composio.dev/api/v3.1/connected_accounts?'+qs,{headers:{'x-api-key':env.COMPOSIO_API_KEY,accept:'application/json'},signal:AbortSignal.timeout(12000)});if(!response.ok)throw new Error('composio_http_'+response.status);const body=await response.json();accounts.push(...(body.items||[]));cursor=body.next_cursor||'';}while(cursor&&++pages<5);const apps=[...new Set(accounts.filter(a=>a.status==='ACTIVE'&&!a.is_disabled).map(a=>normalizeApp(a.toolkit?.slug||a.toolkit_slug||a.appName||a.appUniqueId||'')))].filter(Boolean);state.apps=proof(true,{connectedApps:apps,complete:!cursor});}
       catch(error){state.apps=proof(false,{reason:String(error.message)});observeResourceResult('composio',{error:String(error.message)},env);}
     }
-    if(env.GITHUB_TOKEN&&resourceAvailability('github',env).allowed&&should(state.github)){
-      try{const reservation=await reserveResource('github',1,env);if(!reservation.ok)throw new Error(reservation.error);const r=await fetchImpl('https://api.github.com/user',{headers:{authorization:'Bearer '+env.GITHUB_TOKEN,accept:'application/vnd.github+json','user-agent':'AutonomOS-CapabilityProbe'},signal:AbortSignal.timeout(10000)});state.github=proof(r.ok,{reason:r.ok?'authenticated_github_account':'github_http_'+r.status});}
+    if(githubAvailable(env)&&resourceAvailability('github',env).allowed&&should(state.github)){
+      try{const r=await githubRequest('/user',{env,fetchImpl});state.github=proof(r.ok&&Boolean(r.value?.login),{reason:r.ok?'authenticated_github_account':'github_http_'+r.status,login:r.value?.login||''});}
       catch(error){state.github=proof(false,{reason:String(error.message)});}
     }
     if(env.E2B_API_KEY&&resourceAvailability('e2b',env).allowed&&should(state.shell)){

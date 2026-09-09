@@ -1,3 +1,4 @@
+import { githubAvailable, githubRequest } from './github-transport.js';
 import crypto from "node:crypto";
 
 // Publishes exactly the files covered by a recorded regression run. Every branch has a
@@ -7,6 +8,8 @@ export async function openVerifiedPullRequest(
   {
     env = process.env,
     jobId = "",
+    issueNumber = null,
+    opire = false,
     signal,
     fetchImpl = (...a) => fetch(...a),
   } = {},
@@ -18,7 +21,7 @@ export async function openVerifiedPullRequest(
     !Array.isArray(proof.files)
   )
     return { ok: false, reason: "verified_repository_result_required" };
-  if (!env.GITHUB_TOKEN) return { ok: false, reason: "github_token_missing" };
+  if (!githubAvailable(env)) return { ok: false, reason: "github_connection_missing" };
   const match = String(proof.repoUrl).match(
     /^https:\/\/github\.com\/([\w.-]+)\/([\w.-]+?)(?:\.git)?\/?$/,
   );
@@ -31,22 +34,7 @@ export async function openVerifiedPullRequest(
   const marker = `AutonomOS verification: ${proof.patchSha256}`;
   const request = async (path, method = "GET", body) => {
     if (signal?.aborted) throw new Error("cancelled");
-    const r = await fetchImpl("https://api.github.com" + path, {
-      method,
-      redirect: "error",
-      headers: {
-        authorization: `Bearer ${env.GITHUB_TOKEN}`,
-        accept: "application/vnd.github+json",
-        "content-type": "application/json",
-        "x-github-api-version": "2022-11-28",
-      },
-      ...(body ? { body: JSON.stringify(body) } : {}),
-      signal: signal
-        ? AbortSignal.any([signal, AbortSignal.timeout(20000)])
-        : AbortSignal.timeout(20000),
-    });
-    const value = await r.json().catch(() => null);
-    return { ok: r.ok, status: r.status, value };
+    return githubRequest(path, { method, body, env, signal, fetchImpl });
   };
   let login = "";
   const find = async () => {
@@ -161,6 +149,7 @@ export async function openVerifiedPullRequest(
       base,
       body:
         marker +
+        (Number.isInteger(issueNumber) ? `\n\nFixes #${issueNumber}.`+(opire?`\n\n/claim #${issueNumber}`:'') : '') +
         "\n\nExisting test suite passes. The new regression fails on the original code.\n\nNot merged automatically.",
     });
     if (!pr.ok)
@@ -183,4 +172,23 @@ export async function openVerifiedPullRequest(
       reason: String(error.message).slice(0, 180),
     };
   }
+}
+
+
+export async function updateVerifiedPullRequest(proof, pr, { env=process.env, signal }={}) {
+  if(!proof?.ok||!proof.testsPassOnFix||!proof.regressionFailsOnBase||!Array.isArray(proof.files))return {ok:false,reason:'verified_repository_result_required'};
+  const dest='/repos/'+pr.head.repo.full_name;
+  if(proof.repoUrl!==pr.head.repo.html_url)return {ok:false,reason:'revision_repository_mismatch'};
+  const request=(endpoint,method='GET',body)=>githubRequest(endpoint,{method,body,env,signal});
+  const who=await request('/user');if(!who.ok||who.value.login!==pr.user.login)return {ok:false,reason:'revision_identity_mismatch'};
+  const current=await request(dest+'/git/ref/heads/'+encodeURIComponent(pr.head.ref));
+  if(!current.ok)return {ok:false,reason:'revision_branch_unavailable'};
+  const base=await request(dest+'/git/commits/'+proof.baseSha);if(!base.ok)return {ok:false,reason:'revision_base_unavailable'};
+  const tree=[];for(const f of proof.files){if(!f.path||f.path.startsWith('/')||f.path.split('/').some(x=>['..','.git'].includes(x)))return {ok:false,reason:'invalid_change_path'};tree.push({path:f.path,mode:'100644',type:'blob',content:String(f.content)});}
+  const t=await request(dest+'/git/trees','POST',{base_tree:base.value.tree.sha,tree});if(!t.ok)return {ok:false,reason:'revision_tree_failed'};
+  if(current.value.object.sha!==proof.baseSha){const observed=await request(dest+'/git/commits/'+current.value.object.sha);if(observed.ok&&observed.value.tree?.sha===t.value.sha&&observed.value.parents?.some(p=>p.sha===proof.baseSha))return {ok:true,recovered:true,prUrl:pr.html_url,prNumber:pr.number,commitSha:current.value.object.sha};return {ok:false,reason:'revision_branch_changed'};}
+  const commit=await request(dest+'/git/commits','POST',{message:'AutonomOS: verified client revision',tree:t.value.sha,parents:[proof.baseSha]});if(!commit.ok)return {ok:false,reason:'revision_commit_failed'};
+  const r=await request(dest+'/git/refs/heads/'+encodeURIComponent(pr.head.ref),'PATCH',{sha:commit.value.sha,force:false});
+  if(!r.ok)return {ok:false,uncertain:true,reason:'revision_push_uncertain'};
+  return {ok:true,prUrl:pr.html_url,prNumber:pr.number,commitSha:commit.value.sha};
 }

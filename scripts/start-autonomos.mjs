@@ -1,3 +1,4 @@
+import { NativeMarketWorker } from '../src/autonomos/native-market-worker.js';
 import { stopAcceptedExecutions } from '../src/autonomos/job-executor.js';
 import { GithubJobMonitor } from '../src/autonomos/github-job-monitor.js';
 import { startUnifiedCapabilities, migrateUnifiedRelease } from '../src/autonomos/unified-runtime-bootstrap.js';
@@ -40,6 +41,7 @@ const fiatRoutePlanner=new FiatCryptoRoutePlanner({env:process.env,storageDir:pr
 const outboundEmailRequested=enabled(process.env.AUTONOMOS_BROWSERLESS_ACTIONER_ENABLED,'true');
 let browserlessActioner=new FreeRevenueLeadActioner({env:process.env,storageDir:process.env.STORAGE_DIR,logger:console}),gmailJobMonitor=null,emailGateTimer=null,emailGateRunning=false;browserlessActioner.start();
 const githubJobMonitor=new GithubJobMonitor(browserlessActioner);githubJobMonitor.start();
+const nativeMarketWorker=new NativeMarketWorker(browserlessActioner);nativeMarketWorker.start();
 const taskForceVerifier=new TaskForceVerifier({env:process.env,storageDir:process.env.STORAGE_DIR,logger:console});
 const taskForceWorker=new TaskForceWorker({env:process.env,storageDir:process.env.STORAGE_DIR,logger:console});
 const globalFeedPublisher=new GlobalFeedPublisher({env:process.env,storageDir:process.env.STORAGE_DIR,logger:console});
@@ -56,6 +58,6 @@ internetHunter?.start();globalHunter.start();agrentingWorker?.start();marketScou
 if(outboundEmailRequested){await ensureRevenueEmailLane();if(!gmailJobMonitor){const every=Math.max(30_000,Number(process.env.AUTONOMOS_EMAIL_REAUTH_POLL_MS||60_000));emailGateTimer=setInterval(()=>ensureRevenueEmailLane().catch(()=>{}),every);emailGateTimer.unref?.();}}
 taskForceVerifier.start();if(enabled(process.env.AUTONOMOS_TASKFORCE_WORKER_ENABLED,'true'))taskForceWorker.start();globalFeedPublisher.start();
 
-const stop=()=>{stopAcceptedExecutions();githubJobMonitor.stop();stopUnifiedCapabilities();internetHunter?.stop();globalHunter.stop();agrentingWorker?.stop();marketScout?.stop();marketExpansion?.stop();skillLibrary.stop();skillAcquirer?.stop();moneyReporter.stop();fiatRoutePlanner.stop();browserlessActioner?.stop();gmailJobMonitor?.stop();taskForceVerifier.stop();taskForceWorker.stop();globalFeedPublisher.stop();if(emailGateTimer)clearInterval(emailGateTimer);emailGateTimer=null;};
+const stop=()=>{stopAcceptedExecutions();githubJobMonitor.stop();nativeMarketWorker.stop();stopUnifiedCapabilities();internetHunter?.stop();globalHunter.stop();agrentingWorker?.stop();marketScout?.stop();marketExpansion?.stop();skillLibrary.stop();skillAcquirer?.stop();moneyReporter.stop();fiatRoutePlanner.stop();browserlessActioner?.stop();gmailJobMonitor?.stop();taskForceVerifier.stop();taskForceWorker.stop();globalFeedPublisher.stop();if(emailGateTimer)clearInterval(emailGateTimer);emailGateTimer=null;};
 process.on('SIGTERM',stop);process.on('SIGINT',stop);await import('../server.js');
 function enabled(value,fallback='false'){return !/^(0|false|no|off)$/i.test(String(value??fallback));}

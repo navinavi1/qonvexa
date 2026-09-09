@@ -1,3 +1,4 @@
+import { githubAvailable, githubRequest } from './github-transport.js';
 import { RevenueGlobalWorkHunter } from './revenue-global-work-hunter.js';
 
 const SOURCE_CONFIG = [
@@ -8,7 +9,7 @@ const SOURCE_CONFIG = [
   {name:'remoteok',minIntervalMs:60*60_000,load:loadRemoteOk},
   {name:'weworkremotely',minIntervalMs:60*60_000,load:loadWwr},
   {name:'remotive',minIntervalMs:6*60*60_000,load:loadRemotive},
-  {name:'github-bounties',minIntervalMs:6*60*60_000,load:loadGithubBounties}
+  {name:'github-bounties',minIntervalMs:15*60_000,load:loadGithubBounties}
 ];
 
 // Zero-paid-dependency discovery. These sources are public/free-to-query and do not use
@@ -21,7 +22,8 @@ export class FreeRevenueGlobalWorkHunter extends RevenueGlobalWorkHunter {
     const now=Date.now();
     for(const source of SOURCE_CONFIG){
       const state=this.state.freeSources[source.name]||{};const last=Date.parse(String(state.lastPollAt||0));
-      if(Number.isFinite(last)&&now-last<source.minIntervalMs){skipped++;continue;}polled++;
+      const successes=Object.values(this.state.leads||{}).filter(l=>l.freeSource===source.name&&l.acceptedAt).length;const multiplier=successes?1:Math.min(8,2**Math.min(3,Number(state.emptyPolls||0)));
+      if(Number.isFinite(last)&&now-last<source.minIntervalMs*multiplier){skipped++;continue;}polled++;
       try{
         const rows=await source.load(this.env);rowsSeen+=rows.length;let sourceNew=0;
         for(const row of rows){
@@ -30,11 +32,11 @@ export class FreeRevenueGlobalWorkHunter extends RevenueGlobalWorkHunter {
           if(lead.humanGate){this.archiveLead(lead.id,'protected_registration_or_identity_step_required',lead);continue;}
           const prev=this.state.leads?.[lead.id];if(!prev){newLeads++;sourceNew++;}
           const directRouteHint=/\b(apply|application|send (?:your )?(?:proposal|cv|resume)|email|contact|contract|freelance|claim|bounty|bid)\b/i.test(`${row.title||''} ${row.snippet||''}`);
-          this.state.leads[lead.id]={...prev,...lead,directRouteHint,freeSource:source.name,firstSeenAt:prev?.firstSeenAt||new Date().toISOString(),lastSeenAt:new Date().toISOString()};
+          this.state.leads[lead.id]={...prev,...lead,externalId:row.externalId||prev?.externalId,currency:row.currency||lead.payoutCurrency,payoutUsd:row.payoutUsd,marketId:row.marketId||prev?.marketId,directRouteHint,freeSource:source.name,firstSeenAt:prev?.firstSeenAt||new Date().toISOString(),lastSeenAt:new Date().toISOString()};
         }
-        this.state.freeSources[source.name]={lastPollAt:new Date().toISOString(),lastSuccessAt:new Date().toISOString(),lastCount:rows.length,lastNew:sourceNew,error:''};
+        this.state.freeSources[source.name]={lastPollAt:new Date().toISOString(),lastSuccessAt:new Date().toISOString(),lastCount:rows.length,lastNew:sourceNew,emptyPolls:sourceNew?0:Number(state.emptyPolls||0)+1,error:''};
         this.event('free_job_source_polled',{source:source.name,rows:rows.length,newLeads:sourceNew});
-      }catch(error){failed++;this.state.freeSources[source.name]={...state,lastPollAt:new Date().toISOString(),error:String(error?.message||error).slice(0,220)};this.event('free_job_source_failed',{source:source.name,error:String(error?.message||error).slice(0,220)});}
+      }catch(error){failed++;this.state.freeSources[source.name]={...state,lastPollAt:new Date().toISOString(),emptyPolls:Number(state.emptyPolls||0)+1,error:String(error?.message||error).slice(0,220)};this.event('free_job_source_failed',{source:source.name,error:String(error?.message||error).slice(0,220)});}
     }
     this.persist();return{newLeads,freeSources:{polled,skipped,failed,rowsSeen},directNewLeads:0,directQueryPool:0};
   }
@@ -46,7 +48,7 @@ async function loadFreelancer(){
   return projects.map(p=>{
     const budget=p?.budget||{};const currency=String(p?.currency?.code||p?.currency?.sign||'USD');const min=Number(budget?.minimum||0),max=Number(budget?.maximum||0);
     const raw=String(p?.seo_url||'').replace(/^\/+|\/+$/g,'');const url=raw?`https://www.freelancer.com/projects/${raw}`:`https://www.freelancer.com/projects/${p?.id||''}`;
-    return{title:String(p?.title||''),url,score:2,snippet:cleanHtml(`Freelancer paid project. Budget ${min}${max?`-${max}`:''} ${currency}. ${p?.preview_description||p?.description||''} Apply/bid on the explicit project listing.`).slice(0,6000)};
+    return{externalId:String(p.id),marketId:'freelancer.com',currency,payoutUsd:currency==='USD'?(min||max):null,title:String(p?.title||''),url,score:2,snippet:cleanHtml(`Freelancer paid project. Budget ${min}${max?`-${max}`:''} ${currency}. ${p?.preview_description||p?.description||''} Apply/bid on the explicit project listing.`).slice(0,6000)};
   }).filter(row=>validRow(row)&&/\d/.test(row.snippet));
 }
 
@@ -73,7 +75,7 @@ async function loadRemotive(){const data=await getJson('https://remotive.com/api
 async function loadWwr(){const xml=await getText('https://weworkremotely.com/remote-jobs.rss');const items=[...xml.matchAll(/<item\b[\s\S]*?<\/item>/gi)].map(match=>match[0]);return items.slice(0,250).map(item=>({title:xmlValue(item,'title'),url:xmlValue(item,'link'),score:1,snippet:cleanHtml(`${xmlValue(item,'description')} ${xmlValue(item,'category')}`).slice(0,6000)})).filter(validRow);}
 async function loadGithubBounties(env={}){
   const queries=['is:issue is:open bounty','is:issue is:open "paid" reward','is:issue is:open USDC bounty','is:issue is:open USDT bounty','is:issue is:open label:"💎 Bounty"'];const out=[],seen=new Set();
-  for(const query of queries){const headers={accept:'application/vnd.github+json','user-agent':'AutonomOS-FreeRevenueHunter/1.0'};const token=String(env.GITHUB_TOKEN||'').trim();if(token)headers.authorization=`Bearer ${token}`;const u=new URL('https://api.github.com/search/issues');u.searchParams.set('q',query);u.searchParams.set('sort','updated');u.searchParams.set('order','desc');u.searchParams.set('per_page','30');const r=await fetch(u,{headers,signal:AbortSignal.timeout(20_000)});if(!r.ok)throw new Error(`github_issues_http_${r.status}`);const data=await r.json();for(const issue of Array.isArray(data?.items)?data.items:[]){const url=String(issue?.html_url||'');if(!url||seen.has(url)||issue?.pull_request)continue;seen.add(url);const labels=(issue?.labels||[]).map(x=>typeof x==='string'?x:String(x?.name||'')).join(' ');const body=String(issue?.body||'');const text=`${issue?.title||''} ${labels} ${body}`;if(!/(?:\$\s?\d|\b\d+(?:\.\d+)?\s?(?:USD|USDC|USDT|DAI|ETH|SOL|BTC)\b)/i.test(text))continue;out.push({title:String(issue?.title||'GitHub paid bounty'),url,score:1,snippet:cleanHtml(`GitHub issue bounty ${labels} ${body}`).slice(0,6000)});}}
+  for(const query of queries){const headers={accept:'application/vnd.github+json','user-agent':'AutonomOS-FreeRevenueHunter/1.0'};const token=String(env.GITHUB_TOKEN||'').trim();if(token)headers.authorization=`Bearer ${token}`;const u=new URL('https://api.github.com/search/issues');u.searchParams.set('q',query);u.searchParams.set('sort','updated');u.searchParams.set('order','desc');u.searchParams.set('per_page','30');const r=githubAvailable(env)?await githubRequest(u.pathname+u.search,{env}):await fetch(u,{headers,signal:AbortSignal.timeout(20_000)});if(!r.ok)throw new Error(`github_issues_http_${r.status}`);const data=r.value||await r.json();for(const issue of Array.isArray(data?.items)?data.items:[]){const url=String(issue?.html_url||'');if(!url||seen.has(url)||issue?.pull_request)continue;seen.add(url);const labels=(issue?.labels||[]).map(x=>typeof x==='string'?x:String(x?.name||'')).join(' ');const body=String(issue?.body||'');const text=`${issue?.title||''} ${labels} ${body}`;if(!/(?:\$\s?\d|\b\d+(?:\.\d+)?\s?(?:USD|USDC|USDT|DAI|ETH|SOL|BTC)\b)/i.test(text))continue;out.push({title:String(issue?.title||'GitHub paid bounty'),url,score:1,snippet:cleanHtml(`GitHub issue bounty ${labels} ${body}`).slice(0,6000)});}}
   return out.slice(0,160).filter(validRow);
 }
 

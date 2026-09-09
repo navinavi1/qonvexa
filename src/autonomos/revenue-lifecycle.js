@@ -1,3 +1,4 @@
+import { isRetiredMarket } from './retired-markets.js';
 import { businessSnapshot } from './business-snapshot.js';
 import path from 'node:path';
 import fs from 'node:fs';
@@ -27,6 +28,7 @@ async function safeJson(r){try{return await r.json();}catch{return{};}}
 export function lifecycleAwareShouldInspect(lead, original){
   const action=this.state?.actions?.[lead?.id]||{};
   const status=String(action.status||'');
+  if(action.acceptedAt||['application_uncertain','submitted','qa','repairing','delivery_ready','executing_github'].includes(status))return false;
   if(EMAIL_ACCEPTED_RETRY.has(status)||['executing_email','delivery_email_in_progress','submitted_email','paid'].includes(status))return false;
   if(status==='submission_uncertain'&&action.acceptedAt)return false;
   return original.call(this,lead);
@@ -45,6 +47,8 @@ export async function hardenedGmailTick(){
     await this.probeMailbox();
     const entries=Object.entries(this.actioner.state?.actions||{}).filter(([,a])=>{
       const s=String(a?.status||'');
+      if(a.route==='github_issue_comment')return false;
+      if(a.acceptedAt&&['qa','repairing','delivery_ready'].includes(s))return ageMs(a.updatedAt)>15*60_000;
       if(EMAIL_MONITOR.has(s)||EMAIL_ACCEPTED_RETRY.has(s)||s==='submission_uncertain')return due(a?.nextCheckAt);
       if(s==='executing_email'||s==='delivery_email_in_progress')return ageMs(a?.updatedAt)>15*60_000;
       return false;
@@ -55,7 +59,7 @@ export async function hardenedGmailTick(){
         if(EMAIL_ACCEPTED_RETRY.has(status)){
           await this.executeAndDeliver(id,action);continue;
         }
-        if(status==='executing_email'){
+        if(status==='executing_email'||action.acceptedAt&&['qa','repairing','delivery_ready'].includes(status)){
           this.actioner.setAction(id,{status:'accepted_email',recoveredFrom:'stale_executing_email',nextCheckAt:''});
           this.log('email_execution_recovered_after_restart',{id});
           await this.executeAndDeliver(id,this.actioner.state.actions[id]);continue;
@@ -156,7 +160,8 @@ export async function hardenedTaskForceTick(){
     await this.withdrawOwnerShare(credential).catch(error=>this.event('withdraw_error',{error:safe(error)}));
     const global=this.read(this.globalStateFile,{}),apps=global?.taskforce?.applications||{};
     const accepted=Object.entries(apps).filter(([,app])=>TF_ACCEPTED.has(String(app?.status||'').toUpperCase()));
-    const maxSequential=Math.max(1,Math.min(5,Number(this.env.AUTONOMOS_TASKFORCE_ACCEPTED_PER_TICK||3)));let processed=0;
+    const maxSequential=Math.max(1,Math.min(20,Number(this.env.AUTONOMOS_TASKFORCE_ACCEPTED_PER_TICK||5)));let processed=0;const queued=[];
+    accepted.sort(([a],[b])=>Date.parse(global.taskforce.tasks?.[a]?.deadline||'9999-01-01')-Date.parse(global.taskforce.tasks?.[b]?.deadline||'9999-01-01'));
     for(const [taskId,app] of accepted){
       const row=this.state.tasks[taskId]||{},status=String(row.status||''),appStatus=String(app?.status||'').toUpperCase();
       if(status==='submitting'){this.state.tasks[taskId]={...row,status:'submission_uncertain',submitError:'restart_after_delivery_intent'};this.persist();continue;}
@@ -168,13 +173,14 @@ export async function hardenedTaskForceTick(){
       if(appStatus==='SUBMISSION_REJECTED'&&Number(row.repairCycles||0)>=3){this.state.tasks[taskId]={...row,status:'rejected_after_repairs',updatedAt:new Date().toISOString()};this.persist();continue;}
       if(status==='submit_failed'&&row.deliverableSnapshot&&row.qaSnapshot?.ok){
         this.event('task_submit_retry_from_snapshot',{taskId});
-        await this.submit(taskId,row.deliverableSnapshot,row.qaSnapshot,credential,row.submitMeta||{});processed++;
+        queued.push(()=>this.submit(taskId,row.deliverableSnapshot,row.qaSnapshot,credential,row.submitMeta||{}));processed++;
       }else{
         if(status==='blocked_capability')this.event('task_capability_recheck',{taskId,missingTools:row.missingTools||[]});
-        await this.executeAccepted(taskId,app,global,credential);processed++;
+        queued.push(()=>this.executeAccepted(taskId,app,global,credential));processed++;
       }
       if(processed>=maxSequential)break;
     }
+    await Promise.allSettled(queued.map(run=>run()));
     const pending=Object.values(apps).filter(a=>String(a?.status||'').toUpperCase()==='PENDING').length;
     if(accepted.length||pending)this.event('worker_queue_diagnostics',{accepted:accepted.length,pending,processed,localTasks:Object.keys(this.state.tasks||{}).length});
   }finally{this.running=false;}
@@ -198,9 +204,9 @@ export function hardenedMoneyRefresh(){try{
     registryOpen:Object.values(registry||{}).filter(r=>!['archived','graveyard','rejected','expired','cancelled','settled','paid'].includes(String(r?.status||''))).length
   };
   const report={generatedAt:now.toISOString(),date:day,split:{ownerPercent:Number(config.ownerRevenuePercent||50),agentTreasuryPercent:Number(config.agentTreasuryPercent||50)},counts,money:{grossRevenueUsd:round(gross),feesUsd:round(fees),toolAndInfraCostUsd:round(cost),netProfitUsd:round(gross-fees-cost),ownerShareUsd:round(owner),agentTreasuryShareUsd:round(treasury)},bySource:Object.fromEntries(Object.entries(bySource).map(([k,v])=>[k,{revenueUsd:round(v.revenueUsd),costUsd:round(v.costUsd),netUsd:round(v.netUsd)}]).sort((a,b)=>b[1].netUsd-a[1].netUsd)),guardrails:{earnedFundsOnly:Boolean(config.earnedFundsOnly),allowExternalSpending:Boolean(config.allowExternalSpending),autoReplication:Boolean(config.autoReplication),survivalMode:Boolean(config.survivalMode)}};
-  const truth=businessSnapshot(path.dirname(this.root),this.env);report.counts={...report.counts,found:truth.counts.discovered,applied:truth.counts.applications,accepted:truth.counts.accepted,working:truth.counts.executing,submitted:truth.counts.delivered,paid:truth.counts.paid};report.funnel=truth.counts;
+  const truth=businessSnapshot(path.dirname(this.root),this.env);report.counts={...report.counts,found:truth.counts.discovered,applied:truth.counts.applications,accepted:truth.counts.accepted,working:truth.counts.executing,submitted:truth.counts.delivered,paid:truth.counts.paid};report.funnel=truth.counts;report.money={...report.money,grossRevenueUsd:truth.money.grossRevenueUsd,feesUsd:truth.money.feesUsd,toolAndInfraCostUsd:truth.money.costUsd,netProfitUsd:truth.money.netProfitUsd,costsAreEstimates:truth.money.costsAreEstimates,ownerShareUsd:Math.max(0,truth.money.netProfitUsd)*Number(config.ownerRevenuePercent||50)/100,agentTreasuryShareUsd:Math.max(0,truth.money.netProfitUsd)*Number(config.agentTreasuryPercent||50)/100};report.counts.registryOpen=Object.values(registry||{}).filter(r=>!isRetiredMarket(r)&&!['retired','archived','graveyard','rejected','expired','cancelled','settled','paid'].includes(String(r.status))).length;
   writeJson(this.file,report,0o600);writeJson(this.publicFile,report,0o644);
-  const summary={type:this.lastDaily!==day?'daily_money_report':'money_report_updated',date:day,netProfitUsd:report.money.netProfitUsd,ownerShareUsd:report.money.ownerShareUsd,agentTreasuryShareUsd:report.money.agentTreasuryShareUsd,...counts};this.lastDaily=day;this.logger.info?.('[MoneyReport] '+JSON.stringify(summary));
+  const summary={type:this.lastDaily!==day?'daily_money_report':'money_report_updated',date:day,netProfitUsd:report.money.netProfitUsd,ownerShareUsd:report.money.ownerShareUsd,agentTreasuryShareUsd:report.money.agentTreasuryShareUsd,...report.counts};this.lastDaily=day;this.logger.info?.('[MoneyReport] '+JSON.stringify(summary));
 }catch(error){try{this.logger.warn?.('[MoneyReport] '+safe(error));}catch{}}};
 
 function readJson(file,fallback){try{return JSON.parse(fs.readFileSync(file,'utf8'));}catch{return structuredClone(fallback);}}

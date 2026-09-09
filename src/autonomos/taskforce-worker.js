@@ -1,3 +1,4 @@
+import { runAcceptedJob } from './accepted-job-engine.js';
 import { ActionJournal } from './action-journal.js';
 import { hardenedTaskForceTick, hardenedTaskForceSubmit } from './revenue-lifecycle.js';
 import { recoverFreeCapability } from './free-tool-recovery.js';
@@ -47,7 +48,7 @@ export class TaskForceWorker {
   async executeAccepted(taskId,application,global,credential){
     const started=Date.now();
     const previous=this.state.tasks[taskId]||{};
-    this.state.tasks[taskId]={...previous,status:'preparing',applicationId:String(application?.applicationId||''),updatedAt:new Date().toISOString()};this.persist();
+    this.state.tasks[taskId]={...previous,status:'preparing',acceptedAt:previous.acceptedAt||new Date().toISOString(),applicationId:String(application?.applicationId||''),updatedAt:new Date().toISOString()};this.persist();
     const task=await this.fetchTask(taskId,global?.taskforce?.tasks?.[taskId],credential);
     if(!task){this.state.tasks[taskId]={...this.state.tasks[taskId],status:'task_detail_unavailable',updatedAt:new Date().toISOString()};this.persist();return;}
     const messages=await this.fetchMessages(taskId,credential);
@@ -70,20 +71,8 @@ export class TaskForceWorker {
     let briefing='';let deliverable=null;let qa=null;const maxRepairs=Math.max(1,Math.min(5,Number(this.env.AUTONOMOS_TASKFORCE_QA_REPAIRS||3)));
     const baseRepair=String(application?.status||'').toUpperCase()==='SUBMISSION_REJECTED'?Number(previous.repairCycles||0)+1:Number(previous.repairCycles||0);
 
-    for(let attempt=0;attempt<maxRepairs;attempt++){
-      this.state.tasks[taskId]={...this.state.tasks[taskId],status:'executing',attempt:attempt+1,skill:capability.skill,treasuryBudgetUsd:treasuryUsd,budgetRemainingUsd:budget.remaining,updatedAt:new Date().toISOString()};this.persist();
-      try{
-        deliverable=await executeExternalOpportunity(opportunity,capability,{llm:budgetedLlm,siteUrl:String(this.env.SITE_URL||this.env.PUBLIC_URL||''),env:this.env,config:executionConfig,briefing,budget});
-        qa=await evaluateDeliverable(opportunity,deliverable,{llm:budgetedLlm,env:this.env});
-        if(qa.ok)break;
-        briefing=`Previous attempt failed QA. Repair the deliverable instead of repeating it. QA reasons: ${(qa.reasons||[]).join('; ')}. Previous output:\n${String(deliverable?.content||'').slice(0,5000)}`;
-        this.event('task_qa_repair',{taskId,attempt:attempt+1,reasons:qa.reasons||[]});
-      }catch(error){
-        briefing=`Previous execution failed. Change approach/tools and finish the accepted task. Failure: ${safeError(error)}`;
-        this.event('task_execution_repair',{taskId,attempt:attempt+1,error:safeError(error)});
-        if(/job_spend_limit|job_spend_ceiling|emergency_stop/i.test(String(error?.message||error)))break;
-      }
-    }
+    try{({deliverable,qa}=await runAcceptedJob({opportunity,capability,llm:budgetedLlm,budget,env:this.env,config:executionConfig,store:this.store,revision:baseRepair,maxRepairs,onPhase:(phase,detail)=>{this.state.tasks[taskId]={...this.state.tasks[taskId],status:phase,...detail,updatedAt:new Date().toISOString()};this.persist();}}));}
+    catch(error){this.state.tasks[taskId]={...this.state.tasks[taskId],status:'execution_recovery_pending',error:safeError(error),retryAt:new Date(Date.now()+900000).toISOString()};this.persist();return;}
 
     if(!deliverable||!qa?.ok){
       this.state.tasks[taskId]={...this.state.tasks[taskId],status:'repair_exhausted',repairCycles:baseRepair+1,qaReasons:qa?.reasons||[],budgetSpentUsd:budget.spent,updatedAt:new Date().toISOString()};this.persist();return;
@@ -139,7 +128,7 @@ export class TaskForceWorker {
       const amount=Number(tx?.amount||tx?.amountUsd||0);if(!(amount>0)||!['paid','settled','completed','released','confirmed'].includes(String(tx.status||'').toLowerCase())||!String(tx.id||tx.transactionHash||tx.txHash||''))continue;
       const stable=String(tx?.transactionHash||tx?.txHash||tx.id);
       const id=`taskforce_revenue_${hash(stable)}`;const allocation=allocateRevenue(amount,config);
-      const added=appendUniqueLedgerEntry(this.store,ledgerEntry({id,type:'revenue',source:'taskforce',grossUsd:amount,amountUsd:amount,currency:'USDC',rail:'taskforce_solana_wallet',network:'solana',txId:String(tx?.transactionHash||tx?.txHash||''),status:'settled',allocation,note:String(tx?.taskTitle||'TaskForce completed task').slice(0,200)}));
+      const added=appendUniqueLedgerEntry(this.store,ledgerEntry({id,type:'revenue',jobId:tx.taskId?'taskforce_'+tx.taskId:'',externalId:String(tx.taskId||''),externalTransactionId:stable,source:'taskforce',grossUsd:amount,amountUsd:amount,currency:'USDC',rail:'taskforce_solana_wallet',network:'solana',txId:String(tx?.transactionHash||tx?.txHash||''),status:'settled',allocation,note:String(tx?.taskTitle||'TaskForce completed task').slice(0,200)}));
       this.state.settlements[id]={id,amountUsd:amount,allocation,txHash:String(tx?.transactionHash||tx?.txHash||''),taskTitle:String(tx?.taskTitle||''),date:String(tx?.date||''),ledgerRecorded:true,ownerWithdrawn:Boolean(this.state.settlements[id]?.ownerWithdrawn),withdrawalState:this.state.settlements[id]?.withdrawalState||''};
       if(added)this.event('revenue_settled',{id,amountUsd:amount,ownerUsd:allocation.ownerUsd,agentTreasuryUsd:allocation.treasuryUsd});
     }

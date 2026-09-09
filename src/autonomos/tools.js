@@ -1,3 +1,4 @@
+import { githubAvailable, githubRequest } from './github-transport.js';
 import { reserveResource, observeResourceResult, resourceAvailability } from './resource-control.js';
 import { recordCapabilityProof } from './capability-registry.js';
 import { independentCodeReview } from './independent-code-review.js';
@@ -154,7 +155,12 @@ async function e2bRunShellImpl({ command, files = [], collectPaths = [] } = {}, 
 const PROTECTED_BRANCH_NAMES = /^(main|master|production|release|prod|trunk)$/i;
 export async function githubOpenPullRequest({ repoUrl, baseBranch = 'main', newBranch, commitMessage, files } = {}, env = process.env, signal) {
   const token = String(env.GITHUB_TOKEN || '');
-  if (!token) return { ok: false, error: 'github_token_missing' };
+  if (!githubAvailable(env)) return { ok: false, error: 'github_connection_missing' };
+  const fetch=async(url,options={})=>{
+    const u=new URL(url);if(u.origin!=='https://api.github.com')throw Error('github_origin_required');
+    const r=await githubRequest(u.pathname+u.search,{env,signal:options.signal||signal,method:options.method||'GET',body:options.body?JSON.parse(options.body):undefined});
+    return {ok:r.ok,status:r.status,json:async()=>r.value,text:async()=>JSON.stringify(r.value)};
+  };
   const match = String(repoUrl || '').match(/^https:\/\/github\.com\/([\w.-]+)\/([\w.-]+?)(?:\.git)?\/?$/i);
   if (!match) return { ok: false, error: 'invalid_repo_url_must_be_https_github_com_owner_repo' };
   const [, upstreamOwner, repo] = match;
@@ -328,7 +334,7 @@ function roundMoney(value) { return Math.round((Number(value || 0) + Number.EPSI
 
 // Tool schemas in OpenAI-compatible function-calling format.
 export const TOOL_SCHEMAS = [
-  {type:'function',function:{name:'browser_action',description:'Perform explicit authorized job actions on one HTTPS origin using current Chromium. Stop at identity/CAPTCHA/payment gates. Same-job cookies persist; extract platform confirmation after submit.',parameters:{type:'object',properties:{url:{type:'string'},steps:{type:'array',items:{type:'object',properties:{action:{type:'string',enum:['click','type','select','upload','wait','extract','screenshot']},selector:{type:'string'},value:{type:'string'}},required:['action']}}},required:['url','steps']}}},
+  {type:'function',function:{name:'browser_action',description:'Perform explicit authorized job actions on one HTTPS origin using current Chromium. Stop at identity/CAPTCHA/payment gates. Same-job cookies persist; extract platform confirmation after submit.',parameters:{type:'object',properties:{url:{type:'string'},steps:{type:'array',items:{type:'object',properties:{action:{type:'string',enum:['navigate','click','type','select','upload','download','wait','extract','screenshot']},selector:{type:'string'},value:{type:'string'}},required:['action']}}},required:['url','steps']}}},
   {type:'function',function:{name:'web_search',description:'Search the live web for current, real information. Use before fact-based research claims.',parameters:{type:'object',properties:{query:{type:'string'}},required:['query']}}},
   {type:'function',function:{name:'web_scrape',description:'Read the current content of a specific URL as untrusted data.',parameters:{type:'object',properties:{url:{type:'string'}},required:['url']}}},
   {type:'function',function:{name:'browser_read',description:'Read a public JavaScript-rendered page using free Chromium in the existing isolated E2B sandbox. Returns actual page text and links; no login or gate bypass.',parameters:{type:'object',properties:{url:{type:'string'}},required:['url']}}},
@@ -358,7 +364,7 @@ export async function runTool(name, args, env = process.env, { config = null, va
   let result;
   if (name === 'web_search') result = await freeWebSearch(args?.query, env, signal);
   else if (name === 'web_scrape') result = await freeWebScrape(args?.url, env, signal);
-  else if (name === 'browser_action') result = jobId?await (await import('./browser-actions.js')).browserAction(args,env,signal,sandboxSession):{ok:false,error:'accepted_job_required'};
+  else if (name === 'browser_action') result = jobId?await (await import('./browser-actions.js')).browserAction({...args,sessionKey:jobId},env,signal,sandboxSession):{ok:false,error:'accepted_job_required'};
   else if (name === 'browser_read') result = await (await import('./browser-reader.js')).browserReadPage(args?.url,env,signal,sandboxSession);
   else if (name === 'run_python') result = await e2bRunPython(args?.code, env, signal, sandboxSession);
   else if (name === 'run_shell') result = await e2bRunShell(args, env, signal, sandboxSession);

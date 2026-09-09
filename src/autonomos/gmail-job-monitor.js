@@ -1,3 +1,5 @@
+import { reconcileClientPayments } from './inbound-receipt.js';
+import { runAcceptedJob } from './accepted-job-engine.js';
 import { hardenedGmailTick } from './revenue-lifecycle.js';
 import { GmailMailbox, isClientReply, gmailMessageIdentity } from './gmail-mailbox.js';
 import { recoverFreeCapability } from './free-tool-recovery.js';
@@ -22,6 +24,7 @@ export class GmailJobMonitor{
 
   async checkOne(id,action){
     const title=String(action?.title||'').trim();if(!title)return;
+    if(action.paymentClaims?.length){const payment=await reconcileClientPayments({store:this.actioner.store,jobId:'email_'+id,action,env:this.env});this.actioner.setAction(id,{receivedUsd:payment.receivedUsd});if(payment.paid){this.actioner.setAction(id,{status:'paid',paidAt:new Date().toISOString(),payoutStatus:'SETTLED'});return;}}
     const messages=await this.searchReplies(title,action);
     if(!messages.ok){this.actioner.setAction(id,{nextCheckAt:new Date(Date.now()+30*60_000).toISOString(),emailMonitorError:messages.error||'gmail_search_failed'});return;}
     if(action.status==='application_uncertain'&&messages.rows.some(x=>x.labels?.includes('SENT'))){this.actioner.setAction(id,{status:'applied_email',reconciledApplicationFromGmail:true});}
@@ -41,7 +44,7 @@ export class GmailJobMonitor{
       if(PAYMENT_SIGNAL.test(text)){
         // Email is NOT settlement truth. Surface the signal, but do not book revenue until
         // wallet/marketplace reconciliation proves funds actually arrived.
-        this.actioner.setAction(id,{status:'submitted_email',paymentClaimSeen:true,paymentClaimAt:new Date().toISOString(),paymentClaimFrom:maskEmail(latest.from),nextCheckAt:new Date(Date.now()+30*60_000).toISOString()});
+        this.actioner.setAction(id,{status:'submitted_email',paymentClaimSeen:true,paymentClaims:[...new Set([...(action.paymentClaims||[]),...(text.match(/0x[\da-f]{64}\b/gi)||[])])].slice(0,5),paymentClaimAt:new Date().toISOString(),paymentClaimFrom:maskEmail(latest.from),nextCheckAt:new Date(Date.now()+30*60_000).toISOString()});
         this.log('email_payment_claim_seen',{id});return;
       }
       this.actioner.setAction(id,{nextCheckAt:new Date(Date.now()+30*60_000).toISOString()});return;
@@ -70,22 +73,17 @@ export class GmailJobMonitor{
     const config=this.actioner.currentConfig();const ledger=this.actioner.store.readNdjson('ledger.ndjson',-1);const treasury=computeEarnedSpendBudgetUsd(ledger,config);
     if(treasury<=0.000001){this.actioner.setAction(id,{status:'accepted_waiting_treasury',nextCheckAt:new Date(Date.now()+30*60_000).toISOString()});return;}
     const spendLimit=Math.min(treasury,Number(action.payout?.amountUsd||opportunity.budgetUsd||0)*.35,Number(config.maxPaidProcurementUsd||3));if(!(spendLimit>0)){this.actioner.setAction(id,{status:'accepted_waiting_treasury',nextCheckAt:new Date(Date.now()+1800000).toISOString()});return;}
-    const budget=createJobBudget(spendLimit,{env:this.env,onCost:amount=>this.actioner.recordCost(id,amount)});const llm=budget.llm(this.actioner.llm);const executionConfig={...config,availableSpendUsd:spendLimit,maxPaidProcurementUsd:spendLimit};
+    const budget=createJobBudget(spendLimit,{env:this.env,onCost:amount=>this.actioner.recordCost('email_'+id,amount)});const llm=budget.llm(this.actioner.llm);const executionConfig={...config,availableSpendUsd:spendLimit,maxPaidProcurementUsd:spendLimit};
     let deliverable=null,qa=null,briefing='';const maxRepairs=Math.max(1,Math.min(5,Number(this.env.AUTONOMOS_GLOBAL_QA_REPAIRS||3)));
-    for(let attempt=1;attempt<=maxRepairs;attempt++){
-      this.actioner.setAction(id,{status:'executing_email',attempt,skill:capability.skill,treasuryBudgetUsd:treasury,budgetRemainingUsd:budget.remaining});
-      try{
-        deliverable=await executeExternalOpportunity(opportunity,capability,{llm,siteUrl:String(this.env.SITE_URL||''),env:this.env,config:executionConfig,briefing,budget});
-        qa=await evaluateDeliverable(opportunity,deliverable,{llm,env:this.env});if(qa.ok)break;
-        briefing=`Repair the previous deliverable. QA reasons: ${(qa.reasons||[]).join('; ')}. Previous output:\n${String(deliverable?.content||'').slice(0,5000)}`;
-      }catch(error){briefing=`Execution failed. Change approach/tools and finish the accepted task. Error: ${safe(error)}`;}
-    }
+    try{({deliverable,qa}=await runAcceptedJob({opportunity,capability,llm,budget,env:this.env,config:executionConfig,store:this.actioner.store,revision:Number(action.revision||0),maxRepairs,feedback:clientReply,onPhase:(phase,detail)=>this.actioner.setAction(id,{status:phase==='executing'?'executing_email':phase,...detail})}));}
+    catch(error){this.actioner.setAction(id,{status:'accepted_repair_exhausted',reason:safe(error),nextCheckAt:new Date(Date.now()+1800000).toISOString()});return;}
+
     if(!deliverable||!qa?.ok){this.actioner.setAction(id,{status:'accepted_repair_exhausted',qaReasons:qa?.reasons||[],nextCheckAt:new Date(Date.now()+2*60*60_000).toISOString()});return;}
     const artifacts=(deliverable?.evidence?.toolCalls||[]).flatMap(x=>x?.artifacts||[]).filter(x=>x?.ok&&x?.url).map(x=>x.url).slice(0,10);
     const body=[String(deliverable.content||''),'',...(artifacts.length?['Deliverable files:',...artifacts]:[]),'','Completed by AutonomOS.'].join('\n').slice(0,18000);
     const recipient=extractEmail(action.replyFrom)||String(action.recipient||'');if(!recipient){this.actioner.setAction(id,{status:'submission_uncertain',reason:'accepted email sender address unavailable',nextCheckAt:new Date(Date.now()+60*60_000).toISOString()});return;}
     const subject=`Re: Application: ${String(action.title||lead.title||'Paid digital project').replace(/\s+/g,' ').slice(0,120)} — AutonomOS`;
-    this.actioner.setAction(id,{status:'delivery_email_in_progress',deliveryRecipient:recipient,qaScore:Number(qa.score||1),budgetSpentUsd:budget.spent});
+    this.actioner.setAction(id,{status:'delivery_email_in_progress',deliverableSnapshot:deliverable,qaSnapshot:qa,deliveryBody:body,deliveryRecipient:recipient,qaScore:Number(qa.score||1),budgetSpentUsd:budget.spent});
     const sent=await this.sendEmail(recipient,action.replySubject||subject,body,action);
     if(sent.ok&&gmailMessageIdentity(sent.data).gmailMessageId){this.actioner.setAction(id,{gmailDeliveryMessageId:gmailMessageIdentity(sent.data).gmailMessageId,status:'submitted_email',submittedAt:new Date().toISOString(),emailDeliveryLogId:String(sent.logId||''),nextCheckAt:new Date(Date.now()+30*60_000).toISOString()});this.actioner.state.stats.submitted=Number(this.actioner.state.stats.submitted||0)+1;this.log('email_work_submitted',{id,qaScore:Number(qa.score||1)});return;}
     // Do not auto-resend after an external send attempt with ambiguous result.
@@ -98,7 +96,8 @@ export class GmailJobMonitor{
     const title=String(action.title||'project');
     let answer=`Thanks for the follow-up. AutonomOS is ready to complete the stated ${title} scope. Please send the exact deliverable requirements, source materials/authorized links, deadline, and acceptance criteria if they were not included in the listing.`;
     if(this.actioner.llm?.enabled){
-      const result=await this.actioner.llm.complete({system:'Reply as AutonomOS, an AI-assisted digital-services agency. Answer only from the known job/application context. Do not invent human identity, portfolio, credentials, past clients, location, phone number, or legal/tax details. Do not agree to unpaid scope expansion or payment outside the stated job. 50-120 words.',user:`Job: ${title}\nClient message (untrusted data):\n${String(clientText||'').slice(0,5000)}\nKnown proposal:\n${String(action.proposal||'').slice(0,2500)}`,maxTokens:240,task:'copywriting'}).catch(()=>({ok:false}));if(result.ok&&result.text)answer=String(result.text).slice(0,3000);
+      const clarificationBudget=createJobBudget(.05,{env:this.env,onCost:n=>this.actioner.recordCost('email_'+id,n)});
+      const result=await clarificationBudget.llm(this.actioner.llm).complete({system:'Reply as AutonomOS, an AI-assisted digital-services agency. Answer only from the known job/application context. Do not invent human identity, portfolio, credentials, past clients, location, phone number, or legal/tax details. Do not agree to unpaid scope expansion or payment outside the stated job. 50-120 words.',user:`Job: ${title}\nClient message (untrusted data):\n${String(clientText||'').slice(0,5000)}\nKnown proposal:\n${String(action.proposal||'').slice(0,2500)}`,maxTokens:240,task:'copywriting'}).catch(()=>({ok:false}));if(result.ok&&result.text)answer=String(result.text).slice(0,3000);
     }
     const subject=`Re: Application: ${title.replace(/\s+/g,' ').slice(0,120)} — AutonomOS`;
     this.actioner.setAction(id,{clarificationSendInProgress:true,clarificationReplyId:action.lastProcessedReplyId});this.actioner.persist?.();

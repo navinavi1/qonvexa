@@ -1,3 +1,4 @@
+import { isRetiredMarket } from './retired-markets.js';
 import {classifyFailure} from './job-registry.js';
 
 // Only operational counters/codes go to provider logs. Job content, credentials,
@@ -31,7 +32,7 @@ function buildRevenueSourceDiagnostics(state={},marketRows=[],registryRows=[]){
   };
   // Only current full-lifecycle/core earning rails are pre-seeded here. Other active
   // sources still appear automatically when they have live market rows or economics.
-  const coreIds=['clawlancer','dealwork','workprotocol'];
+  const coreIds=[];
   for(const source of coreIds){
     const row=get(source);const health=state.connectorHealth?.[source]||{};const lifecycle=state.marketplaceLifecycle?.[source]||{};
     row.discovered=Math.max(row.discovered,Number(health.count||health.openCount||health.signals||0));
@@ -66,7 +67,7 @@ function buildRevenueSourceDiagnostics(state={},marketRows=[],registryRows=[]){
     row.candidates+=Number(market.statuses?.eligible||0);
     for(const [reason,count] of Object.entries(market.blockers||{}))row.blockers[code(reason)]=(row.blockers[code(reason)]||0)+Number(count||0);
   }
-  return [...bySource.values()].sort((a,b)=>b.candidates-a.candidates||b.maxPayoutUsd-a.maxPayoutUsd||b.discovered-a.discovered||a.source.localeCompare(b.source));
+  return [...bySource.values()].filter(row=>!isRetiredMarket(row)).sort((a,b)=>b.candidates-a.candidates||b.maxPayoutUsd-a.maxPayoutUsd||b.discovered-a.discovered||a.source.localeCompare(b.source));
 }
 
 export function executionDiagnostics({config={},state={},registry=[],inFlight=[],newMarkets=[],capabilities={}}={}){

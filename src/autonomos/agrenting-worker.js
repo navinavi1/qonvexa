@@ -1,3 +1,4 @@
+import { runAcceptedJob } from './accepted-job-engine.js';
 import { DynamicMarketRegistry } from './dynamic-market-registry.js';
 import { ActionJournal } from './action-journal.js';
 import { recoverFreeCapability } from './free-tool-recovery.js';
@@ -63,12 +64,17 @@ export class AgrentingWorker{
   async pollPending(credential){
     const r=await fetch(`${BASE}/api/v1/hirings/pending`,{headers:{'x-api-key':credential.apiKey,accept:'application/json'},signal:AbortSignal.timeout(12_000)});const data=await json(r);if(!r.ok){this.event('pending_poll_failed',{status:r.status,error:publicError(data)});return;}
     const rows=arrayFrom(data,['hirings','items','data']);new DynamicMarketRegistry(this.root).observe('agrenting',{name:'Agrenting',homepage:BASE,lastJobsCount:rows.length,evidence:{authentication:{verified:true,externalId:credential.agentId,verifiedAt:new Date().toISOString()},...(rows.length?{jobs:{verified:true,url:BASE+'/api/v1/hirings/pending',verifiedAt:new Date().toISOString()}}:{})},blocker:rows.length?'':'NO_ASSIGNED_HIRINGS'});this.event('pending_polled',{count:rows.length});
-    for(const raw of rows.slice(0,10)){const h=normalizeHiring(raw);if(!h.id||!['in_progress','paid'].includes(h.status))continue;if(this.state.hirings[h.id]?.submittedAt)continue;await this.executeHiring(h,credential);}
+    const pending=rows.map(normalizeHiring).filter(h=>h.id&&['in_progress','paid','revision_requested'].includes(h.status)&&!this.state.hirings[h.id]?.submittedAt).sort((a,b)=>Date.parse(a.deadlineAt||'9999-01-01')-Date.parse(b.deadlineAt||'9999-01-01'));
+    await Promise.allSettled(pending.slice(0,10).map(h=>this.executeHiring({...h,clientMessage:this.state.hirings[h.id]?.clientMessage||h.clientMessage},credential).catch(e=>this.event('hiring_retry',{id:h.id,error:safe(e)}))));
   }
 
   async executeHiring(h,credential){
+    const prior=this.state.hirings[h.id]||{};
+    if(prior.retryAt&&Date.parse(prior.retryAt)>Date.now())return;
+    if(['submitting','submission_uncertain','submitted'].includes(prior.status)){await this.reconcileOne(h.id,credential);return;}
+    if(prior.deliverableSnapshot&&prior.qaSnapshot?.ok&&prior.status==='submission_failed'){await this.submitResult(h,prior.deliverableSnapshot,prior.qaSnapshot,credential);return;}
     // Pending hirings are already funded/assigned obligations; price filters apply to new offers only.
-    const opportunity={source:'agrenting',externalId:h.id,jobId:`agrenting_${h.id}`,title:h.title,description:`${h.description}\n${h.clientMessage}\n${safeJson(h.taskInput)}`.slice(0,12000),category:categoryFor(h.capability),budgetUsd:h.price,currency:'USD',network:'crypto_convertible',escrowed:true,claimMode:'already_assigned',status:'active',url:`${BASE}/`,skills:[h.capability]};
+    const opportunity={source:'agrenting',externalId:h.id,jobId:`agrenting_${h.id}`,deadline:h.deadlineAt,title:h.title,description:`${h.description}\n${h.clientMessage}\n${safeJson(h.taskInput)}`.slice(0,12000),category:categoryFor(h.capability),budgetUsd:h.price,currency:'USD',network:'crypto_convertible',escrowed:true,claimMode:'already_assigned',status:'active',url:`${BASE}/`,skills:[h.capability]};
     await refreshCapabilities(this.env);let capability=classifyOpportunity(opportunity,this.capabilityContext());
     if(!capability.executable){for(const gap of capability.missingTools||[])await recoverFreeCapability(gap,this.env);capability=classifyOpportunity(opportunity,this.capabilityContext());}
     if(!capability.executable){this.state.hirings[h.id]={...h,status:'waiting_capability',missingTools:capability.missingTools||[],retryAt:new Date(Date.now()+60_000).toISOString(),updatedAt:new Date().toISOString()};this.persist();return;}
@@ -76,26 +82,51 @@ export class AgrentingWorker{
     if(spendCap<=0.000001&&!capability.mode?.includes('deterministic')){this.state.hirings[h.id]={...h,status:'waiting_treasury',updatedAt:new Date().toISOString()};this.persist();return;}
     const budget=createJobBudget(Math.max(0,spendCap),{env:this.env,onCost:amount=>this.recordCost(h.id,amount)});const llm=budget.llm(this.llm);const execConfig={...config,availableSpendUsd:spendCap,maxPaidProcurementUsd:0,allowExternalSpending:false};
     let deliverable=null,qa=null,briefing='';const repairs=Math.max(1,Math.min(4,Number(this.env.AUTONOMOS_AGRENTING_QA_REPAIRS||3)));
-    this.state.hirings[h.id]={...h,status:'executing',startedAt:new Date().toISOString(),skill:capability.skill};this.persist();
-    for(let attempt=1;attempt<=repairs;attempt++){
-      try{deliverable=await executeExternalOpportunity(opportunity,capability,{llm,siteUrl:String(this.env.SITE_URL||''),env:this.env,config:execConfig,briefing,budget});qa=await evaluateDeliverable(opportunity,deliverable,{llm,env:this.env});if(qa.ok)break;briefing=`Repair against QA: ${(qa.reasons||[]).join('; ')}. Previous output:\n${String(deliverable?.content||'').slice(0,5000)}`;}catch(error){briefing=`Execution failed; use another available zero-procurement approach. Error: ${safe(error)}`;}
-    }
-    if(!deliverable||!qa?.ok){this.state.hirings[h.id]={...this.state.hirings[h.id],status:'qa_failed',qaReasons:qa?.reasons||[],updatedAt:new Date().toISOString()};this.persist();this.event('hiring_qa_retry_pending',{id:h.id,reasons:qa?.reasons||[]});return;}
-    const urls=(deliverable?.evidence?.toolCalls||[]).flatMap(x=>x?.artifacts||[]).filter(x=>x?.ok&&x?.url).map(x=>x.url).slice(0,10);
-    const payload={output:{content:String(deliverable.content||'').slice(0,30000),artifacts:urls,qa_score:Number(qa.score||1),completed_by:'AutonomOS'}};
-    const r=await fetch(`${BASE}/api/v1/hirings/${encodeURIComponent(h.id)}/result`,{method:'POST',headers:{'x-api-key':credential.apiKey,'content-type':'application/json',accept:'application/json','idempotency-key':`autonomos-result-${h.id}`},body:JSON.stringify(payload),signal:AbortSignal.timeout(20_000)});const data=await json(r);
-    if(!r.ok){this.state.hirings[h.id]={...this.state.hirings[h.id],status:'submission_failed',error:publicError(data),updatedAt:new Date().toISOString()};this.persist();this.event('result_submit_failed',{id:h.id,status:r.status,error:publicError(data)});return;}
-    this.state.hirings[h.id]={...this.state.hirings[h.id],status:'submitted',submittedAt:new Date().toISOString(),qaScore:Number(qa.score||1),budgetSpentUsd:budget.spent};this.persist();this.event('result_submitted',{id:h.id,price:h.price,qaScore:Number(qa.score||1)});await this.reconcileOne(h.id,credential);
+    this.state.hirings[h.id]={...prior,...h,status:'executing',startedAt:new Date().toISOString(),skill:capability.skill};this.persist();
+    try{({deliverable,qa}=await runAcceptedJob({opportunity,capability,llm,budget,env:this.env,config:execConfig,store:this.store,revision:Number(prior.revision||0),maxRepairs:repairs,feedback:h.clientMessage,onPhase:(phase,detail)=>{this.state.hirings[h.id]={...this.state.hirings[h.id],status:phase,...detail,acceptedAt:prior.acceptedAt||new Date().toISOString()};this.persist();}}));}
+    catch(error){this.state.hirings[h.id]={...this.state.hirings[h.id],status:'execution_recovery_pending',retryAt:new Date(Date.now()+1800000).toISOString(),error:safe(error)};this.persist();return;}
+
+    if(!deliverable||!qa?.ok){this.state.hirings[h.id]={...this.state.hirings[h.id],status:'qa_failed',retryAt:new Date(Date.now()+3600000).toISOString(),qaReasons:qa?.reasons||[],updatedAt:new Date().toISOString()};this.persist();this.event('hiring_qa_retry_pending',{id:h.id,reasons:qa?.reasons||[]});return;}
+    this.state.hirings[h.id]={...this.state.hirings[h.id],deliverableSnapshot:deliverable,qaSnapshot:qa,budgetSpentUsd:budget.spent};this.persist();
+    await this.submitResult(h,deliverable,qa,credential);
+  }
+
+  async submitResult(h,deliverable,qa,credential){
+    const revision=Number(this.state.hirings[h.id]?.revision||0),intent=this.actionJournal.begin('agrenting',h.id,'deliver:'+revision);
+    if(!intent.ok){await this.reconcileOne(h.id,credential);return;}
+    this.state.hirings[h.id]={...this.state.hirings[h.id],status:'submitting',submissionIntentId:intent.id};this.persist();
+    const urls=(deliverable.evidence?.toolCalls||[]).flatMap(x=>x.artifacts||[]).filter(x=>x.ok&&x.url).map(x=>x.url);
+    try{
+      const r=await fetch(`${BASE}/api/v1/hirings/${encodeURIComponent(h.id)}/result`,{method:'POST',headers:{'x-api-key':credential.apiKey,'content-type':'application/json',accept:'application/json','idempotency-key':`autonomos-result-${h.id}-${revision}`},body:JSON.stringify({output:{content:deliverable.content,artifacts:urls,qa_score:qa.score,completed_by:'AutonomOS'}}),signal:AbortSignal.timeout(20000)});
+      const data=await json(r),result=data.data?.result||data.result||data.data||data;
+      const proof=result.id||result.submission_id||result.result_id;
+      if(r.ok&&proof){this.actionJournal.finish(intent.id,'confirmed',{externalId:String(proof)});this.state.hirings[h.id]={...this.state.hirings[h.id],status:'submitted',submissionId:String(proof),submittedAt:new Date().toISOString()};}
+      else{const definite=[400,401,403,404,410,422,429].includes(r.status);this.actionJournal.finish(intent.id,definite?'definite_failure':'uncertain',{httpStatus:r.status});this.state.hirings[h.id]={...this.state.hirings[h.id],status:definite?'submission_failed':'submission_uncertain',retryAt:new Date(Date.now()+1800000).toISOString(),error:'result_http_'+r.status};}
+    }catch{this.actionJournal.finish(intent.id,'uncertain');this.state.hirings[h.id]={...this.state.hirings[h.id],status:'submission_uncertain'};}
+    this.persist();await this.reconcileOne(h.id,credential);
   }
 
   async failHiring(h,credential,reason){
     const r=await fetch(`${BASE}/api/v1/hirings/${encodeURIComponent(h.id)}/failure`,{method:'POST',headers:{'x-api-key':credential.apiKey,'content-type':'application/json',accept:'application/json'},body:JSON.stringify({reason:String(reason||'unsupported').slice(0,500)}),signal:AbortSignal.timeout(12_000)});this.state.hirings[h.id]={...(this.state.hirings[h.id]||h),status:r.ok?'failed_reported':'failure_report_uncertain',failureReason:String(reason||'').slice(0,500),updatedAt:new Date().toISOString()};this.persist();this.event('hiring_failed',{id:h.id,reported:r.ok,reason:String(reason||'').slice(0,180)});
   }
 
-  async reconcileSubmitted(credential){for(const [id,row] of Object.entries(this.state.hirings||{})){if(!row?.submittedAt||row.revenueRecordedAt)continue;await this.reconcileOne(id,credential);}}
+  async reconcileSubmitted(credential){for(const [id,row] of Object.entries(this.state.hirings||{})){if(!row?.submissionIntentId&&!row?.submittedAt||row.revenueRecordedAt)continue;await this.reconcileOne(id,credential);}}
   async reconcileOne(id,credential){
     const r=await fetch(`${BASE}/api/v1/hirings/${encodeURIComponent(id)}`,{headers:{'x-api-key':credential.apiKey,accept:'application/json'},signal:AbortSignal.timeout(12_000)});const data=await json(r);if(!r.ok)return;const row=data?.data?.hiring||data?.data||data?.hiring||data;const status=String(row?.status||'').toLowerCase();this.state.hirings[id]={...(this.state.hirings[id]||{}),marketStatus:status,lastReconciledAt:new Date().toISOString()};
-    if(status==='completed'&&!this.state.hirings[id].revenueRecordedAt){const price=Number(row?.price||this.state.hirings[id]?.price||0);const fee=Math.max(0,price*0.05);appendUniqueLedgerEntry(this.store,ledgerEntry({id:`agrenting_revenue_${id}`,type:'revenue',jobId:`agrenting_${id}`,externalId:id,source:'agrenting',grossUsd:price,amountUsd:price,feeUsd:fee,currency:'USD',rail:'agrenting_escrow',status:'settled',note:'Agrenting reports hiring completed; provider balance credited after platform fee'}));this.state.hirings[id].revenueRecordedAt=new Date().toISOString();this.state.hirings[id].settledNetUsd=Math.max(0,price-fee);this.event('revenue_settled',{id,grossUsd:price,feeUsd:fee,netUsd:Math.max(0,price-fee)});}this.persist();
+    const local=this.state.hirings[id];
+    const resultId=row?.result?.id||row?.submission_id||row?.result_id;
+    if(resultId&&['submitted','in_review','completed','paid','revision_requested'].includes(status)){
+      local.submissionId=String(resultId);local.submittedAt=local.submittedAt||new Date().toISOString();local.status='submitted';
+      if(local.submissionIntentId)this.actionJournal.finish(local.submissionIntentId,'confirmed',{externalId:String(resultId)});
+    }
+    if(status==='revision_requested'&&row.updated_at!==local.lastRevisionAt){local.status='revision_requested';local.revision=Number(local.revision||0)+1;local.lastRevisionAt=row.updated_at;local.clientMessage=String(row.revision_request||row.feedback||'');delete local.deliverableSnapshot;delete local.qaSnapshot;delete local.submittedAt;}
+    if(status==='completed'||status==='paid')local.clientAcceptedAt=local.clientAcceptedAt||new Date().toISOString();
+    const payment=row.payment||row.payout||{},paymentStatus=String(payment.status||row.payment_status||'').toLowerCase(),transactionId=String(payment.transaction_id||payment.tx_hash||row.payment_transaction_id||'');
+    if(['paid','settled','released','confirmed'].includes(paymentStatus)&&transactionId&&!local.revenueRecordedAt){
+      const price=Number(payment.amount_usd||row.price||0),fee=Number(payment.fee_usd||0);
+      if(price>0){appendUniqueLedgerEntry(this.store,ledgerEntry({id:`agrenting_revenue_${transactionId}`,type:'revenue',jobId:`agrenting_${id}`,externalId:id,externalTransactionId:transactionId,source:'agrenting',amountUsd:price,feeUsd:fee,currency:'USD',rail:'agrenting_escrow',status:'settled'}));local.revenueRecordedAt=new Date().toISOString();local.settledNetUsd=price-fee;local.status='paid';this.event('revenue_settled',{id,grossUsd:price,feeUsd:fee,netUsd:price-fee});}
+    }
+    this.persist();
   }
 
   currentConfig(){return normalizeConfig(this.store.readJson('config.json',{...DEFAULT_AUTONOMOS_CONFIG,enabled:true}));}

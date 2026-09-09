@@ -1,16 +1,33 @@
 import fs from 'node:fs';
+import path from 'node:path';
+import crypto from 'node:crypto';
 import { e2bRunShell } from './tools.js';
 import { isRetiredMarket } from './retired-markets.js';
-// The caller supplies an explicit permitted origin and selectors. No page script can
-// change the allowed origin or authorize a purchase, identity check or subscription.
+import { ActionJournal } from './action-journal.js';
+import { AutonomOSStore } from './store.js';
 export async function browserAction(args,env,signal,sandboxSession){
  let u;try{u=new URL(args.url);}catch{return{ok:false,error:'invalid_browser_url'};}
  if(u.protocol!=='https:'||u.username||u.password||!u.hostname.includes('.')||/^(localhost|127\.|10\.|192\.168\.|169\.254\.|0\.|\[|172\.(1[6-9]|2\d|3[01])\.)/.test(u.hostname)||isRetiredMarket(u.href))return{ok:false,error:'browser_origin_blocked'};
- if(!sandboxSession)return{ok:false,error:'job_sandbox_required'};
- if(!Array.isArray(args.steps)||args.steps.length>20)return{ok:false,error:'bounded_browser_steps_required'};
- const actions=new Set(['click','type','select','upload','wait','extract','screenshot']);
- if(args.steps.some(s=>!actions.has(s.action)||typeof s.selector!=='string'&&s.action!=='screenshot'))return{ok:false,error:'invalid_browser_action'};
- const runner=`const fs=require('node:fs');const path=require('node:path');const {launchBrowser}=require('/home/user/autonomos-browser.cjs');(async()=>{const request=JSON.parse(fs.readFileSync('/home/user/browser-action.json','utf8'));const origin=new URL(request.url).origin;const browser=await launchBrowser();try{const stateFile='/home/user/browser-session.json';const context=await browser.newContext(fs.existsSync(stateFile)?{storageState:stateFile}:{});await context.route('**/*',async route=>{const r=route.request();if(r.isNavigationRequest()&&r.frame()===page.mainFrame()&&new URL(r.url()).origin!==origin)return route.abort();return route.continue();});const page=await context.newPage();await page.goto(request.url,{waitUntil:'domcontentloaded',timeout:25000});const results=[];for(const step of request.steps){const text=await page.locator('body').innerText();if(/verify you are human|complete the captcha|government id|enter (?:the )?(?:2fa|verification code)|confirm purchase|subscribe now/i.test(text))throw Error('OWNER_ACTION_REQUIRED');const target=step.selector?page.locator(step.selector):null;switch(step.action){case'type':await target.fill(String(step.value||''));break;case'click':await target.click({timeout:10000});break;case'select':await target.selectOption(String(step.value||''));break;case'upload':{const file=path.resolve('/home/user',String(step.value||''));if(!file.startsWith('/home/user/')||file.endsWith('browser-session.json'))throw Error('invalid_upload_path');await target.setInputFiles(file);break;}case'wait':await target.waitFor({state:'visible',timeout:10000});break;case'extract':results.push({selector:step.selector,text:(await target.innerText()).slice(0,4000)});break;case'screenshot':await page.screenshot({path:'/home/user/browser-evidence.png'});break;}if(new URL(page.url()).origin!==origin)throw Error('browser_origin_changed');}await context.storageState({path:stateFile});fs.chmodSync(stateFile,0o600);console.log(JSON.stringify({ok:true,url:page.url(),results,externalConfirmation:results.map(x=>x.text).join('\\n')}));}finally{await browser.close();}})().catch(e=>{console.error(e.message);process.exitCode=1;});`;
- const r=await e2bRunShell({command:'node /home/user/browser-actions.cjs',files:[{path:'autonomos-browser.cjs',content:fs.readFileSync(new URL('./browser-runtime.cjs',import.meta.url),'utf8')},{path:'browser-actions.cjs',content:runner},{path:'browser-action.json',content:JSON.stringify(args)}],collectPaths:args.steps.some(s=>s.action==='screenshot')?['browser-evidence.png']:[]},env,signal,sandboxSession);
- if(!r.ok)return{...r,uncertain:args.steps.some(s=>s.action==='click')};try{return{...JSON.parse(r.stdout.trim()),artifacts:r.artifacts||[],provider:'current_chromium'};}catch{return{ok:false,error:'browser_action_output_invalid',uncertain:true};}
+ if(!sandboxSession||!args.sessionKey)return{ok:false,error:'job_sandbox_required'};
+ const actions=new Set(['navigate','click','type','select','upload','download','wait','extract','screenshot']);
+ if(!Array.isArray(args.steps)||args.steps.length>20||args.steps.some(s=>!actions.has(s.action)||!['screenshot','navigate'].includes(s.action)&&typeof s.selector!=='string'))return{ok:false,error:'invalid_browser_action'};
+ const root=path.join(env.STORAGE_DIR||'data','autonomos'),store=new AutonomOSStore(root),journal=new ActionJournal(root);
+ const key=crypto.createHash('sha256').update(args.sessionKey+':'+u.origin).digest('hex'),file='browser-session-'+key+'.private.json';
+ const effect=args.steps.some(s=>['click','type','select','upload'].includes(s.action));
+ const actionId=crypto.createHash('sha256').update(JSON.stringify({url:u.href,steps:args.steps})).digest('hex');
+ let intent;
+ if(effect){intent=journal.begin('browser:'+u.hostname,args.sessionKey,actionId);if(!intent.ok)return intent.status==='confirmed'?intent.proof.result:{ok:false,error:'browser_action_requires_reconciliation',uncertain:true};}
+ const saved=store.readJson(file,null),files=[{path:'autonomos-browser.cjs',content:fs.readFileSync(new URL('./browser-runtime.cjs',import.meta.url),'utf8')},{path:'browser-workflow.cjs',content:fs.readFileSync(new URL('./browser-workflow.cjs',import.meta.url),'utf8')},{path:'browser-action.json',content:JSON.stringify(args)}];
+ if(saved?.expiresAt>Date.now())files.push({path:'browser-session.json',content:JSON.stringify(saved.state)});
+ const collectPaths=[];if(args.steps.some(s=>s.action==='screenshot'))collectPaths.push('browser-evidence.png');args.steps.filter(s=>s.action==='download').forEach((_,i)=>collectPaths.push('browser-download-'+i));
+ try{
+  const r=await e2bRunShell({command:'node /home/user/browser-workflow.cjs',files,collectPaths},env,signal,sandboxSession);
+  if(!r.ok){if(intent)journal.finish(intent.id,'uncertain');return{...r,uncertain:effect};}
+  const result={...JSON.parse(r.stdout.trim().split('\n').at(-1)),artifacts:r.artifacts||[],provider:'current_chromium'};
+  // Session state is private runtime data, never an artifact or model tool response.
+  const sbx=await sandboxSession.get(signal),state=JSON.parse(await sbx.files.read('/home/user/browser-session.json'));
+  store.writeSecretJson(file,{state,expiresAt:Date.now()+7*86400000});
+  if(intent)journal.finish(intent.id,'confirmed',{url:result.url,result});
+  return result;
+ }catch(e){if(intent)journal.finish(intent.id,'uncertain');return{ok:false,error:String(e.message).slice(0,180),uncertain:effect};}
 }

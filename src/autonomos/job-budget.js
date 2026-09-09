@@ -1,3 +1,8 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import { AutonomOSStore } from './store.js';
+import { normalizeConfig } from './policy-engine.js';
+import { computeEarnedSpendBudgetUsd } from './profit-engine.js';
 // Conservative per-job reservations, shared by planning, execution, tools and QA.
 // Reservations are persisted before calls. They are estimates, not provider invoices.
 export function createJobBudget(
@@ -16,8 +21,19 @@ export function createJobBudget(
       const value = Number(amount);
       if (!Number.isFinite(value) || value < 0 || value > this.remaining + 1e-9)
         throw new Error("job_spend_limit");
-      spent += value;
-      onCost(value);
+      const root=path.join(env.STORAGE_DIR||'data','autonomos');
+      const apply=()=>{
+        if(fs.existsSync(path.join(root,'config.json'))){
+          const store=new AutonomOSStore(root),config=normalizeConfig(store.readJson('config.json',{}));
+          if(!config.enabled||config.killSwitch)throw new Error('job_cancelled_by_emergency_stop');
+          const available=computeEarnedSpendBudgetUsd(store.readNdjson('ledger.ndjson',-1),config);
+          if(value>available+1e-9)throw new Error('shared_treasury_spend_limit');
+        }
+        onCost(value);spent+=value;
+      };
+      // Lock spans the latest treasury read and durable cost reservation across lanes.
+      if(fs.existsSync(root))new AutonomOSStore(root).withLock('budget-reservation',apply);
+      else apply();
     },
     llm(client) {
       const budget = this;
