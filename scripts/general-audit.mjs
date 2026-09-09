@@ -17,9 +17,14 @@ check('OpenTelemetry core peer is explicit',Boolean(pkg.dependencies?.['@opentel
 check('OTLP HTTP exporter peer is explicit',Boolean(pkg.dependencies?.['@opentelemetry/exporter-trace-otlp-http']));
 check('OTEL trace-base peer is explicit',Boolean(pkg.dependencies?.['@opentelemetry/sdk-trace-base']));
 check('Legacy NATS package removed',!pkg.dependencies?.nats);
+check('Browserbase/Stagehand dependency removed',!pkg.dependencies?.['@browserbasehq/stagehand']);
 
 const tools=read('src/autonomos/tools.js');
-check('Tavily is wired into web_search',/tavilySearch/.test(tools)&&/TAVILY_API_KEY/.test(tools));
+const freeWeb=fs.existsSync(path.join(root,'src/autonomos/free-web-tool.js'))?read('src/autonomos/free-web-tool.js'):'';
+check('Free web search is wired into worker tools',/freeWebSearch/.test(tools)&&/free-web-tool/.test(tools));
+check('Paid Tavily worker path is removed',!/tavilySearch|TAVILY_API_KEY/.test(tools));
+check('Browserbase worker path is removed',!/browserTask|browser_task|BROWSERBASE/.test(tools));
+check('Free web search implementation exists',/free_public_web/.test(freeWeb)&&/duckduckgo/i.test(freeWeb));
 check('GitHub direct token can be identity-pinned',/AUTONOMOS_GITHUB_EXPECTED_LOGIN/.test(tools)&&/github_identity_mismatch/.test(tools));
 
 const runtime=read('src/autonomos/runtime.js');
@@ -32,14 +37,14 @@ check('Demo/test filter participates in candidacy',/demo_or_test_opportunity/.te
 
 const server=read('server.js');
 check('Signed Trigger.dev callback endpoint exists',/\/api\/internal\/autonomos\/trigger\/execute/.test(server)&&/unauthorized_trigger_callback/.test(server));
-
 const eventBus=read('src/autonomos/event-bus.js');
 check('Event bus uses already-paid Redis Streams',/xAdd\(/.test(eventBus)&&/REDIS_URL/.test(eventBus)&&!/import\(['\"]nats['\"]\)/.test(eventBus));
 
 const env=read('.env.example');
-for(const key of ['OPENAI_API_KEY','DATABASE_URL','REDIS_URL','BROWSERBASE_API_KEY','BROWSERBASE_PROJECT_ID','TRIGGER_SECRET_KEY','COMPOSIO_API_KEY','S3_ENDPOINT','S3_REGION','S3_BUCKET','S3_ACCESS_KEY_ID','S3_SECRET_ACCESS_KEY','LANGFUSE_PUBLIC_KEY','LANGFUSE_SECRET_KEY','LANGFUSE_BASE_URL','TAVILY_API_KEY']){
+for(const key of ['OPENAI_API_KEY','DATABASE_URL','REDIS_URL','TRIGGER_SECRET_KEY','COMPOSIO_API_KEY','S3_ENDPOINT','S3_REGION','S3_BUCKET','S3_ACCESS_KEY_ID','S3_SECRET_ACCESS_KEY','LANGFUSE_PUBLIC_KEY','LANGFUSE_SECRET_KEY','LANGFUSE_BASE_URL','E2B_API_KEY']){
   check(`.env.example documents ${key}`,new RegExp(`^${key}=`,`m`).test(env));
 }
+for(const key of ['BROWSERBASE_API_KEY','BROWSERBASE_PROJECT_ID','TAVILY_API_KEY','FIRECRAWL_API_KEY','T2000_MCP_URL'])check(`.env.example omits retired ${key}`,!new RegExp(`^${key}=`,`m`).test(env));
 
 const cfg=normalizeConfig({...DEFAULT_AUTONOMOS_CONFIG});
 check('Global minimum payout defaults to at least $0.50',Number(cfg.minJobPayoutUsd)>=0.5,`value=${cfg.minJobPayoutUsd}`);
@@ -49,23 +54,18 @@ check('Demo/test protection defaults ON',cfg.rejectDemoAndTestJobs===true);
 check('Explicit demo opportunity is rejected',isDemoOrTestOpportunity({title:'DEMO ONLY - no payment',environment:'sandbox'})===true);
 check('Legitimate software testing title is not rejected solely for word test',isDemoOrTestOpportunity({title:'QA engineer to test production web app',budgetUsd:500})===false);
 
-const syntheticEnv={TRIGGER_SECRET_KEY:'tr_prod_redacted',TAVILY_API_KEY:'tvly-redacted',DATABASE_URL:'postgres://x',REDIS_URL:'redis://x',OPENAI_API_KEY:'sk-redacted',BROWSERBASE_API_KEY:'bb',BROWSERBASE_PROJECT_ID:'p',COMPOSIO_API_KEY:'c',S3_ENDPOINT:'https://x',S3_BUCKET:'b',S3_ACCESS_KEY_ID:'a',S3_SECRET_ACCESS_KEY:'s',LANGFUSE_PUBLIC_KEY:'pk',LANGFUSE_SECRET_KEY:'sk',LANGFUSE_BASE_URL:'https://cloud.langfuse.com',FIRECRAWL_API_KEY:'f',E2B_API_KEY:'e'};
+const syntheticEnv={TRIGGER_SECRET_KEY:'tr_prod_redacted',DATABASE_URL:'postgres://x',REDIS_URL:'redis://x',OPENAI_API_KEY:'sk-redacted',COMPOSIO_API_KEY:'c',S3_ENDPOINT:'https://x',S3_BUCKET:'b',S3_ACCESS_KEY_ID:'a',S3_SECRET_ACCESS_KEY:'s',LANGFUSE_PUBLIC_KEY:'pk',LANGFUSE_SECRET_KEY:'sk',LANGFUSE_BASE_URL:'https://cloud.langfuse.com',E2B_API_KEY:'e'};
 check('Trigger.dev config gate recognizes secret key',triggerEnabled(syntheticEnv));
 const infra=infrastructureStatus(syntheticEnv);
-for(const id of ['openai_agents','langgraph','memory','redis','redis_streams','triggerdev','tavily','firecrawl','stagehand','composio','s3','langfuse','e2b'])check(`Infrastructure ${id} can reach ready state`,infra.find(x=>x.id===id)?.configured===true);
-check('Deferred Temporal is optional',infra.find(x=>x.id==='temporal')?.optional===true);
+for(const id of ['openai_agents','langgraph','memory','redis','redis_streams','triggerdev','composio','s3','langfuse','e2b'])check(`Infrastructure ${id} can reach ready state`,infra.find(x=>x.id===id)?.configured===true);
+for(const id of ['tavily','firecrawl','stagehand','temporal','opensearch','auth0','litellm','secrets_manager'])check(`Retired infrastructure ${id} is absent`,!infra.some(x=>x.id===id));
 
 const html=read('public/admin.html'),js=read('public/admin.js');
 check('Admin exposes demo/test safety toggle',/name="rejectDemoAndTestJobs"/.test(html));
 check('Admin submits demo/test safety toggle',/rejectDemoAndTestJobs:f\.elements\.rejectDemoAndTestJobs\.checked/.test(js));
 check('Admin copy reflects $0.50 general floor',/global floor \$0\.50/.test(html));
+check('Admin has no T2000 controls',!/t2000/i.test(html+js));
 
-// public/ is served statically to the whole internet (express.static in server.js).
-// A stale copy of the project root — old server.js, package.json, render.yaml, Procfile,
-// a whole duplicate scripts/ dir, and historical internal .md reports — was once found
-// sitting inside public/, publicly downloadable at e.g. qonvexa.co/server.js. It held no
-// live secrets, but exposed the full old backend source and infra config to any visitor.
-// This check exists so that regression can never again go unnoticed.
 const forbiddenInPublic=['server.js','package.json','render.yaml','Procfile','scripts'];
 for(const name of forbiddenInPublic)check(`public/${name} does not exist (would be served to the internet)`,!fs.existsSync(path.join(root,'public',name)));
 const publicMdReports=fs.readdirSync(path.join(root,'public')).filter(f=>/\.md$/i.test(f)&&f.toLowerCase()!=='license.md');
