@@ -1,0 +1,58 @@
+name: Staging full cleanup verification
+on:
+  push:
+    branches:
+      - cleanup/all-at-once-20260909-work
+permissions:
+  contents: write
+jobs:
+  clean-and-verify:
+    if: ${{ !contains(github.event.head_commit.message, '[staging-clean-final]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.14.1'
+          cache: npm
+      - name: Apply the complete cleanup in one workspace pass
+        run: node scripts/mega-clean-all-at-once.mjs
+      - name: Regenerate lockfile once
+        run: npm install --package-lock-only --ignore-scripts
+      - name: Install cleaned dependency graph
+        run: npm ci --include=dev
+      - name: Prove retired code is physically absent
+        shell: bash
+        run: |
+          set -euo pipefail
+          PATTERN='t2000|superteam|tavily|firecrawl|browserbase|stagehand|temporal|opensearch|auth0|litellm|secrets_manager|aws_secret|nats_url|clawjobs|moltjobs'
+          TARGETS=(src scripts server.js public package.json .env.example .env.production.example render.yaml README.md DEPLOY.md)
+          set +e
+          MATCHES=$(grep -RInE --exclude='mega-clean-all-at-once.mjs' "$PATTERN" "${TARGETS[@]}" 2>/dev/null)
+          CODE=$?
+          set -e
+          if [ "$CODE" -eq 0 ]; then
+            echo "$MATCHES"
+            echo 'Retired-code residue still exists.'
+            exit 1
+          fi
+          [ "$CODE" -eq 1 ] || exit "$CODE"
+          echo 'Retired-code residue scan: PASS'
+      - name: Verify production startup graph before full suite
+        run: node scripts/startup-module-graph-test.mjs
+      - name: Run full repository verification
+        run: npm run verify
+      - name: Production dependency audit
+        run: npm audit --omit=dev --audit-level=high
+      - name: Commit the single cleaned staging tree
+        shell: bash
+        run: |
+          rm -f scripts/mega-clean-all-at-once.mjs .github/workflows/staging-mega-clean.yml
+          git config user.name 'AutonomOS Cleanup'
+          git config user.email 'actions@users.noreply.github.com'
+          git add -A
+          git diff --cached --stat
+          git commit -m '[staging-clean-final] one-shot retired-code purge and verified clean tree'
+          git push origin HEAD:cleanup/all-at-once-20260909-work
