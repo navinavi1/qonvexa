@@ -5,6 +5,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { DEFAULT_AUTONOMOS_CONFIG, normalizeConfig } from './policy-engine.js';
 import { allocateRevenue } from './profit-engine.js';
+import { taskForceHeaders } from './taskforce-auth.js';
 
 const EMAIL_ACCEPTED_RETRY = new Set([
   'accepted_email','accepted_needs_capability','accepted_waiting_treasury','accepted_repair_exhausted'
@@ -20,7 +21,7 @@ function ownEmail(env){return String(env.AUTONOMOS_REGISTRATION_EMAIL||env.CONTA
 function maskEmail(email){const m=String(email||'').match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);if(!m)return'redacted';const [l,d]=m[0].toLowerCase().split('@');return `${l.slice(0,2)}***@${d}`;}
 function safe(error){return String(error?.message||error||'').slice(0,260);}
 function arrayFrom(data,keys){if(Array.isArray(data))return data;for(const k of keys)if(Array.isArray(data?.[k]))return data[k];return[];}
-function tfHeaders(key){return{accept:'application/json','x-api-key':String(key||''),authorization:`Bearer ${String(key||'')}`,'user-agent':'AutonomOS-RevenueLifecycle/1.0'};}
+function tfHeaders(key){return taskForceHeaders(key,'AutonomOS-RevenueLifecycle/1.0');}
 async function safeJson(r){try{return await r.json();}catch{return{};}}
 
 // 1) Once an email lead has been accepted, the browserless application worker must never

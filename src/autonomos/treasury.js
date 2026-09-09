@@ -17,8 +17,13 @@ const DEFAULT_CHAINS = Object.freeze([
   {
     id:'eip155:137', name:'Polygon', chainId:137, symbol:'POL', rpcEnv:'AUTONOMOS_POLYGON_RPC_URL', rpc:'https://polygon-rpc.com',
     tokens:[
-      {symbol:'USDC',address:'0x3c499c542cef5e3811e1192ce70d8cc03d5c3359',decimals:6},
-      {symbol:'USDT',address:'0xc2132D05D31c914a87C6611C10748AaCbC53250',decimals:6}
+      {symbol:'USDC',address:'0x3c499c542cef5e3811e1192ce70d8cc03d5c3359',decimals:6}
+      // Polygon USDT was listed here with a 39-hex-character address (one short of a valid
+      // 20-byte address). eth_call against it fails and the failure was reported as
+      // balance:0 — an empty wallet is indistinguishable from a broken lookup. Guessing a
+      // token contract from memory is a real-money risk, so the entry is removed rather
+      // than corrected blind: add it with the address copied from Polygonscan via
+      // AUTONOMOS_EXTRA_TOKENS_JSON, which is length-validated below.
     ]
   }
 ]);
@@ -28,7 +33,9 @@ export function isEvmAddress(value){return /^0x[a-fA-F0-9]{40}$/.test(String(val
 export function configuredEvmChains(env=process.env){
   const custom=parseJson(env.AUTONOMOS_EVM_CHAINS_JSON,[]);
   if(Array.isArray(custom)&&custom.length) return custom.filter(validChain);
-  const base=DEFAULT_CHAINS.map(chain=>({...chain,rpc:String(env[chain.rpcEnv]||chain.rpc),tokens:[...chain.tokens]}));
+  // Validate the built-in table with the same rule as the env-supplied one: a malformed
+  // default address used to reach eth_call and come back as a silent zero balance.
+  const base=DEFAULT_CHAINS.map(chain=>({...chain,rpc:String(env[chain.rpcEnv]||chain.rpc),tokens:chain.tokens.filter(token=>isEvmAddress(token?.address))}));
   // AUTONOMOS_EXTRA_TOKENS_JSON lets you add tokens (EURC, DAI, etc.) per chain WITHOUT
   // touching code — deliberately not hardcoded here, because a wrong stablecoin contract
   // address is a real-money risk (silently monitoring/trusting the wrong token). Copy the
@@ -62,12 +69,20 @@ export async function readTreasuryBalances({address,env=process.env,timeoutMs=80
   }
   const base=results.find(x=>x.chainId===8453)||{};
   const baseTokenBalances=Object.fromEntries((base.tokens||[]).map(t=>[t.symbol.toLowerCase(),Number(t.balance||0)]));
+  // A failed lookup used to be reported as a zero balance, so "the wallet is empty" and
+  // "the RPC did not answer" looked identical on the dashboard. These flags let a reader
+  // tell the difference: only trust the numbers when balancesComplete is true.
+  const failedChains=results.filter(x=>!x.ok);
+  const failedTokens=results.flatMap(chain=>(chain.tokens||[]).filter(t=>t.error).map(t=>({network:chain.name,symbol:t.symbol,error:t.error})));
   return {
     ok:results.some(x=>x.ok), address, chains:results, assets,
     network:'Base',chainId:8453,eth:Number(base.native?.balance||0),
     usdc:baseTokenBalances.usdc||0,usdt:baseTokenBalances.usdt||0,
     tokenBalances:baseTokenBalances,
-    checkedAt:new Date().toISOString(), errors:results.filter(x=>!x.ok).map(x=>({network:x.name,error:x.error}))
+    baseOk:Boolean(base.ok),
+    balancesComplete:failedChains.length===0&&failedTokens.length===0,
+    unavailable:[...failedChains.map(x=>({network:x.name,error:x.error})),...failedTokens],
+    checkedAt:new Date().toISOString(), errors:failedChains.map(x=>({network:x.name,error:x.error}))
   };
 }
 

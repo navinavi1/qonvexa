@@ -11,6 +11,7 @@ import crypto from 'node:crypto';
 import { freeWebSearch } from './free-web-tool.js';
 import { createLlmClient } from './llm.js';
 import { classifyOpportunity } from './capabilities.js';
+import { taskForceHeaders } from './taskforce-auth.js';
 
 // Broad, rotating worldwide discovery. These intentionally cover normal freelance work as
 // well as agent-native markets; crypto words are NOT required for discovery because payout
@@ -192,7 +193,7 @@ export class GlobalWorkHunter {
   async verifyTaskForceAgent(credential){
     if(!credential?.apiKey||credential.verified)return Boolean(credential?.verified);
     // Keep this best-effort; TaskForceVerifier also repairs auth independently.
-    const headers={accept:'application/json','x-api-key':credential.apiKey,authorization:credential.apiKey,'user-agent':'AutonomOS-GlobalHunter/2.0'};
+    const headers=taskForceHeaders(credential.apiKey,'AutonomOS-GlobalHunter/2.0');
     try{
       const challengeRes=await fetch('https://task-force.app/api/agent/verify/challenge',{method:'POST',headers,signal:AbortSignal.timeout(12000)});const challenge=await safeJson(challengeRes);
       if(!challengeRes.ok){if(challengeRes.status===409||/already verified/i.test(publicError(challenge))){credential.verified=true;this.saveTaskForceCredential(credential);return true;}this.event('taskforce_verification_failed',{stage:'challenge',status:challengeRes.status,error:publicError(challenge)});return false;}
@@ -206,7 +207,7 @@ export class GlobalWorkHunter {
   async pollTaskForce(credential){return hardenedPollTaskForce.call(this,credential,this.pollTaskForceCore);}
 
   async pollTaskForceCore(credential){
-    const headers={accept:'application/json','x-api-key':credential.apiKey,authorization:credential.apiKey,'user-agent':'AutonomOS-GlobalHunter/2.0'};
+    const headers=taskForceHeaders(credential.apiKey,'AutonomOS-GlobalHunter/2.0');
     try{
       const r=await fetch('https://task-force.app/api/agent/tasks?status=ACTIVE&limit=100',{headers,signal:AbortSignal.timeout(15000)});const data=await safeJson(r);if(!r.ok){this.event('taskforce_tasks_failed',{status:r.status,error:publicError(data)});return{open:0,applied:0};}
       const rows=arrayFrom(data,['tasks','items','data']);let open=0,applied=0;const maxApply=Math.max(1,Math.min(50,Number(this.env.AUTONOMOS_TASKFORCE_MAX_APPLY_PER_CYCLE||12)));
@@ -222,7 +223,7 @@ export class GlobalWorkHunter {
     if(!intent.ok)return{ok:intent.status==='confirmed',uncertain:intent.status!=='confirmed'};
     this.state.taskforce.applications[task.externalId]={status:'application_uncertain',at:new Date().toISOString(),intentId:intent.id};this.persist();
     const message=`AutonomOS can complete this ${capability.skill||'digital'} task with tool-backed execution and verification. We will follow the stated requirements and submit evidence-backed work.`.slice(0,900);
-    try{const r=await fetch(`https://task-force.app/api/agent/tasks/${encodeURIComponent(task.externalId)}/apply`,{method:'POST',headers:{'content-type':'application/json',accept:'application/json','x-api-key':credential.apiKey,authorization:credential.apiKey,'user-agent':'AutonomOS-GlobalHunter/2.0'},body:JSON.stringify({message}),signal:AbortSignal.timeout(12000)});const data=await safeJson(r);if(!r.ok){this.state.taskforce.applications[task.externalId]={status:'apply_failed',at:new Date().toISOString(),error:`http_${r.status}:${publicError(data)}`.slice(0,240),failure:classifyFailure(r.status)};this.actionJournal.finish(intent.id,r.status>=500||r.status===408?'uncertain':'definite_failure',{httpStatus:r.status});if(r.status>=500||r.status===408)this.state.taskforce.applications[task.externalId].status='application_uncertain';this.persist();this.event('taskforce_apply_failed',{taskId:task.externalId,status:r.status,error:publicError(data)});return{ok:false};}const app=data?.application||data?.data||data;if(!app?.id){this.actionJournal.finish(intent.id,'uncertain',{httpStatus:r.status});return{ok:false,uncertain:true};}this.actionJournal.finish(intent.id,'confirmed',{externalId:String(app.id)});this.state.taskforce.applications[task.externalId]={applicationId:String(app?.id||''),status:String(app?.status||'PENDING'),title:task.title,budgetUsd:task.budgetUsd,skill:capability.skill,appliedAt:new Date().toISOString()};this.persist();this.event('taskforce_applied',{taskId:task.externalId,applicationId:String(app?.id||''),title:task.title,budgetUsd:task.budgetUsd,skill:capability.skill});return{ok:true};}catch(error){this.actionJournal.finish(intent.id,'uncertain');this.event('taskforce_apply_failed',{taskId:task.externalId,error:safeError(error)});return{ok:false};}
+    try{const r=await fetch(`https://task-force.app/api/agent/tasks/${encodeURIComponent(task.externalId)}/apply`,{method:'POST',headers:{'content-type':'application/json',...taskForceHeaders(credential.apiKey,'AutonomOS-GlobalHunter/2.0')},body:JSON.stringify({message}),signal:AbortSignal.timeout(12000)});const data=await safeJson(r);if(!r.ok){this.state.taskforce.applications[task.externalId]={status:'apply_failed',at:new Date().toISOString(),error:`http_${r.status}:${publicError(data)}`.slice(0,240),failure:classifyFailure(r.status)};this.actionJournal.finish(intent.id,r.status>=500||r.status===408?'uncertain':'definite_failure',{httpStatus:r.status});if(r.status>=500||r.status===408)this.state.taskforce.applications[task.externalId].status='application_uncertain';this.persist();this.event('taskforce_apply_failed',{taskId:task.externalId,status:r.status,error:publicError(data)});return{ok:false};}const app=data?.application||data?.data||data;if(!app?.id){this.actionJournal.finish(intent.id,'uncertain',{httpStatus:r.status});return{ok:false,uncertain:true};}this.actionJournal.finish(intent.id,'confirmed',{externalId:String(app.id)});this.state.taskforce.applications[task.externalId]={applicationId:String(app?.id||''),status:String(app?.status||'PENDING'),title:task.title,budgetUsd:task.budgetUsd,skill:capability.skill,appliedAt:new Date().toISOString()};this.persist();this.event('taskforce_applied',{taskId:task.externalId,applicationId:String(app?.id||''),title:task.title,budgetUsd:task.budgetUsd,skill:capability.skill});return{ok:true};}catch(error){this.actionJournal.finish(intent.id,'uncertain');this.event('taskforce_apply_failed',{taskId:task.externalId,error:safeError(error)});return{ok:false};}
   }
 
   async pollTaskForceNotifications(credential){return pollTaskForceNotificationsRecovered.call(this,credential);}

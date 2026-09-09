@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { createLlmClient } from './llm.js';
+import { taskForceHeaders } from './taskforce-auth.js';
 
 const TASKFORCE_BASE='https://www.task-force.app';
 
@@ -44,7 +45,7 @@ export class TaskForceVerifier {
     if(!key)return false;
     // Use the canonical host directly. Redirecting task-force.app -> www.task-force.app
     // can strip Authorization on a cross-host redirect in fetch implementations.
-    const headers={accept:'application/json',authorization:`Bearer ${key}`,'user-agent':'AutonomOS-TaskForceVerifier/1.1'};
+    const headers=taskForceHeaders(key,'AutonomOS-TaskForceVerifier/1.1');
     try{
       const challengeRes=await fetch(`${TASKFORCE_BASE}/api/agent/verify/challenge`,{method:'POST',headers,redirect:'error',signal:AbortSignal.timeout(15000)});
       const challenge=await safeJson(challengeRes);

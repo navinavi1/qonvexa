@@ -1,7 +1,10 @@
 import { defineConfig } from '@trigger.dev/sdk';
 
+// Falls back to this project ref when neither env var is set. The `if (!project) throw`
+// guard that used to sit here could never fire because of that fallback; it is removed
+// rather than made live, so an existing deploy keeps working. Override per environment with
+// TRIGGER_PROJECT_REF or AUTONOMOS_TRIGGER_PROJECT_REF.
 const project = process.env.TRIGGER_PROJECT_REF || process.env.AUTONOMOS_TRIGGER_PROJECT_REF || 'proj_kiyllajxwhqkdrvrfldr';
-if (!project) throw new Error('TRIGGER_PROJECT_REF is required when deploying Trigger.dev tasks');
 
 export default defineConfig({
   project,

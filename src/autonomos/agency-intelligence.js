@@ -28,8 +28,11 @@ const TRANSITIONS = Object.freeze({
   claiming:['claim_failed','claimed'],
   claim_failed:['claiming'],
   claimed:['delivered','execution_failed'],
-  execution_failed:['delivered','execution_failed','manual_attention'],
-  manual_attention:['delivered','execution_failed'], // Reset auto-claim history re-opens retries
+  // Retrying a job re-enters the claim pipeline under the same deterministic job id, so
+  // 'claiming' is a legitimate successor of both recoverable states. Without these edges
+  // every retry was reported as an invalid transition.
+  execution_failed:['claiming','delivered','execution_failed','manual_attention'],
+  manual_attention:['claiming','delivered','execution_failed'], // Reset auto-claim history re-opens retries
   delivered:['settled','failed'],
   settled:[],
   started:['completed','failed'],
@@ -40,7 +43,11 @@ const TRANSITIONS = Object.freeze({
 export function canTransition(from,to){
   const source=String(from||'discovered'); const target=String(to||'');
   if(source===target)return true;
-  return String(TRANSITIONS[source]||[]).includes(target);
+  // Membership in the target list, not a substring scan of its joined text:
+  // String(['claim_failed','claimed']).includes('claim') accepted any target that merely
+  // appeared inside another state's name, and an unknown source rejected everything.
+  const allowed=TRANSITIONS[source];
+  return Array.isArray(allowed)&&allowed.includes(target);
 }
 
 export function transitionJob(job,to,detail={}){

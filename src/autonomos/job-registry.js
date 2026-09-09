@@ -236,6 +236,22 @@ export class JobRegistry {
     if(released)this.persist();return {ok:true,released};
   }
 
+  // Retire rows that belong to markets we no longer work, in memory and then on disk.
+  // Editing job-registry.json directly from outside (as the startup cleaner does) is
+  // invisible to a running runtime and gets overwritten by its next persist(), so the
+  // operator-facing archive action has to go through the live records.
+  archiveRetiredMarkets(){
+    const archived=[];const now=new Date().toISOString();
+    for(const [identity,row] of Object.entries(this.records)){
+      if(String(row?.status||'')==='retired')continue;
+      if(!isRetiredMarket(row)&&!isRetiredMarket(String(row?.source||identity.split(':')[0]||'')))continue;
+      this.records[identity]={...row,previousStatus:row?.status||'',status:'retired',terminal:true,reasonCode:'DO_NOT_RESTORE',reason:'Marketplace retired by owner policy.',retiredAt:now,lastStateAt:now};
+      archived.push(identity);
+    }
+    if(archived.length)this.persist();
+    return archived;
+  }
+
   summary(){
     const rows=Object.values(this.records),count=pred=>rows.filter(pred).length;
     return {total:rows.length,stale:count(x=>x.status==='stale_check'),archived:count(x=>x.status==='archived'),new:count(x=>x.status==='new'),ready:count(x=>x.status==='ready'),proposal:count(x=>x.status==='proposal'),working:count(x=>['dispatch_pending','bid_submitted','claimed','executing','qa'].includes(x.status)),retry:count(x=>x.status==='retry'),policyHold:count(x=>POLICY_HOLD_STATUSES.has(x.status)),systemBlocked:count(x=>SYSTEM_BLOCKED_STATUSES.has(x.status)),graveyard:Object.keys(this.tombstones).length,delivered:count(x=>x.status==='delivered'),paid:count(x=>['paid','settled','completed'].includes(x.status)),updatedAt:new Date().toISOString()};

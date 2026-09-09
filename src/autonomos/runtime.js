@@ -4,6 +4,7 @@ import { unifiedCapabilityContext, refreshCapabilities } from './capability-regi
 import { isRetiredMarket } from './retired-markets.js';
 import { executionDiagnostics, logExecutionEvent } from './execution-diagnostics.js';
 import { createJobBudget } from './job-budget.js';
+import { OWNER_MINIMUM_PAYOUT_USD } from './payout-floor.js';
 import { checkpointExecution } from './execution-checkpoint.js';
 import path from 'node:path';
 import fs from 'node:fs';
@@ -57,7 +58,11 @@ export function shouldReportSuccessToDurableDispatcher(result){
 }
 
 // Discovery continues while accepted jobs execute. Resource scheduling owns concurrency.
-export function applyCommissioningCandidateGate(candidates){
+// The config and {ledger,activeCount} context both call sites still pass are vestigial from
+// an older signature that also blocked new claims while a job was accepted. That gate was
+// removed deliberately, so the parameters are named and unused here rather than looking
+// like inputs that are silently dropped.
+export function applyCommissioningCandidateGate(candidates,_config,_context){
   return (Array.isArray(candidates)?candidates:[]).filter(row=>!isRetiredMarket(row));
 }
 
@@ -217,8 +222,11 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
     const nextStatus=String(record?.status||'');
     const previousStatus=id?lastJobStatus.get(id):undefined;
     if(id&&previousStatus&&nextStatus&&!canTransition(previousStatus,nextStatus)){
-      event('job_state_transition_blocked',{jobId:id,from:previousStatus,to:nextStatus});
-      throw new Error(`invalid_job_transition:${previousStatus}->${nextStatus}`);
+      // Telemetry, exactly as the comment above states — never a gate. Throwing here
+      // escaped processMarketplaceOpportunity() into the cycle handler, so a single
+      // unrecognized transition aborted the whole heartbeat ('cycle_failed') and every
+      // remaining job in that batch. The anomaly is recorded and the row still lands.
+      event('job_state_transition_unexpected',{jobId:id,from:previousStatus,to:nextStatus});
     }
     if(id&&nextStatus)lastJobStatus.set(id,nextStatus);
     store.append('jobs.ndjson',record);
@@ -402,6 +410,22 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
       return {ok:true,permanentRegistryPreserved:true};
     },
 
+    // POST /api/admin/autonomos/archive-legacy-history called this and it did not exist,
+    // so the route threw a TypeError and answered 500 for every operator who pressed the
+    // button. Retiring rows from markets we no longer work is the operation the button
+    // promises; financial history in ledger.ndjson is never touched.
+    archiveLegacyHistory(){
+      const archived=jobRegistry.archiveRetiredMarkets();
+      let inFlightRetired=0;
+      for(const [jobId,record] of Object.entries(inFlightJobs)){
+        if(!isRetiredMarket(record?.op||record?.opportunity||record))continue;
+        delete inFlightJobs[jobId];inFlightRetired++;
+      }
+      if(inFlightRetired)store.writeJson('in-flight-jobs.json',inFlightJobs);
+      event('legacy_history_archived',{archived:archived.length,inFlightRetired,financialHistoryPreserved:true});
+      return {ok:true,archived,inFlightRetired,financialHistoryPreserved:true};
+    },
+
     retryTransientFailures(){
       for(const key of Object.keys(claimAttempts))if(jobRegistry.get(key)?.failureOwner==='transient')delete claimAttempts[key];
       store.writeJson('claim-attempts.json',claimAttempts);
@@ -504,7 +528,16 @@ async refreshTreasury(){
       // so counters and queue tabs describe the same snapshot.
       state.marketFunnel=buildMarketFunnel(normalized);
       state.marketplaceYield=buildMarketplaceYield(normalized,jobHistory,cycleLedger);
-      state.marketplaceLifecycle={};
+      // Populated, not cleared. This map is read by buildEarningReadiness() below (and as a
+      // fallback by the admin Market Radar); resetting it to {} every cycle made
+      // fullAutoSources/workAutoSources permanently empty and pinned every market card to
+      // "Discovery only" regardless of the evidence in dynamic-market-registry.json.
+      state.marketplaceLifecycle=Object.fromEntries(
+        [...new Set([
+          ...normalized.map(row=>String(row?.source||'')),
+          ...connectorStatuses(env,x402.status(),credentials).map(c=>String(c?.id||''))
+        ])].filter(Boolean).slice(0,60).map(id=>[id,marketplaceLifecycleWithCashout(id)])
+      );
       state.commissioningProof=buildCommissioningProof(normalized,jobHistory,cycleLedger);
       state.earningReadiness=buildEarningReadiness(normalized,jobHistory,cycleLedger);
       state.opportunityEconomics=normalized.filter(x=>!isRetiredMarket(x)).slice(0,180).map(x=>({source:x.source,externalId:x.externalId,title:x.title,budgetUsd:x.budgetUsd,currency:x.currency,claimMode:x.claimMode,deadline:x.deadline,observedAt:x.observedAt,capability:x.capability,outcome:x.outcome,economics:x.economics,payoutRoute:x.payoutRoute,preflight:x.preflight,candidacy:explainCandidacy(x),registry:jobRegistry.get(x)}));
@@ -597,7 +630,11 @@ async refreshTreasury(){
     return {...base,workAutoReady,cashoutReady,fullAutoReady:workAutoReady&&cashoutReady,cashoutState:cashoutReady?'verified_owner_destination':'unverified',cashoutReason:cashoutReady?'':'cashout_not_verified'};
   }
 
-  function effectiveJobFloor(){return Math.max(5,Number(config.minJobPayoutUsd??5));}
+  // One global floor, and no per-opportunity override exists: callers used to pass an
+  // opportunity that this function silently ignored, which read as a per-market floor.
+  // config.minJobPayoutUsd already carries the env-derived floor (normalizeConfig applies
+  // minimumJobPayoutUsd(env,cfg)), so this is the single source of truth.
+  function effectiveJobFloor(){return Math.max(OWNER_MINIMUM_PAYOUT_USD,Number(config.minJobPayoutUsd??OWNER_MINIMUM_PAYOUT_USD));}
 
   // Paid/escrowed assignments are obligations we already accepted, not fresh market
   // opportunities. Finish them even if current discovery-time payout preferences changed
@@ -640,7 +677,7 @@ async refreshTreasury(){
     // Some seller-queue responses omit the service price; applying discovery-time payout
     // floors or payout-percentage economics to a missing price would strand a real paid
     // order. Capability/safety, owner auto-work policy and execution spend controls still
-    const effectiveFloor=effectiveJobFloor(op);
+    const effectiveFloor=effectiveJobFloor();
     if(!preCommittedOrder&&Number(op.budgetUsd||0)<effectiveFloor)reasons.push(`budget_below_effective_floor:${effectiveFloor}`);
     if(!op.capability?.executable)reasons.push(`capability_not_executable:${op.capability?.mode||'unknown'}${op.capability?.missingTools?.length?`:missing_${op.capability.missingTools.join('+')}`:''}`);
     if(!preCommittedOrder&&!op.economics?.allowed)reasons.push(`economics_blocked:${op.economics?.reason||'unknown'}`);
@@ -1099,7 +1136,7 @@ async refreshTreasury(){
 
   function optimizeOffers(signals){const changes=[];for(const product of MACHINE_PRODUCTS){const tags=new Set(product.tags.map(x=>String(x).toLowerCase()));const comps=signals.filter(s=>Number(s.budgetUsd)>0&&(s.tags||[]).some?.(t=>tags.has(String(t).toLowerCase()))).map(s=>Number(s.budgetUsd)).filter(Number.isFinite);if(comps.length<5)continue;const marketMedian=median(comps);const current=Number(offers[product.id]?.priceUsd??product.priceUsd);const floor=Math.max(.001,product.priceUsd*.5),ceiling=Math.max(floor,product.priceUsd*4),target=Math.max(floor,Math.min(ceiling,marketMedian*.75)),maxStep=Math.max(.001,current*.1),next=round(Math.max(floor,Math.min(ceiling,current+Math.max(-maxStep,Math.min(maxStep,target-current)))));if(Math.abs(next-current)<.0005)continue;offers[product.id]={...(offers[product.id]||{}),priceUsd:next,updatedAt:new Date().toISOString(),basis:'market_median',sampleSize:comps.length};changes.push({productId:product.id,from:current,to:next,marketMedian,samples:comps.length});}if(changes.length){store.writeJson('offers.json',offers);for(const c of changes)event('price_optimized',c);}return{mode:'bounded_market_pricing',changes,at:new Date().toISOString()};}
   function boundedEvolution(signals){const bySource={};for(const s of signals)bySource[s.source]=(bySource[s.source]||0)+1;return{mode:'market_feedback',sources:bySource,at:new Date().toISOString()};}
-  function marketFloor(op){ return effectiveJobFloor(op); }
+  function marketFloor(){ return effectiveJobFloor(); }
   function blockerBucket(reason=''){
     const r=String(reason);
     if(/budget_below|below_floor|payout_ceiling/.test(r))return 'below_payout';
@@ -1118,7 +1155,7 @@ async refreshTreasury(){
   function buildMarketFunnel(rows){
     const actionRows=rows.filter(isActionableEarningSignal);
     const paid=actionRows.filter(x=>Number(x.budgetUsd||0)>0);
-    const aboveFloor=paid.filter(x=>isPreCommittedAssignedOrder(x)||Number(x.budgetUsd||0)>=marketFloor(x));
+    const aboveFloor=paid.filter(x=>isPreCommittedAssignedOrder(x)||Number(x.budgetUsd||0)>=marketFloor());
     const executable=aboveFloor.filter(x=>x.capability?.executable);
     const profitable=executable.filter(x=>x.economics?.allowed);
     // Funnel stages are strict subsets. A later stage can never be larger than an earlier
@@ -1137,7 +1174,7 @@ async refreshTreasury(){
     for(const row of actionRows){
       let bucket='';
       if(Number(row.budgetUsd||0)<=0)bucket='unpriced';
-      else if(!isPreCommittedAssignedOrder(row)&&Number(row.budgetUsd||0)<marketFloor(row))bucket='below_payout';
+      else if(!isPreCommittedAssignedOrder(row)&&Number(row.budgetUsd||0)<marketFloor())bucket='below_payout';
       else if(!row.capability?.executable)bucket='capability_missing';
       else if(!row.economics?.allowed)bucket='economics_failed';
       else {
@@ -1216,7 +1253,7 @@ async refreshTreasury(){
     const sources=[...new Set(rows.map(x=>x.source).filter(Boolean))];
     return sources.map(source=>{
       const rs=rows.filter(x=>x.source===source), js=jobs.filter(x=>x.source===source);
-      const paid=rs.filter(x=>Number(x.budgetUsd||0)>0),above=paid.filter(x=>Number(x.budgetUsd||0)>=marketFloor(x));
+      const paid=rs.filter(x=>Number(x.budgetUsd||0)>0),above=paid.filter(x=>Number(x.budgetUsd||0)>=marketFloor());
       const executable=above.filter(x=>x.capability?.executable),profitable=executable.filter(x=>x.economics?.allowed),ready=rs.filter(x=>explainCandidacy(x).isCandidate);
       const claimed=js.filter(x=>/claimed|bidding|executing|delivered|settled|paid/.test(String(x.status||''))).length;
       const delivered=js.filter(x=>/delivered|settled|paid/.test(String(x.status||''))).length;
