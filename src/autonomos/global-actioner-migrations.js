@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { isRetiredMarket } from './retired-markets.js';
 import path from 'node:path';
 
 export function migrateGlobalActionerState({env=process.env,storageDir='',logger=console}={}){
@@ -6,9 +7,12 @@ export function migrateGlobalActionerState({env=process.env,storageDir='',logger
   const file=path.join(root,'global-lead-actioner.json');
   let state;
   try{state=JSON.parse(fs.readFileSync(file,'utf8'));}catch{return{ok:true,requeued:0};}
+  const version='route-recovery-once-v2';
+  if(state.migrations?.[version])return {ok:true,requeued:0,alreadyApplied:true};
   let requeued=0;
   const reasons={};
   for(const action of Object.values(state?.actions||{})){
+    if(isRetiredMarket(action)||action.acceptedAt||action.commentId||action.gmailMessageId||action.applicationId)continue;
     const status=String(action?.status||'');
     const missing=Array.isArray(action?.missingTools)?action.missingTools.map(String):[];
     const skill=String(action?.skill||'').toLowerCase();
@@ -34,7 +38,8 @@ export function migrateGlobalActionerState({env=process.env,storageDir='',logger
     reasons[reason]=(reasons[reason]||0)+1;
     requeued++;
   }
-  if(requeued){
+  state.migrations={...state.migrations,[version]:new Date().toISOString()};
+  {
     const tmp=`${file}.${process.pid}.${Date.now()}.tmp`;
     fs.writeFileSync(tmp,JSON.stringify(state,null,2),{mode:0o600});
     fs.renameSync(tmp,file);

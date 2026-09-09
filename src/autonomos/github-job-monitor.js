@@ -18,19 +18,19 @@ export class GithubJobMonitor {
     const a=this.actioner,c=a.currentConfig();if(this.running||!c.enabled||c.killSwitch||!githubAvailable(this.env))return;
     this.running=true;
     try{
-      const rows=Object.entries(a.state.actions).filter(([,r])=>r.route==='github_issue_comment'&&!['paid','github_closed','github_rejected'].includes(r.status)&&(!r.nextCheckAt||Date.parse(r.nextCheckAt)<=Date.now()));
+      const rows=Object.entries(a.state.actions).filter(([,r])=>r.route==='github_issue_comment'&&(r.commentId||r.acceptedAt||r.status==='application_uncertain')&&!['paid','github_closed','github_rejected'].includes(r.status)&&(!r.nextCheckAt||Date.parse(r.nextCheckAt)<=Date.now()));
       rows.sort(([,a],[,b])=>Number(Boolean(b.acceptedAt))-Number(Boolean(a.acceptedAt))||Date.parse(a.deadline||'9999-01-01')-Date.parse(b.deadline||'9999-01-01'));
-      await Promise.allSettled(rows.slice(0,10).map(([id,row])=>this.check(id,row).catch(e=>a.setAction(id,{reason:String(e.message).slice(0,200),nextCheckAt:due(900000)}))));
+      await Promise.allSettled(rows.slice(0,10).map(([id,row])=>this.check(id,row).catch(e=>a.setAction(id,{reason:String(e.message).slice(0,200),nextCheckAt:e.retryAt||due(900000)}))));
     }finally{this.running=false;}
   }
   async check(id,row){
     const a=this.actioner,env=this.env,issue=parseGithubIssue(row.applicationUrl||row.url);if(!issue)return;
     if(!row.commentId){
       const proof=await githubApplication(issue,{lead:row,env,reconcileOnly:true});
-      if(!proof.ok){a.setAction(id,{reason:proof.error,nextCheckAt:due(1800000)});return;}
+      if(!proof.ok){a.setAction(id,{reason:proof.error,nextCheckAt:proof.retryAt||due(1800000)});return;}
       a.setAction(id,{status:'applied',commentId:String(proof.commentId),githubLogin:proof.login,appliedAt:row.appliedAt||stamp()});row=a.state.actions[id];
     }
-    const issueResult=await githubRequest(issueApi(issue),{env});if(!issueResult.ok)throw Error('github_status_http_'+issueResult.status);
+    const issueResult=await githubRequest(issueApi(issue),{env});if(!issueResult.ok)throw Object.assign(Error('github_status_http_'+issueResult.status),{retryAt:issueResult.retryAt});
     const detail=issueResult.value,jobId='github_'+id;
     // Recover by stable job branch even if the process died after creating the PR.
     let pr=null;

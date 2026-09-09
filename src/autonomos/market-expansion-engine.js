@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { operationBody } from './native-market-adapter.js';
+import { operationBody, schemaProperties } from './native-market-adapter.js';
 import { NativeMarketAdapter } from './native-market-adapter.js';
 import { DynamicMarketRegistry } from './dynamic-market-registry.js';
 import { isRetiredMarket } from './retired-markets.js';
@@ -29,7 +29,8 @@ export class MarketExpansionEngine{
     const scout=readJson(this.scoutFile,{candidates:{}});const candidates=Object.values(scout.candidates||{}).filter(candidate=>!isRetiredMarket(candidate)).sort((a,b)=>Number(b.score||0)-Number(a.score||0));
     const repairs=readJson(path.join(this.root,'connector-repair-requests.json'),{});
     const credentials=readJson(this.credentialsFile,{});let checked=0,integrated=0,registered=0,jobs=0;const refreshed=new Set();const repaired=new Map();const feed=[];
-    const selected=candidates.slice(0,Math.max(5,Math.min(40,Number(this.env.AUTONOMOS_MARKETS_PER_EXPANSION_CYCLE||20))));let cursor=0;
+    const dueCandidates=candidates.filter(c=>{const id=String(c.id||c.homepage||c.repoUrl||''),p=this.state.markets[id]||{};return Number(c.score||0)>=5&&(!p.lastCheckedAt||Date.now()-Date.parse(p.lastCheckedAt)>=(p.dryStreak>=3?RECHECK_DRY_MS:RECHECK_OK_MS)||repairs[id]&&repairs[id].requestedAt>String(p.lastCheckedAt)&&Date.now()-Date.parse(p.lastCheckedAt)>60000);}).sort((a,b)=>Number(Boolean(repairs[b.id]))-Number(Boolean(repairs[a.id]))||Number(Boolean(this.state.markets[a.id]?.lastCheckedAt))-Number(Boolean(this.state.markets[b.id]?.lastCheckedAt)));
+    const selected=dueCandidates.slice(0,Math.max(5,Math.min(40,Number(this.env.AUTONOMOS_MARKETS_PER_EXPANSION_CYCLE||20))));let cursor=0;
     await Promise.all(Array.from({length:Math.min(3,selected.length)},async()=>{while(cursor<selected.length){const candidate=selected[cursor++];
       if(Number(candidate.score||0)<5)continue;
       const id=String(candidate.id||candidate.homepage||candidate.repoUrl||'');if(!id)continue;const prior=this.state.markets[id]||{};
@@ -50,6 +51,12 @@ export class MarketExpansionEngine{
         row.lastRegistrationAttemptAt=new Date().toISOString();row.registrationResult=reg.ok?'registered':String(reg.error||reg.reason||'not_registered').slice(0,180);
         row.registrationIntent.status=reg.ok?'confirmed':reg.definiteFailure?'definite_failure':'uncertain';
         if(reg.ok){credential=reg.credential||{};credentials[id]=credential;registered++;row.status='registered';writeSecretJson(this.credentialsFile,credentials);}
+      }
+      if(credential&&analysis.account){
+        const adapter=new NativeMarketAdapter({id,analysis,credential,root:this.root,env:this.env});
+        const verified=await adapter.request(analysis.account).catch(()=>null);const account=verified?.data?.data||verified?.data;
+        const accountId=account?.agent_id||account?.agentId||account?.id;
+        if(verified?.ok&&accountId){credential={...credential,id:String(accountId)};credentials[id]=credential;writeSecretJson(this.credentialsFile,credentials);this.registry.observe(id,{ownerActionRequired:false,evidence:{authentication:{verified:true,externalId:String(accountId),url:verified.url,verifiedAt:new Date().toISOString()}}});}
       }
       if(analysis.jobs?.path){
         const polled=await pollJobs(analysis,credential,this.env).catch(e=>({ok:false,error:safe(e),rows:[]}));
@@ -75,13 +82,14 @@ export async function inspectMarket(seed,candidate,env){
   const specs=[];for(const link of links)if(/openapi|swagger|api-docs|spec\.json/i.test(link))specs.push(link);
   for(const suffix of ['/openapi.json','/swagger.json','/api/openapi.json','/api/docs/openapi.json'])specs.push(new URL(suffix,`https://${host}`).toString());
   let spec=null,openapiUrl='';for(const specUrl of [...new Set(specs)].slice(0,8)){if(new URL(specUrl).hostname.toLowerCase()!==host)continue;const r=await getJson(specUrl).catch(()=>null);if(r&&r.paths&&typeof r.paths==='object'){spec=r;openapiUrl=specUrl;break;}}
-  const out={ok:true,host,openapiUrl,baseUrl:'https://'+host,automationPermitted:false,humanGate:HUMAN_GATE.test(evidence.replace(/(?:no|without)\s+(?:kyc|captcha|identity verification)/gi,'')),payoutSignal:MONEY.test(evidence),registration:null,jobs:null,details:null,applications:null,submissions:null,claim:null,delivery:null};
+  const out={ok:true,host,openapiUrl,baseUrl:'https://'+host,automationPermitted:false,humanGate:HUMAN_GATE.test(evidence.replace(/(?:no|without)\s+(?:kyc|captcha|identity verification)/gi,'')),payoutSignal:MONEY.test(evidence),registration:null,account:null,jobs:null,details:null,applications:null,submissions:null,claim:null,delivery:null};
   if(!spec)return out;
   const server=spec.servers?.find(x=>typeof x.url==='string'&&!x.url.includes('{'));if(server){const base=new URL(server.url,url);if(base.protocol==='https:'&&base.hostname===host)out.baseUrl=base.toString().replace(/\/$/,'');}
   out.securitySchemes=spec.components?.securitySchemes||{};out.automationPermitted=spec.info?.['x-automation-permitted']===true;out.applicationCostUsd=spec.info?.['x-application-cost-usd']===0?0:null;
   const paths=Object.entries(spec.paths||{});
   for(const [p,ops] of paths){for(const [method,op] of Object.entries(ops||{})){if(!/^(get|post|put|patch)$/i.test(method))continue;const text=`${p} ${op?.operationId||''} ${op?.summary||''} ${op?.description||''}`;
     if(!out.registration&&/post/i.test(method)&&REGISTER.test(text)&&/agent|provider|worker|seller/i.test(text))out.registration=operation(p,method,op,spec);
+    if(!out.account&&method==='get'&&/(?:^|\/)(?:me|profile|account)$/.test(p)&&(op.security||spec.security)?.length)out.account=operation(p,method,op,spec);
     if(!out.details&&method==='get'&&/\{(?:id|job_id|jobId|task_id|taskId)\}/.test(p)&&/jobs?|tasks?/i.test(p)&&!/applications|submissions|payments/.test(p))out.details=operation(p,method,op,spec);
     if(!out.applications&&method==='get'&&/applications|bids|claims/i.test(p))out.applications=operation(p,method,op,spec);
     if(!out.submissions&&method==='get'&&/submissions|results|deliveries/i.test(p))out.submissions=operation(p,method,op,spec);
@@ -90,19 +98,24 @@ export async function inspectMarket(seed,candidate,env){
     if(!out.delivery&&/post|put|patch/i.test(method)&&/submit|deliver|complete|finish|result/i.test(text))out.delivery=operation(p,method,op,spec);
   }}
   if(out.registration&&out.jobs&&/\b(?:AI|autonomous|software) agents?\b/i.test(String(spec.info?.description||''))&&candidate.automationPermitted!==false)out.automationPermitted=true;
-  const basePath=new URL(out.baseUrl).pathname.replace(/\/$/,'');if(basePath)for(const key of ['registration','jobs','details','applications','submissions','claim','delivery'])if(out[key])out[key].path=basePath+'/'+out[key].path.replace(/^\//,'');
+  const basePath=new URL(out.baseUrl).pathname.replace(/\/$/,'');if(basePath)for(const key of ['registration','account','jobs','details','applications','submissions','claim','delivery'])if(out[key])out[key].path=basePath+'/'+out[key].path.replace(/^\//,'');
   const specText=JSON.stringify(spec).slice(0,100000);out.humanGate=out.humanGate||HUMAN_GATE.test(specText.replace(/(?:no|without)\s+(?:kyc|captcha|identity verification)/gi,''));out.payoutSignal=out.payoutSignal||MONEY.test(specText);return out;
 }
 function operation(pathname,method,op,spec){return{path:pathname,method:String(method).toUpperCase(),kind:/bid|apply|application/i.test(op.operationId||pathname)?'competitive':'direct',security:Array.isArray(op?.security)?op.security:(spec.security||null),requestSchema:resolveRequestSchema(op,spec)};}
-function resolveRequestSchema(op,spec){const schema=op?.requestBody?.content?.['application/json']?.schema;if(!schema)return null;if(schema.$ref)return resolveRef(schema.$ref,spec);return schema;}
-function resolveRef(ref,spec){if(!String(ref).startsWith('#/'))return null;let cur=spec;for(const part of String(ref).slice(2).split('/'))cur=cur?.[part];return cur&&typeof cur==='object'?cur:null;}
+function resolveRequestSchema(op,spec){const body=resolveSchema(op?.requestBody,spec);return body?.content?.['application/json']?.schema||null;}
+function resolveSchema(value,spec,seen=new Set(),depth=0){
+ if(!value||typeof value!=='object')return value;if(depth>16)throw Error('openapi_schema_depth_limit');
+ if(value.$ref){if(!value.$ref.startsWith('#/'))throw Error('external_schema_ref_not_verified');if(seen.has(value.$ref))return value;let target=spec;for(const part of value.$ref.slice(2).split('/'))target=target?.[part.replaceAll('~1','/').replaceAll('~0','~')];if(!target)throw Error('openapi_ref_missing');return resolveSchema(target,spec,new Set([...seen,value.$ref]),depth+1);}
+ if(Array.isArray(value))return value.map(x=>resolveSchema(x,spec,seen,depth+1));
+ return Object.fromEntries(Object.entries(value).map(([k,v])=>[k,resolveSchema(v,spec,seen,depth+1)]));
+}
 async function tryRegister(analysis,candidate,env){
   const op=analysis.registration;if(!op?.path||op.method!=='POST')return{ok:false,reason:'registration_not_post'};
   if(Array.isArray(op.security)&&op.security.length>0)return{ok:false,reason:'registration_requires_existing_auth'};
-  const schema=op.requestSchema||{};const required=Array.isArray(schema.required)?schema.required:[];const properties=schema.properties||{};const body={};const safeValues={email:String(env.AUTONOMOS_REGISTRATION_EMAIL||env.CONTACT_EMAIL||''),skills:['coding','research','translation','data processing','document generation'],capabilities:['coding','research','translation','data processing','document generation'],name:'AutonomOS',agent_name:'AutonomOS',display_name:'AutonomOS',description:'Autonomous AI digital-services agency',wallet_address:String(env.AUTONOMOS_OWNER_WALLET||''),walletAddress:String(env.AUTONOMOS_OWNER_WALLET||''),website:String(env.SITE_URL||env.RENDER_EXTERNAL_URL||'https://qonvexa.co'),base_price:30,basePrice:30};
+  const schema=op.requestSchema||{};const required=Array.isArray(schema.required)?schema.required:[];const properties=schemaProperties(schema);let body={};const safeValues={email:String(env.AUTONOMOS_REGISTRATION_EMAIL||env.CONTACT_EMAIL||''),skills:['coding','research','translation','data processing','document generation'],capabilities:['coding','research','translation','data processing','document generation'],name:'AutonomOS',agent_name:'AutonomOS',display_name:'AutonomOS',description:'Autonomous AI digital-services agency',wallet_address:String(env.AUTONOMOS_OWNER_WALLET||''),walletAddress:String(env.AUTONOMOS_OWNER_WALLET||''),website:String(env.SITE_URL||env.RENDER_EXTERNAL_URL||'https://qonvexa.co'),base_price:30,basePrice:30};
   for(const key of Object.keys(properties)){if(Object.prototype.hasOwnProperty.call(safeValues,key)&&safeValues[key]!=='' )body[key]=safeValues[key];}
   for(const key of required)if(!(key in body))return{ok:false,definiteFailure:true,reason:`required_field_not_safely_available:${key}`};
-  try{operationBody(op,body);}catch(e){return {ok:false,definiteFailure:true,reason:String(e.message)};}
+  try{body=operationBody(op,body);}catch(e){return {ok:false,definiteFailure:true,reason:String(e.message)};}
   const endpoint=new URL(op.path,`https://${analysis.host}`).toString();if(new URL(endpoint).hostname.toLowerCase()!==analysis.host)return{ok:false,reason:'cross_host_registration_blocked'};
   const r=await fetch(endpoint,{method:'POST',redirect:'error',headers:{'content-type':'application/json',accept:'application/json','user-agent':'AutonomOS-MarketExpansion/1.0'},body:JSON.stringify(body),signal:AbortSignal.timeout(15_000)});const data=await safeJson(r);if(!r.ok)return{ok:false,definiteFailure:r.status>=400&&r.status<500,error:`http_${r.status}:${publicError(data)}`};
   if(!Object.keys(extractCredential(data)).length)return{ok:false,error:'registration_external_identity_missing'};return{ok:true,credential:extractCredential(data),public:{id:String(data?.id||data?.agent_id||data?.agentId||'')}};
@@ -133,13 +146,13 @@ function safe(error){return String(error?.message||error||'').slice(0,240);}
 
 export function validateMarketContract(analysis){
  const reasons=[];
- for(const key of ['registration','jobs','details','applications','submissions','claim','delivery']){
+ for(const key of ['registration','account','jobs','details','applications','submissions','claim','delivery']){
   const op=analysis[key];if(!op)continue;
   let url;try{url=new URL(op.path,analysis.baseUrl||'https://'+analysis.host);}catch{reasons.push(key+':invalid_url');continue;}
   if(url.protocol!=='https:'||url.hostname!==analysis.host||url.username||url.password)reasons.push(key+':cross_origin');
   if(!['GET','POST','PUT','PATCH'].includes(op.method))reasons.push(key+':method');
   if(['registration','claim','delivery'].includes(key)&&!op.requestSchema)reasons.push(key+':schema_required');
-  const schema=op.requestSchema;if(schema?.required?.some(k=>!schema.properties?.[k]))reasons.push(key+':required_property_missing');
+  const schema=op.requestSchema;try{const properties=schemaProperties(schema);if(schema?.required?.some(k=>!properties[k]))reasons.push(key+':required_property_missing');}catch{reasons.push(key+':unresolved_schema');}
  }
  return {ok:!reasons.length,reasons};
 }

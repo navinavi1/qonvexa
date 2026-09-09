@@ -15,11 +15,11 @@ export class TaskAgentRuntime {
   spawnForPlan({jobId,opportunity,plan,maxAgents=null}={}){
     this.cleanup();const key=String(jobId||'');if(!key)throw new Error('task_agent_job_id_required');
     const existing=this.forJob(key).filter(x=>x.status==='active');if(existing.length)return existing;
-    // maxAgents is a scheduler hint, not a business cap. A larger deployment-level workforce
-    // setting always wins so the swarm can grow with available work.
+    // maxAgents limits this job's team. Other jobs retain their own slots within the
+    // deployment-wide process capacity.
     const deploymentCapacity=Math.max(1,Number(this.env.AUTONOMOS_MAX_TASK_AGENTS||DEFAULT_MAX_TASK_AGENTS));
-    const configuredGlobal=Math.min(deploymentCapacity,Number(maxAgents||deploymentCapacity));
-    const perJob=Math.max(1,Math.min(configuredGlobal,Number(this.env.AUTONOMOS_MAX_TASK_AGENTS_PER_JOB||DEFAULT_MAX_PER_JOB)));
+    const configuredGlobal=deploymentCapacity;
+    const perJob=Math.max(1,Math.min(configuredGlobal,Number(maxAgents||configuredGlobal),Number(this.env.AUTONOMOS_MAX_TASK_AGENTS_PER_JOB||DEFAULT_MAX_PER_JOB)));
     const activeGlobal=[...this.agents.values()].filter(x=>x.status==='active').length;
     const slots=Math.max(0,Math.min(perJob,configuredGlobal-activeGlobal));
     if(!slots){this.onEvent('task_team_deferred',{jobId:key,reason:'process_workforce_capacity_reached',activeGlobal,configuredGlobal});return[];}

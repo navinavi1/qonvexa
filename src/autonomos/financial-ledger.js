@@ -17,7 +17,15 @@ function round6(value){return Math.round((Number(value||0)+Number.EPSILON)*1e6)/
 // -1 explicitly reads the full journal; a limit of 0 means no rows in this store.
 export function appendUniqueLedgerEntry(store, record) {
   if (!record?.id) throw new Error('ledger_id_required');
-  if (store.readNdjson('ledger.ndjson', -1).some(row => row.id === record.id)) return false;
+  if (store.readNdjson('ledger.ndjson', -1).some(row => row.id === record.id || record.type==='revenue'&&row.type==='revenue'&&receiptIdentity(record)&&receiptIdentity(record)===receiptIdentity(row))) return false;
   store.append('ledger.ndjson', record);
   return true;
+}
+
+// Marketplace-local numeric receipt IDs are not globally unique. Chain hashes are.
+export function receiptIdentity(row){
+ const id=String(row.externalTransactionId||row.txId||'');if(!id)return '';
+ if(/^0x[0-9a-f]{64}$/i.test(id))return 'chain:'+String(row.network||'evm')+':'+id.toLowerCase();
+ if(row.network&&row.rail==='crypto')return 'chain:'+row.network+':'+id;
+ return 'market:'+String(row.source||'unknown')+':'+id;
 }

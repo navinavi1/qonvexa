@@ -9,9 +9,9 @@ import { withAgentTrace } from './langfuse-observability.js';
 import { buildAcceptanceContract, buildPhaseAcceptanceContract, buildEvidencePack } from './acceptance-engine.js';
 
 const SPECIALIST_TOOLS=Object.freeze({
-  'research-worker':['web_search','web_scrape','browser_task'],
+  'research-worker':['web_search','web_scrape','browser_read'],
   'code-worker':['run_python','run_shell','open_pull_request','store_artifact','coderabbit_review','deploy_webhook'],
-  'automation-worker':['app_tool_search','app_action','browser_task','store_artifact'],
+  'automation-worker':['app_tool_search','app_action','browser_read','browser_action','store_artifact'],
   'content-worker':['store_artifact']
 });
 const HANDOFF_ROLE_ORDER=Object.freeze(['research-worker','code-worker','automation-worker','content-worker']);
@@ -41,7 +41,7 @@ export async function orchestrateJob(opportunity,opts={}){
 }
 
 async function orchestrateJobCore(opportunity,{llm,execute,memory=null,taskAgents=null,jobId='',env=process.env,abortSignal=null,onEvent=()=>{},maxTaskAgents=null,store=null}={}){
-  const checkpoint=checkpointExecution(store,jobId);const rawExecute=execute;execute=(op,opts={})=>checkpoint(`execute:${opts.phaseRole||'single'}`,()=>rawExecute(op,opts));
+  const checkpoint=checkpointExecution(store,jobId);const rawExecute=execute;execute=(op,opts={})=>checkpoint(`execute:${opts.phaseRole||'single'}`,()=>rawExecute(op,opts),{retrySafe:opportunity.executionKind==='repository'||opportunity.executionRetrySafe===true});
   onEvent('job_memory_started',{jobId});const memoryPack=memory?.contextForOpportunity?await memory.contextForOpportunity(opportunity,{limit:Number(env.AUTONOMOS_MEMORY_RECALL_LIMIT||5)}).catch(()=>({context:'',hits:[]})):{context:'',hits:[]};
   if(memoryPack.hits?.length)onEvent('memory_recalled',{count:memoryPack.hits.length,keys:memoryPack.hits.map(x=>x.key).slice(0,8)});
   onEvent('job_planning_started',{jobId});const plan=await checkpoint('plan',async()=>{try{return await planJob(opportunity,{llm,env,abortSignal,memoryContext:memoryPack.context});}catch(error){error.safeToRetry=true;throw error;}},{retrySafe:true});

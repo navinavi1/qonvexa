@@ -1,3 +1,4 @@
+import { receiptIdentity } from './financial-ledger.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { canonicalOpportunity, eligibility } from './canonical-opportunity.js';
@@ -38,7 +39,7 @@ export function businessSnapshot(storageDir,env=process.env){
   if(a.delivered&&!a.paidAt&&!a.revenueRecordedAt){counts.payoutPending++;pendingPayoutUsd+=Math.max(0,Number(op.payoutUsd||0)-Number(a.receivedUsd||0));}
  }
  let ledger=[];try{ledger=fs.readFileSync(path.join(root,'ledger.ndjson'),'utf8').split('\n').filter(Boolean).flatMap(line=>{try{return[JSON.parse(line)];}catch{return[];}});}catch{}
- const seen=new Set(),revenues=ledger.filter(x=>x.type==='revenue'&&!x.testnet&&['settled','paid','confirmed','released'].includes(x.status)&&Number(x.amountUsd)>0).filter(x=>{const id=x.externalTransactionId||x.txId||x.id;if(!id||seen.has(id))return false;seen.add(id);return true;});
+ const seen=new Set(),revenues=ledger.filter(x=>x.type==='revenue'&&!x.testnet&&['settled','paid','confirmed','released'].includes(x.status)&&Number(x.amountUsd)>0).filter(x=>{const id=receiptIdentity(x)||x.id;if(!id||seen.has(id))return false;seen.add(id);return true;});
  const totals=new Map();for(const r of revenues){const id=r.jobId||r.externalId;if(id)totals.set(id,(totals.get(id)||0)+Number(r.amountUsd));}
  const expected=new Map([...jobs.values()].map(({op,a})=>[a.ledgerJobId,op.payoutUsd]));
  counts.paid=[...totals].filter(([id,total])=>!expected.has(id)||Number(expected.get(id))>0&&total>=Number(expected.get(id))).length;

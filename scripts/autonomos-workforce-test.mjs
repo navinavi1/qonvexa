@@ -164,7 +164,7 @@ assert.deepEqual(distinctExecutionRoles({steps:[{role:'code-worker'},{role:'rese
   };
   const result=await runHandoffChain(['research-worker','code-worker'],{title:'test'},{steps:[]},{execute:mockExecute,taskAgents:null,jobId:'job-handoff',onEvent:()=>{}});
   assert.equal(calls.length,2,'one execute() call per named specialist');
-  assert.deepEqual(calls[0].toolFilter,['web_search','web_scrape','browser_task'],'research specialist must be scoped to research tools only');
+  assert.deepEqual(calls[0].toolFilter,['web_search','web_scrape','browser_read'],'research specialist must be scoped to research tools only');
   assert.deepEqual(calls[1].toolFilter,['run_python','run_shell','open_pull_request','store_artifact','coderabbit_review','deploy_webhook'],'build specialist must be scoped to build tools only, never web_search');
   assert.equal(calls[0].briefing,'','the first specialist has no earlier teammate to build on');
   assert.match(calls[1].briefing,/100 req\/min/,'the second specialist must receive the first specialist'+String.fromCharCode(39)+'s real output as briefing, not a generic hint');

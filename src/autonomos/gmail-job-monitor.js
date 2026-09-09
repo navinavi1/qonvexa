@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import { reconcileClientPayments } from './inbound-receipt.js';
 import { runAcceptedJob } from './accepted-job-engine.js';
 import { hardenedGmailTick } from './revenue-lifecycle.js';
@@ -13,6 +14,7 @@ import { computeEarnedSpendBudgetUsd } from './profit-engine.js';
 const ACCEPTED=/\b(?:we(?:'d| would) like to (?:proceed|move forward)|your (?:proposal|application) (?:is|was|has been) accepted|we (?:have )?(?:selected|chosen) you|you(?:'re| are) hired|project (?:is )?awarded to you|please (?:start|proceed|begin)|go ahead with (?:the )?(?:work|project)|we want to work with you)\b/i;
 const REJECTED=/\b(?:not selected|not moving forward|proposal rejected|application rejected|decided to (?:go|move) with another|position has been filled|project (?:was )?awarded to another)\b/i;
 const NEEDS_INFO=/\b(?:could you|can you|please (?:send|share|confirm|clarify)|more information|need (?:more|some) details|availability|timeline|estimate|quote|portfolio|sample)\b/i;
+const CLIENT_ACCEPTED=/\b(?:deliverable|work|submission|result|revision) (?:is |has been )?(?:accepted|approved)|\b(?:I|we) (?:accept|approve) (?:the |your )?(?:deliverable|work|submission|result|revision)\b/i;
 const PAYMENT_SIGNAL=/\b(?:payment sent|payment released|funds released|paid you|payment completed|transaction (?:hash|id)|usdc sent|usdt sent)\b/i;
 
 export class GmailJobMonitor{
@@ -36,30 +38,30 @@ export class GmailJobMonitor{
     });
     const latest=candidates.sort((a,b)=>Date.parse(b.at||0)-Date.parse(a.at||0))[0];
     if(action.gmailThreadId)this.actioner.setAction(id,{gmailThreadId:action.gmailThreadId,gmailMessageId:action.gmailMessageId});
-    if(!latest||latest.id&&latest.id===action.lastProcessedReplyId){this.actioner.setAction(id,{nextCheckAt:new Date(Date.now()+30*60_000).toISOString(),lastEmailCheckedAt:new Date().toISOString()});return;}
+    if(!latest||latest.id&&latest.id===action.lastProcessedReplyId){if(action.status==='email_needs_info'&&action.clientReply)await this.answerClarification(id,action,action.clientReply);this.actioner.setAction(id,{nextCheckAt:new Date(Date.now()+30*60_000).toISOString(),lastEmailCheckedAt:new Date().toISOString()});return;}
     const text=String(latest.text||'').slice(0,12000);
-    this.actioner.setAction(id,{lastProcessedReplyId:latest.id||'',replyMessageRfcId:latest.rfcMessageId||'',replySubject:latest.subject||'',lastEmailCheckedAt:new Date().toISOString()});
+    const replyState={lastProcessedReplyId:latest.id||'',replyMessageRfcId:latest.rfcMessageId||'',replySubject:latest.subject||'',lastEmailCheckedAt:new Date().toISOString()};
     if(String(action.status)==='submitted_email'){
-      if(/\b(?:revision requested|please revise|please fix|changes required|request changes)\b/i.test(text)){this.actioner.setAction(id,{status:'accepted_email',clientReply:text,revision:Number(action.revision||0)+1,nextCheckAt:''});await this.executeAndDeliver(id,this.actioner.state.actions[id]);return;}
+      if(/\b(?:revision requested|please revise|please fix|changes required|request changes)\b/i.test(text)){this.actioner.setAction(id,{...replyState,status:'accepted_email',clientReply:text,revision:Number(action.revision||0)+1,revisionRequestedAt:new Date().toISOString(),clientAcceptedAt:'',nextCheckAt:''});await this.executeAndDeliver(id,this.actioner.state.actions[id]);return;}
       if(PAYMENT_SIGNAL.test(text)){
         // Email is NOT settlement truth. Surface the signal, but do not book revenue until
         // wallet/marketplace reconciliation proves funds actually arrived.
-        this.actioner.setAction(id,{status:'submitted_email',paymentClaimSeen:true,paymentClaims:[...new Set([...(action.paymentClaims||[]),...(text.match(/0x[\da-f]{64}\b/gi)||[])])].slice(0,5),paymentClaimAt:new Date().toISOString(),paymentClaimFrom:maskEmail(latest.from),nextCheckAt:new Date(Date.now()+30*60_000).toISOString()});
+        this.actioner.setAction(id,{...replyState,status:'submitted_email',paymentClaimSeen:true,paymentClaims:[...new Set([...(action.paymentClaims||[]),...(text.match(/0x[\da-f]{64}\b/gi)||[])])].slice(0,5),paymentClaimAt:new Date().toISOString(),paymentClaimFrom:maskEmail(latest.from),nextCheckAt:new Date(Date.now()+30*60_000).toISOString()});
         this.log('email_payment_claim_seen',{id});return;
       }
-      this.actioner.setAction(id,{nextCheckAt:new Date(Date.now()+30*60_000).toISOString()});return;
+      this.actioner.setAction(id,{...replyState,...(CLIENT_ACCEPTED.test(text)&&! /\b(?:not|never|if|once|when|unless|until|pending)\b/i.test(text)?{clientAcceptedAt:new Date().toISOString(),payoutStatus:'PENDING'}:{}),nextCheckAt:new Date(Date.now()+30*60_000).toISOString()});return;
     }
-    if(REJECTED.test(text)){this.actioner.archive(id,'archived','email application rejected by client');this.log('email_application_rejected',{id});return;}
+    if(REJECTED.test(text)){this.actioner.setAction(id,{...replyState,status:'archived'});this.actioner.archive(id,'archived','email application rejected by client');this.log('email_application_rejected',{id});return;}
     if(ACCEPTED.test(text)){
-      this.actioner.setAction(id,{status:'accepted_email',acceptedAt:new Date().toISOString(),acceptedBy:maskEmail(latest.from),replyFrom:String(latest.from||''),clientReply:text.slice(0,5000),nextCheckAt:''});
+      this.actioner.setAction(id,{...replyState,status:'accepted_email',acceptedAt:new Date().toISOString(),acceptedBy:maskEmail(latest.from),replyFrom:String(latest.from||''),clientReply:text.slice(0,5000),nextCheckAt:''});
       this.actioner.state.stats.accepted=Number(this.actioner.state.stats.accepted||0)+1;this.log('email_application_accepted',{id});
       await this.executeAndDeliver(id,this.actioner.state.actions[id]);return;
     }
     if(NEEDS_INFO.test(text)){
-      this.actioner.setAction(id,{status:'email_needs_info',clientReply:text.slice(0,5000),replyFrom:String(latest.from||''),nextCheckAt:new Date(Date.now()+60*60_000).toISOString()});
+      this.actioner.setAction(id,{...replyState,status:'email_needs_info',clientReply:text.slice(0,5000),replyFrom:String(latest.from||''),nextCheckAt:new Date(Date.now()+60*60_000).toISOString()});
       await this.answerClarification(id,this.actioner.state.actions[id],text).catch(()=>{});return;
     }
-    this.actioner.setAction(id,{lastEmailCheckedAt:new Date().toISOString(),nextCheckAt:new Date(Date.now()+30*60_000).toISOString()});
+    this.actioner.setAction(id,{...replyState,lastEmailCheckedAt:new Date().toISOString(),nextCheckAt:new Date(Date.now()+30*60_000).toISOString()});
   }
 
   async executeAndDeliver(id,action){
@@ -80,10 +82,11 @@ export class GmailJobMonitor{
 
     if(!deliverable||!qa?.ok){this.actioner.setAction(id,{status:'accepted_repair_exhausted',qaReasons:qa?.reasons||[],nextCheckAt:new Date(Date.now()+2*60*60_000).toISOString()});return;}
     const artifacts=(deliverable?.evidence?.toolCalls||[]).flatMap(x=>x?.artifacts||[]).filter(x=>x?.ok&&x?.url).map(x=>x.url).slice(0,10);
-    const body=[String(deliverable.content||''),'',...(artifacts.length?['Deliverable files:',...artifacts]:[]),'','Completed by AutonomOS.'].join('\n').slice(0,18000);
+    const deliveryMarker='AutonomOS delivery '+crypto.createHash('sha256').update(id+':'+Number(action.revision||0)).digest('hex').slice(0,24);
+    const body=[String(deliverable.content||'').slice(0,16000),'',...(artifacts.length?['Deliverable files:',...artifacts]:[]),'','Completed by AutonomOS.',deliveryMarker].join('\n');
     const recipient=extractEmail(action.replyFrom)||String(action.recipient||'');if(!recipient){this.actioner.setAction(id,{status:'submission_uncertain',reason:'accepted email sender address unavailable',nextCheckAt:new Date(Date.now()+60*60_000).toISOString()});return;}
     const subject=`Re: Application: ${String(action.title||lead.title||'Paid digital project').replace(/\s+/g,' ').slice(0,120)} — AutonomOS`;
-    this.actioner.setAction(id,{status:'delivery_email_in_progress',deliverableSnapshot:deliverable,qaSnapshot:qa,deliveryBody:body,deliveryRecipient:recipient,qaScore:Number(qa.score||1),budgetSpentUsd:budget.spent});
+    this.actioner.setAction(id,{status:'delivery_email_in_progress',deliveryMarker,deliveryIntentAt:new Date().toISOString(),deliverableSnapshot:deliverable,qaSnapshot:qa,deliveryBody:body,deliveryRecipient:recipient,qaScore:Number(qa.score||1),budgetSpentUsd:budget.spent});
     const sent=await this.sendEmail(recipient,action.replySubject||subject,body,action);
     if(sent.ok&&gmailMessageIdentity(sent.data).gmailMessageId){this.actioner.setAction(id,{gmailDeliveryMessageId:gmailMessageIdentity(sent.data).gmailMessageId,status:'submitted_email',submittedAt:new Date().toISOString(),emailDeliveryLogId:String(sent.logId||''),nextCheckAt:new Date(Date.now()+30*60_000).toISOString()});this.actioner.state.stats.submitted=Number(this.actioner.state.stats.submitted||0)+1;this.log('email_work_submitted',{id,qaScore:Number(qa.score||1)});return;}
     // Do not auto-resend after an external send attempt with ambiguous result.

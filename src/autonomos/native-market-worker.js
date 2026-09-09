@@ -35,11 +35,12 @@ export class NativeMarketWorker{
     if(!jobs[id])this.save(id,{id,externalId:raw.externalId,marketId:raw.marketId,status:'discovered',opportunity:canonicalOpportunity({...raw,source:raw.marketId,workType:'REAL_MARKET_JOB',claimRoute:'API_APPLICATION',competitive:analysis.claim.kind==='competitive'})});
    }
    jobs=this.store.readJson('native-market-jobs.json',{});
-   const pending=Object.values(jobs).filter(j=>!['paid','rejected','expired'].includes(j.status)&&(!j.nextRetryAt||Date.parse(j.nextRetryAt)<=Date.now())).sort((a,b)=>Number(!!b.acceptedAt)-Number(!!a.acceptedAt)||Date.parse(a.opportunity.deadline||'9999-01-01')-Date.parse(b.opportunity.deadline||'9999-01-01'));
+   const connectorVersion=j=>crypto.createHash('sha256').update(JSON.stringify([expansion.markets?.[j.marketId]?.analysis,credentials[j.marketId]||{},j.marketId==='freelancer.com'?this.env.FREELANCER_OAUTH_TOKEN||'':''])).digest('hex');
+   const pending=Object.values(jobs).filter(j=>!(j.holdUntilChange&&j.connectorVersion===connectorVersion(j))).filter(j=>!['paid','rejected','expired'].includes(j.status)&&(!j.nextRetryAt||Date.parse(j.nextRetryAt)<=Date.now())).sort((a,b)=>Number(!!b.acceptedAt)-Number(!!a.acceptedAt)||Date.parse(a.opportunity.deadline||'9999-01-01')-Date.parse(b.opportunity.deadline||'9999-01-01'));
    await Promise.allSettled(pending.slice(0,10).map(async job=>{
     const analysis=expansion.markets?.[job.marketId]?.analysis;if(!analysis)return;
     const Adapter=job.marketId==='freelancer.com'?FreelancerAdapter:NativeMarketAdapter;const adapter=new Adapter({id:job.marketId,analysis,credential:credentials[job.marketId],root:this.root,env:this.env});
-    const version=crypto.createHash('sha256').update(JSON.stringify([analysis,credentials[job.marketId]||{},job.marketId==='freelancer.com'?this.env.FREELANCER_OAUTH_TOKEN||'':''])).digest('hex');if(job.holdUntilChange&&job.connectorVersion===version)return;
+    const version=connectorVersion(job);if(job.holdUntilChange&&job.connectorVersion===version)return;
     job=this.save(job.id,{connectorVersion:version,holdUntilChange:false});
     try{if(adapter.prepare)await adapter.prepare();await this.process(job,adapter,config);}catch(e){const failure=classifyFailure(Number(String(e.message).match(/http_(\d+)/)?.[1]||0),e.message);await this.fail(job,failure,String(e.message));}
    }));
@@ -61,6 +62,7 @@ export class NativeMarketWorker{
   const identity=String(raw.assigned_agent_id||raw.assignedAgentId||raw.provider_id||'');
   const assigned=!!agentId&&identity===agentId;
   if(!job.applicationId&&!assigned){
+   if(identity||!['open','available','published','pending'].includes(status)){this.save(job.id,{reason:'job_not_available_for_application',nextRetryAt:new Date(Date.now()+3600000).toISOString()});return;}
    if(job.status==='application_uncertain'){const recovered=await adapter.reconcile('claim',job);if(recovered)this.save(job.id,{applicationId:String(recovered.id),applied:true,status:'applied'});return;}
    const check=eligibility({...op,applicationCostUsd:adapter.analysis.applicationCostUsd},this.env,{phase:'application'});if(!check.eligible){this.save(job.id,{opportunity:op,reason:check.reasons.join(','),nextRetryAt:new Date(Date.now()+3600000).toISOString()});return;}
    let cap=classifyOpportunity({...op,budgetUsd:op.payoutUsd},this.a.capabilityContext());if(!cap.executable){for(const gap of cap.missingTools||[])await recoverFreeCapability(gap,this.env);await refreshCapabilities(this.env);cap=classifyOpportunity({...op,budgetUsd:op.payoutUsd},this.a.capabilityContext());}if(!cap.executable)throw Error('capability_recovery_required');
@@ -68,10 +70,10 @@ export class NativeMarketWorker{
    if(result.ok)this.evidence(job,'application',result.proof);
    this.save(job.id,{opportunity:op,status:result.ok?'applied':result.uncertain?'application_uncertain':'application_failed',applicationId:result.proof?.externalId||'',applied:result.ok,reason:result.error||result.failure?.type||'',nextRetryAt:new Date(Date.now()+(result.ok?900000:3600000)).toISOString()});if(result.failure&&!result.uncertain)await this.fail(job,result.failure,result.failure.type);return;
   }
-  if(['paid','settled','released'].includes(String(raw.payment_status||raw.payout?.status||'').toLowerCase())){
+  if(assigned&&['paid','settled','released'].includes(String(raw.payment_status||raw.payout?.status||'').toLowerCase())){
     const tx=raw.payment_transaction_id||raw.payout?.transaction_id,amount=Number(raw.payout?.amount_usd||raw.paid_amount_usd||0);
     const payments=Array.isArray(raw.payments)?raw.payments:[{id:tx,amountUsd:amount,feeUsd:Number(raw.payout?.fee_usd||0)}];
-    let received=0;for(const payment of payments){if(!payment.id||!(Number(payment.amountUsd)>0))continue;received+=Number(payment.amountUsd);appendUniqueLedgerEntry(this.store,ledgerEntry({id:'native_'+job.marketId+'_'+payment.id,type:'revenue',jobId:job.id,externalId:job.externalId,externalTransactionId:String(payment.id),source:job.marketId,amountUsd:Number(payment.amountUsd),feeUsd:Number(payment.feeUsd||0),status:'settled'}));}
+    let received=0;const seenPayments=new Set();for(const payment of payments){if(!payment.id||seenPayments.has(String(payment.id))||!Number.isFinite(Number(payment.amountUsd))||!(Number(payment.amountUsd)>0))continue;seenPayments.add(String(payment.id));received+=Number(payment.amountUsd);appendUniqueLedgerEntry(this.store,ledgerEntry({id:'native_'+job.marketId+'_'+payment.id,type:'revenue',jobId:job.id,externalId:job.externalId,externalTransactionId:String(payment.id),source:job.marketId,amountUsd:Number(payment.amountUsd),feeUsd:Number(payment.feeUsd||0),status:'settled'}));}
     if(received>0&&op.payoutUsd>0&&received>=op.payoutUsd){this.evidence(job,'payout',{externalId:String(payments.find(p=>p.id)?.id),url:detail.url});this.save(job.id,{status:'paid',paidAt:now()});return;}
     if(received>0)this.save(job.id,{receivedUsd:received,payoutStatus:'PARTIALLY_PAID'});
   }

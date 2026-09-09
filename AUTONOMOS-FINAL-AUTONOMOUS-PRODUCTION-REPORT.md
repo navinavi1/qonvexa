@@ -214,3 +214,14 @@ Snapshot timestamp: 2026-09-09T19:17:20.966Z
 ## Фінальний локальний verification receipt
 
 Повний `npm run verify`: exit 0. `mega-pass-73-test`: 6/6. `remaining-lifecycle-test`: 18/18. Actual Chromium workflow: PASS. Render official JSON schema: PASS. `git diff --check`: PASS.
+
+
+## Consolidated follow-through — 2026-09-09
+
+This follow-through is one release after commit `37da4f6c948e76aca2b40b9da7a26fc7e670d7c8`; no intermediate commits or deployments. It addresses restart requeue loops, monitoring of never-sent GitHub applications, quota-reset backoff, per-job workforce capacity, interrupted deterministic/repository execution, workflow memory, native queue starvation and payment ownership, OpenAPI references/composition, account identity verification, and market discovery scheduling.
+
+Gmail now persists accepted/revision state with its processed reply, distinguishes explicit client approval from settlement, uses revision-specific delivery reconciliation, and processes accepted queues with bounded concurrency. Marketplace-local receipt IDs no longer collide across sources; duplicate receipts cannot be appended again. Unknown execution costs and malformed monetary values cannot be treated as profitable work.
+
+Validation: full `npm run verify` passed, plus 16 focused restart/queue/schema/financial/mail regressions and actual Chromium upload/form/receipt/download/session tests. The focused suite is part of the permanent GitHub and Render verification gate.
+
+The original 73-item matrix still distinguishes code coverage from live external acceptance. This release does not manufacture application, assignment, delivery or payout evidence. Production GitHub/search quota resets, available qualifying jobs, client assignment and payment remain external conditions. The actual Render health-check setting requires a service-update capability; the available plugin does not expose it.

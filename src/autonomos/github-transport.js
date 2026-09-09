@@ -16,7 +16,7 @@ async function requestCore(endpoint, { method = 'GET', body, env = process.env, 
   const store=new AutonomOSStore(path.join(env.STORAGE_DIR||'data','autonomos'));const cooldown=store.readJson('github-cooldown.json',{});if(Number(cooldown.until)>Date.now())return {ok:false,status:429,error:'github_server_cooldown',retryAt:new Date(cooldown.until).toISOString()};
   const finish=(result,headers)=>{if(result.status===429||result.status===403&&/rate.limit|secondary|abuse/i.test(JSON.stringify(result.value||result.error||''))){const seconds=Number(headers?.get?.('retry-after')||60);const until=Date.now()+Math.max(60000,(Number.isFinite(seconds)?seconds:60)*1000);store.writeJson('github-cooldown.json',{until,reason:'upstream_rate_limit'});return {...result,status:429,retryAt:new Date(until).toISOString()};}return result;};
   const cap = await reserveResource('github', 1, env);
-  if (!cap.ok) return { ok: false, status: 429, value: { message: cap.error }, error: cap.error };
+  if (!cap.ok) return { ok: false, status: 429, value: { message: cap.error }, error: cap.error, retryAt:cap.retryAt };
   let response;
   if (env.GITHUB_TOKEN) {
     response = await fetchImpl('https://api.github.com' + endpoint, {
@@ -57,7 +57,7 @@ export async function githubPages(endpoint, options = {}) {
   const rows = [];
   for (let page = 1; page <= 20; page++) {
     const r = await githubRequest(endpoint + (endpoint.includes('?') ? '&' : '?') + `per_page=100&page=${page}`, options);
-    if (!r.ok || !Array.isArray(r.value)) throw new Error('github_paginated_read_failed_' + r.status);
+    if (!r.ok || !Array.isArray(r.value)) throw Object.assign(new Error('github_paginated_read_failed_' + r.status),{retryAt:r.retryAt,httpStatus:r.status});
     rows.push(...r.value);
     if (r.value.length < 100) return rows;
   }

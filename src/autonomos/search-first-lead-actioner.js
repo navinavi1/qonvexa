@@ -35,7 +35,7 @@ export class SearchFirstLeadActioner extends BrowserlessLeadActioner{
       const issueRef=parseGithubIssue(lead.url);
       if(issueRef&&githubAvailable(this.env)){
         const detail=await githubRequest(issueApi(issueRef),{env:this.env});
-        if(!detail.ok){this.setAction(id,{status:'github_access_blocked',reason:detail.error||'github_http_'+detail.status,nextRetryAt:new Date(Date.now()+1800000).toISOString()});return;}
+        if(!detail.ok){this.setAction(id,{status:'github_access_blocked',reason:detail.error||'github_http_'+detail.status,nextRetryAt:detail.retryAt||new Date(Date.now()+1800000).toISOString()});return;}
         if(detail.value.state!=='open'||detail.value.locked){this.archive(id,'expired','github_issue_closed_or_locked');return;}
         page={ok:true,html:'',text:detail.value.title+'\n'+detail.value.body,finalUrl:lead.url,error:''};
         lead={...lead,title:detail.value.title,snippet:detail.value.body,observedAt:now()};
@@ -75,7 +75,7 @@ export class SearchFirstLeadActioner extends BrowserlessLeadActioner{
           this.setAction(id,{status:'application_uncertain',reason:githubApply.error||'github_comment_outcome_uncertain',applicationUrl:lead.url,nextCheckAt:new Date(Date.now()+60*60_000).toISOString()});
           this.event('lead_github_application_uncertain',{id,host});return;
         }
-        this.setAction(id,{status:'github_application_blocked',reason:githubApply.error,failure:githubApply.failure,nextRetryAt:new Date(Date.now()+3600000).toISOString()});return;
+        this.setAction(id,{status:'github_application_blocked',reason:githubApply.error,failure:githubApply.failure,nextRetryAt:githubApply.retryAt||new Date(Date.now()+3600000).toISOString()});return;
       }
 
       if(/(^|\.)(freelancer\.com|guru\.com|workana\.com|contra\.com|peopleperhour\.com|truelancer\.com|upwork\.com)$/.test(host)){this.setAction(id,{status:'native_marketplace_auth_required',reason:'Verified native account and application workflow required',payout,skill:capability.skill,nextRetryAt:new Date(Date.now()+86400000).toISOString()});return;}

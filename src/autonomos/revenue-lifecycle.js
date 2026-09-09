@@ -1,3 +1,4 @@
+import { emailAddress } from './gmail-mailbox.js';
 import { isRetiredMarket } from './retired-markets.js';
 import { businessSnapshot } from './business-snapshot.js';
 import path from 'node:path';
@@ -52,8 +53,8 @@ export async function hardenedGmailTick(){
       if(EMAIL_MONITOR.has(s)||EMAIL_ACCEPTED_RETRY.has(s)||s==='submission_uncertain')return due(a?.nextCheckAt);
       if(s==='executing_email'||s==='delivery_email_in_progress')return ageMs(a?.updatedAt)>15*60_000;
       return false;
-    }).slice(0,40);
-    for(const [id,action] of entries){
+    }).sort(([,a],[,b])=>Number(!!b.acceptedAt)-Number(!!a.acceptedAt)||Date.parse(a.deadline||'9999-01-01')-Date.parse(b.deadline||'9999-01-01')).slice(0,40);
+    let cursor=0;await Promise.all(Array.from({length:Math.min(3,entries.length)},async()=>{while(cursor<entries.length){const [id,action]=entries[cursor++];
       const status=String(action?.status||'');
       try{
         if(EMAIL_ACCEPTED_RETRY.has(status)){
@@ -72,7 +73,7 @@ export async function hardenedGmailTick(){
         this.actioner.setAction(id,{nextCheckAt:new Date(Date.now()+15*60_000).toISOString(),lifecycleRecoveryError:safe(error)});
         this.log('gmail_lifecycle_item_error',{id,status,error:safe(error)});
       }
-    }
+    }}));
   }finally{this.running=false;this.actioner.persist?.();}
 };
 
@@ -80,10 +81,11 @@ async function reconcileEmailDelivery(id,action){
   const title=String(action?.title||'').trim();if(!title){this.actioner.setAction(id,{nextCheckAt:new Date(Date.now()+30*60_000).toISOString()});return;}
   const messages=await this.searchReplies(title,action);
   if(!messages?.ok){this.actioner.setAction(id,{nextCheckAt:new Date(Date.now()+30*60_000).toISOString(),emailMonitorError:messages?.error||'gmail_search_failed'});return;}
-  const own=ownEmail(this.env);const since=Date.parse(String(action?.updatedAt||action?.acceptedAt||0));
+  const own=ownEmail(this.env);const since=Date.parse(String(action?.deliveryIntentAt||action?.updatedAt||action?.acceptedAt||0));
   const sent=(messages.rows||[]).find(row=>{
     const from=String(row?.from||'').toLowerCase(),at=Date.parse(String(row?.at||0)),text=String(row?.text||'');
-    return own&&from.includes(own)&&/Completed by AutonomOS|Deliverable files:/i.test(text)&&(!Number.isFinite(since)||!Number.isFinite(at)||at>=since-10*60_000);
+    const matchingBody=action.deliveryMarker?text.includes(action.deliveryMarker):action.deliveryBody&&text.replace(/\s+/g,' ').trim()===String(action.deliveryBody).replace(/\s+/g,' ').trim();
+    return own&&emailAddress(from)===own&&row.labels?.includes('SENT')&&matchingBody&&Number.isFinite(at)&&(!Number.isFinite(since)||at>=since-60_000);
   });
   if(sent&&sent.id){
     const already=String(this.actioner.state?.actions?.[id]?.status||'')==='submitted_email';
