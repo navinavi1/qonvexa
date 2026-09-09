@@ -17,28 +17,20 @@ jobs:
         with:
           node-version: '24.14.1'
           cache: npm
-      - name: Apply the complete cleanup in one workspace pass
+      - name: Apply complete cleanup once
         run: |
           node scripts/mega-clean-all-at-once.mjs
           node scripts/mega-clean-residue-pass.mjs
           node scripts/mega-clean-final-pass.mjs
           node scripts/mega-clean-syntax-pass.mjs
+          node scripts/mega-clean-finish.mjs
       - name: Regenerate lockfile once
         run: npm install --package-lock-only --ignore-scripts
-      - name: Capture cleaned workspace
-        shell: bash
-        run: zip -qr /tmp/qonvexa-cleaned-workspace.zip . -x '.git/*' 'node_modules/*'
-      - uses: actions/upload-artifact@v4
-        with:
-          name: qonvexa-cleaned-workspace
-          path: /tmp/qonvexa-cleaned-workspace.zip
-          if-no-files-found: error
-          retention-days: 1
       - name: Install cleaned dependency graph
         run: npm ci --include=dev
-      - name: Verify production startup graph before full suite
+      - name: Verify production startup graph
         run: node scripts/startup-module-graph-test.mjs
-      - name: Run full repository verification
+      - name: Run full verification
         run: npm run verify
       - name: Production dependency audit
         run: npm audit --omit=dev --audit-level=high
@@ -46,10 +38,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          PATTERN='t2000|superteam|tavily|firecrawl|browserbase|stagehand|temporal|opensearch|auth0|litellm|secrets_manager|aws_secret|nats_url|clawjobs|moltjobs'
+          PATTERN='t2000|superteam|tavily|firecrawl|browserbase|stagehand|temporal|opensearch|auth0|litellm|secrets_manager|aws_secret|nats_url|clawjobs|moltjobs|virtuals-acp|olas-mech|nevermined|openserv|laborx|dework|bountycaster|questbook'
           TARGETS=(src scripts server.js public package.json .env.example .env.production.example render.yaml README.md DEPLOY.md)
           set +e
-          MATCHES=$(grep -RInE --exclude='mega-clean-*.mjs' "$PATTERN" "${TARGETS[@]}" 2>/dev/null)
+          MATCHES=$(grep -RInEi --exclude='mega-clean-*.mjs' "$PATTERN" "${TARGETS[@]}" 2>/dev/null)
           CODE=$?
           set -e
           if [ "$CODE" -eq 0 ]; then
@@ -59,13 +51,13 @@ jobs:
           fi
           [ "$CODE" -eq 1 ] || exit "$CODE"
           echo 'Retired-code residue scan: PASS'
-      - name: Commit the single cleaned staging tree
+      - name: Commit one final cleaned tree
         shell: bash
         run: |
-          rm -f scripts/mega-clean-all-at-once.mjs scripts/mega-clean-residue-pass.mjs scripts/mega-clean-final-pass.mjs scripts/mega-clean-syntax-pass.mjs .github/workflows/staging-mega-clean.yml
+          rm -f scripts/mega-clean-all-at-once.mjs scripts/mega-clean-residue-pass.mjs scripts/mega-clean-final-pass.mjs scripts/mega-clean-syntax-pass.mjs scripts/mega-clean-finish.mjs .github/workflows/staging-mega-clean.yml
           git config user.name 'AutonomOS Cleanup'
           git config user.email 'actions@users.noreply.github.com'
           git add -A
           git diff --cached --stat
-          git commit -m '[staging-clean-final] one-shot retired-code purge and verified clean tree'
+          git commit -m '[staging-clean-final] verified one-shot AutonomOS cleanup'
           git push origin HEAD:cleanup/all-at-once-20260909-work
