@@ -100,8 +100,6 @@ services:
         sync: false
       - key: CLAWLANCER_AGENT_ID
         sync: false
-      - key: T2000_MCP_URL
-        value: "https://mcp.t2000.ai/mcp"
       - key: AUTONOMOS_LLM_BASE_URL
         sync: false
       - key: AUTONOMOS_LLM_API_KEY
@@ -109,8 +107,6 @@ services:
       - key: AUTONOMOS_LLM_MODEL
         sync: false
       - key: OPENAI_API_KEY
-        sync: false
-      - key: FIRECRAWL_API_KEY
         sync: false
       - key: E2B_API_KEY
         sync: false
@@ -122,18 +118,6 @@ services:
         sync: false
       - key: AUTONOMOS_TRIGGER_TASK_ID
         value: autonomos-paid-job
-      - key: TAVILY_API_KEY
-        sync: false
-      - key: VIRTUALS_ACP_WALLET_ID
-        sync: false
-      - key: VIRTUALS_ACP_SIGNER
-        sync: false
-      - key: VIRTUALS_ACP_AGENT_ID
-        sync: false
-      - key: NVM_API_KEY
-        sync: false
-      - key: NVM_PLAN_ID
-        sync: false
       - key: DATABASE_URL
         sync: false
       - key: REDIS_URL
@@ -142,11 +126,7 @@ services:
         sync: false
       - key: LITELLM_API_KEY
         sync: false
-      - key: BROWSERBASE_API_KEY
-        sync: false
       - key: COMPOSIO_API_KEY
-        sync: false
-      - key: BROWSERBASE_PROJECT_ID
         sync: false
       - key: S3_ENDPOINT
         sync: false
@@ -166,24 +146,10 @@ services:
         sync: false
       - key: LANGFUSE_BASE_URL
         value: https://cloud.langfuse.com
-      - key: OPENSEARCH_URL
-        sync: false
-      - key: OPENSEARCH_USERNAME
-        sync: false
-      - key: OPENSEARCH_PASSWORD
-        sync: false
       - key: CODERABBIT_API_KEY
-        sync: false
-      - key: AUTH0_DOMAIN
-        sync: false
-      - key: AUTH0_AUDIENCE
-        sync: false
-      - key: AUTONOMOS_AWS_SECRET_ID
         sync: false
       - key: AUTONOMOS_SECRETS_REQUIRED
         value: "false"
-      - key: AWS_REGION
-        sync: false
       - key: AUTONOMOS_VERIFIED_PAYOUT_INTERMEDIARIES_JSON
         value: "[]"
       - key: AUTONOMOS_PAYOUT_NETWORKS_JSON

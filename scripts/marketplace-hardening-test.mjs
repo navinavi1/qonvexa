@@ -15,7 +15,7 @@ import {
 } from "../src/autonomos/taskbounty-connector.js";
 import { appendUniqueLedgerEntry } from "../src/autonomos/financial-ledger.js";
 import { executeExternalOpportunity } from "../src/autonomos/job-executor.js";
-import { firecrawlSearch } from "../src/autonomos/tools.js";
+import { freeWebSearch } from "../src/autonomos/free-web-tool.js";
 
 const raw = Buffer.from('{"task_id":"one"}');
 const secret = "local-test-webhook-secret-32-characters";
@@ -34,28 +34,17 @@ console.log(
 
 const originalFetch = globalThis.fetch;
 try {
-  globalThis.fetch = async () =>
-    new Response(
-      JSON.stringify({
-        success: true,
-        data: { web: [{ url: "https://example.org", title: "Research" }] },
-      }),
-    );
-  const r = await firecrawlSearch("query", {
-    FIRECRAWL_API_KEY: "fixture-key",
-  });
+  globalThis.fetch = async () => new Response('<a class="result__a" href="https://example.org">Research</a>', {status:200,headers:{'content-type':'text/html'}});
+  const r = await freeWebSearch('query', { AUTONOMOS_FREE_SEARCH_MIN_GAP_MS:'0' });
   assert(r.ok);
-  assert.equal(r.results[0].url, "https://example.org");
-  globalThis.fetch = async () =>
-    new Response(JSON.stringify({ success: true, data: { unknown: [] } }));
-  assert.equal(
-    (await firecrawlSearch("query", { FIRECRAWL_API_KEY: "fixture-key" })).ok,
-    false,
-  );
+  assert.equal(r.provider,'free_public_web');
+  assert.equal(r.results[0].url,'https://example.org/');
+  globalThis.fetch = async () => new Response('rate limited',{status:429});
+  assert.equal((await freeWebSearch('query-2',{AUTONOMOS_FREE_SEARCH_MIN_GAP_MS:'0'})).ok,false);
 } finally {
   globalThis.fetch = originalFetch;
 }
-console.log("PASS Firecrawl v2 web envelope and schema drift");
+console.log('PASS free public web search envelope and HTTP failure handling');
 
 const env = {
   TASKBOUNTY_API_KEY: "fixture",

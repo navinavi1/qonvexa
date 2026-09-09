@@ -59,35 +59,6 @@ class JsonStore {
   } finally { fs.rmSync(root,{recursive:true,force:true}); }
 }
 
-// Connector contract: a short, recognized Superteam live feed is complete; a page that
-// exactly hits our request cap is conservatively treated as truncated unless total proves otherwise.
-{
-  const originalFetch=global.fetch;
-  try{
-    global.fetch=async()=>new Response(JSON.stringify({listings:[
-      {id:'st-1',slug:'st-1',title:'One',description:'Research task',usdValue:100,type:'bounty'},
-      {id:'st-2',slug:'st-2',title:'Two',description:'Writing task',usdValue:200,type:'bounty'}
-    ]}),{status:200,headers:{'content-type':'application/json'}});
-    const complete=await discoverMarketOpportunities({credentials:{superteam:{apiKey:'test'}},limit:3,sources:['superteam']});
-    assert.equal(complete.health.superteam.authoritativeLiveSnapshot,true);
-    assert.deepEqual(complete.health.superteam.liveExternalIds.sort(),['st-1','st-2']);
-
-    const capped=await discoverMarketOpportunities({credentials:{superteam:{apiKey:'test'}},limit:2,sources:['superteam']});
-    assert.equal(capped.health.superteam.authoritativeLiveSnapshot,false,'cap-sized page without total must not trigger cleanup');
-
-    global.fetch=async()=>new Response(JSON.stringify({total:2,listings:[
-      {id:'st-1',title:'One',description:'Research task',usdValue:100},
-      {id:'st-2',title:'Two',description:'Writing task',usdValue:200}
-    ]}),{status:200,headers:{'content-type':'application/json'}});
-    const totalProved=await discoverMarketOpportunities({credentials:{superteam:{apiKey:'test'}},limit:2,sources:['superteam']});
-    assert.equal(totalProved.health.superteam.authoritativeLiveSnapshot,true,'explicit total may prove a cap-sized page complete');
-
-    global.fetch=async()=>new Response(JSON.stringify({ok:true,message:'schema changed'}),{status:200,headers:{'content-type':'application/json'}});
-    const malformed=await discoverMarketOpportunities({credentials:{superteam:{apiKey:'test'}},limit:3,sources:['superteam']});
-    assert.equal(malformed.health.superteam.authoritativeLiveSnapshot,false,'unrecognized 200 payload must never archive existing proposals');
-  } finally { global.fetch=originalFetch; }
-}
-
 
 // Dealwork is a real escrow state machine. Transport failure after an irreversible write
 // must be resolved from canonical contract state, never by blindly repeating the action.

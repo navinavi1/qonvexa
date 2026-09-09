@@ -2,8 +2,6 @@ import { McpHttpClient, extractMcpToolPayload } from '../mcp-client.js';
 import { normalizeOpportunity } from '../job-normalizer.js';
 import { isEvmAddress as isEvmAddressLike } from '../treasury.js';
 
-const T2000_DEFAULT_MCP_URL = 'https://mcp.t2000.ai/mcp';
-
 const CONNECTOR_DEFS = Object.freeze([
   {id:'agenthansa',name:'AgentHansa',kind:'competitive-jobs',description:'Shared rewards and quests.',requiredEnv:['AGENTHANSA_API_KEY']},
   {id:'taskbounty',name:'TaskBounty',kind:'competitive-jobs',description:'Verified coding bounties.',requiredEnv:['TASKBOUNTY_API_KEY','TASKBOUNTY_AGENT_ID']},
@@ -14,22 +12,9 @@ const CONNECTOR_DEFS = Object.freeze([
   // test listings. No escrow lock: it's a competitive submission a human sponsor judges,
   // and payout requires a HUMAN to visit a claim URL with their own wallet (agents can't
   // hold/sign for themselves here) — see claimUrl surfaced in state.pendingHumanClaims.
-  { id:'superteam', name:'Superteam Earn', kind:'jobs', description:'Solana ecosystem bounties/projects, $500-$1500+ USDC/SOL. Competitive (not escrow-guaranteed); payout requires a human to claim with claimCode.', requiredEnv:[], optionalEnv:['SUPERTEAM_HUMAN_TELEGRAM'] },
-  { id:'virtuals-acp', name:'Virtuals ACP', kind:'jobs+seller', description:'Agent Commerce Protocol jobs and USDC escrow.', requiredEnv:['VIRTUALS_ACP_WALLET_ID','VIRTUALS_ACP_SIGNER'], optionalEnv:['VIRTUALS_ACP_AGENT_ID'] },
-  { id:'t2000', name:'t2000', kind:'jobs+seller', description:'Sui/USDC Open Jobs + your paid Service orders via Passport Connect OAuth.', requiredEnv:[], optionalEnv:['T2000_MCP_URL'] },
   { id:'workprotocol', name:'WorkProtocol', kind:'jobs', description:'Verified work exchange with Base/USDC escrow: discover → claim → deliver → verified → payment released.', requiredEnv:['WORKPROTOCOL_API_KEY','WORKPROTOCOL_AGENT_ID'], optionalEnv:['WORKPROTOCOL_API_URL'] },
-  { id:'moltjobs', name:'MoltJobs', kind:'competitive-jobs', description:'Agent-native USDC marketplace on Base. Requires agent API key and passing certification before bidding.', requiredEnv:['MOLTJOBS_API_KEY'], optionalEnv:['MOLTJOBS_AGENT_ID','MOLTJOBS_API_URL'] },
-  { id:'olas-mech', name:'Olas Mech Marketplace', kind:'seller+discovery', description:'Agent-to-agent paid Mech services.', requiredEnv:['OLAS_MECH_API_KEY'], optionalEnv:['OLAS_MECH_ENDPOINT'] },
-  { id:'nevermined', name:'Nevermined', kind:'payments', description:'Fiat + crypto agent payment facilitator and metering.', requiredEnv:['NVM_API_KEY'], optionalEnv:['NVM_PLAN_ID'] },
-  { id:'openserv', name:'OpenServ', kind:'discovery', description:'Agent/workflow ecosystem; optional authenticated connector.', requiredEnv:['OPENSERV_API_KEY'], optionalEnv:[] },
-  // AutonomOS 7.0 market expansion. Only ClawJobs has a verified public jobs API here.
   // The remaining sources are intentionally feed-gated: we never invent undocumented
   // claim endpoints or pretend a human-first marketplace is autonomously claimable.
-  { id:'clawjobs', name:'ClawJobs', kind:'jobs-watch', description:'Base/USDC jobs with a documented public jobs API. Proposals require an API key and worker stake, so discovery is automatic while claim remains gated.', requiredEnv:[], optionalEnv:['CLAWJOBS_API_KEY'] },
-  { id:'laborx', name:'LaborX', kind:'jobs-watch', description:'Crypto freelance marketplace watch lane. Activates only when a verified JSON feed/API URL is supplied; never counted as Ready Now by default.', requiredEnv:[], optionalEnv:['LABORX_AGENT_FEED_URL','LABORX_API_KEY'] },
-  { id:'dework', name:'Dework', kind:'jobs-watch', description:'DAO bounty watch lane. Activates only with a verified JSON feed/API URL supplied by the operator.', requiredEnv:[], optionalEnv:['DEWORK_BOUNTY_FEED_URL','DEWORK_API_KEY'] },
-  { id:'bountycaster', name:'Bountycaster', kind:'competitive-watch', description:'Crypto bounty discovery lane. Competitive/social claim workflow stays non-autonomous unless a verified API/feed is configured.', requiredEnv:[], optionalEnv:['BOUNTYCASTER_FEED_URL','BOUNTYCASTER_API_KEY'] },
-  { id:'questbook', name:'Questbook / grants', kind:'grants-watch', description:'Grant/proposal discovery lane. Kept separate from instant paid jobs and only activates with a verified feed/API URL.', requiredEnv:[], optionalEnv:['QUESTBOOK_FEED_URL','QUESTBOOK_API_KEY'] },
   // P1 fix: Firecrawl/E2B previously had no entry here at all, so the dashboard could show
   // a fully green AutonomOS while one or both tool keys were missing, unauthorized, or
   // dropped — job-executor would then silently run with fewer tools than the operator
@@ -37,7 +22,6 @@ const CONNECTOR_DEFS = Object.freeze([
   // connectors below; it confirms the key is SET, not that Firecrawl/E2B have accepted it
   // or that the account has remaining quota (that requires a live, billable call this
   // audit intentionally avoids making just to render a status dot).
-  { id:'firecrawl', name:'Firecrawl (web_search/web_scrape tool)', kind:'tool', description:'Live web search/scrape tool available to worker agents during job execution.', requiredEnv:['FIRECRAWL_API_KEY'] },
   { id:'e2b', name:'E2B (run_python tool)', kind:'tool', description:'Sandboxed Python execution tool available to worker agents during job execution.', requiredEnv:['E2B_API_KEY'] },
   { id:'github-pr', name:'GitHub (open_pull_request tool)', kind:'tool', description:'Lets worker agents propose code changes to a GitHub repo via Pull Request — never merges automatically. Needs a fine-grained PAT (Contents + Pull requests permission) for a dedicated bot account, not a personal account.', requiredEnv:['GITHUB_TOKEN'] }
 ]);
@@ -53,32 +37,11 @@ export function connectorStatuses(env = process.env, x402Status = {}, persistedC
       const hasKey=Boolean(String(env.DEALWORK_API_KEY||persistedCredentials?.dealwork?.apiKey||'').trim());
       return { ...def, status:hasKey?'ready':'auto_bootstrap_available', configured:hasKey, missing:hasKey?[]:['agent registration will be created automatically on first cycle'] };
     }
-    if (def.id === 'superteam') {
-      const hasKey=Boolean(persistedCredentials?.superteam?.apiKey);
-      return { ...def, status:hasKey?'ready':'auto_bootstrap_available', configured:hasKey, missing:hasKey?[]:['agent registration will be created automatically on first cycle'] };
-    }
-    if (def.id === 't2000') {
-      const connected=Boolean(String(persistedCredentials?.t2000?.accessToken||'').trim());
-      return { ...def, status:connected?'ready':'connect_required', configured:connected, missing:connected?[]:['Connect t2000 in the AutonomOS dashboard (Google OAuth → existing Passport).'], mode:'passport_connect_oauth' };
-    }
     if (def.id === 'workprotocol') {
       const hasKey=Boolean(String(env.WORKPROTOCOL_API_KEY||'').trim());
       const hasAgent=Boolean(String(env.WORKPROTOCOL_AGENT_ID||'').trim());
       const configured=hasKey&&hasAgent;
       return { ...def, status:configured?'ready':'needs_credentials', configured, missing:[...(!hasKey?['WORKPROTOCOL_API_KEY']:[]),...(!hasAgent?['WORKPROTOCOL_AGENT_ID']:[])], mode:'instant_escrow_claim' };
-    }
-    if (def.id === 'moltjobs') {
-      const hasKey=Boolean(String(env.MOLTJOBS_API_KEY||'').trim());
-      return { ...def, status:hasKey?'certification_check_required':'needs_credentials', configured:hasKey, missing:hasKey?[]:['MOLTJOBS_API_KEY'], mode:'certified_bid_market' };
-    }
-    if (def.id === 'clawjobs') {
-      const hasKey=Boolean(String(env.CLAWJOBS_API_KEY||'').trim());
-      return { ...def, status:hasKey?'discovery_ready_claim_gated':'discovery_ready', configured:true, missing:hasKey?[]:['API key + stake-capable wallet required before proposals can be automated safely'], mode:'proposal_stake_required' };
-    }
-    const feedEnv={laborx:'LABORX_AGENT_FEED_URL',dework:'DEWORK_BOUNTY_FEED_URL',bountycaster:'BOUNTYCASTER_FEED_URL',questbook:'QUESTBOOK_FEED_URL'}[def.id];
-    if(feedEnv){
-      const configured=Boolean(String(env[feedEnv]||'').trim());
-      return { ...def, status:configured?'watch_feed_ready':'watchlist', configured, missing:configured?[]:[`${feedEnv} (verified official/API feed URL)`], mode:'discovery_only' };
     }
     const missing=def.requiredEnv.filter(key=>!String(env[key]||'').trim());
     return { ...def, status:missing.length?'needs_credentials':'ready', configured:missing.length===0, missing };
@@ -155,7 +118,6 @@ export async function bootstrapMarketCredentials({ env=process.env, credentials=
       } else health.dealwork={ok:false,error:response.ok?'onboard_response_missing_api_key':`http_${response.status}`,detail:data?.error?.message||body?.error||''};
     } catch(error){ health.dealwork={ok:false,error:String(error?.message||error).slice(0,180)}; }
   }
-  // Superteam Earn: per their own agent skill spec (superteam.fun/skill.md), registration
   // is a single POST returning an apiKey + a claimCode. The claimCode is NOT a secret to
   // protect like an API key — it's meant to be handed to the human owner so THEY can claim
   // payouts (agents never hold funds here: "Agents do not complete OAuth, wallet signing,
@@ -181,15 +143,7 @@ export async function discoverMarketOpportunities({ env=process.env, credentials
     ['x402-bazaar',()=>discoverX402(env,limit)],
     ['clawlancer',()=>discoverClawlancer(env,credentials,limit)],
     ['dealwork',()=>discoverDealwork(env,credentials,limit)],
-    ['t2000',()=>discoverT2000(env,credentials,limit)],
     ['workprotocol',()=>discoverWorkProtocol(env,limit)],
-    ['moltjobs',()=>discoverMoltJobs(env,limit)],
-    ['superteam',()=>discoverSuperteam(credentials,limit)],
-    ['clawjobs',()=>discoverClawJobs(env,limit)],
-    ['laborx',()=>discoverConfiguredFeed('laborx',env.LABORX_AGENT_FEED_URL,env.LABORX_API_KEY,limit,{currency:'USDC',network:'crypto',escrowed:false,claimMode:'watchlist_only'})],
-    ['dework',()=>discoverConfiguredFeed('dework',env.DEWORK_BOUNTY_FEED_URL,env.DEWORK_API_KEY,limit,{currency:'USDC',network:'crypto',escrowed:false,claimMode:'watchlist_only'})],
-    ['bountycaster',()=>discoverConfiguredFeed('bountycaster',env.BOUNTYCASTER_FEED_URL,env.BOUNTYCASTER_API_KEY,limit,{currency:'USDC',network:'crypto',escrowed:false,claimMode:'competitive_manual'})],
-    ['questbook',()=>discoverConfiguredFeed('questbook',env.QUESTBOOK_FEED_URL,env.QUESTBOOK_API_KEY,limit,{currency:'USDC',network:'crypto',escrowed:false,claimMode:'grant_proposal'})]
   ].filter(([id])=>!want||want.has(id));
   const results=await Promise.allSettled(jobs.map(([,fn])=>fn()));
   jobs.forEach(([id],i)=>{
@@ -203,18 +157,14 @@ export async function discoverMarketOpportunities({ env=process.env, credentials
 export async function claimMarketplaceJob(opportunity,{env=process.env,credentials={}}={}) {
   if (opportunity.source==='clawlancer') return clawlancerAction('claim',opportunity,{env,credentials});
   if (opportunity.source==='dealwork') return dealworkAction('claim',opportunity,{env,credentials});
-  if (opportunity.source==='t2000') return t2000Action('claim',opportunity,{env,credentials});
   if (opportunity.source==='workprotocol') return workProtocolAction('claim',opportunity,{env});
-  if (opportunity.source==='superteam') return superteamAction('claim',opportunity,{credentials});
   return {ok:false,reason:'connector_claim_not_available'};
 }
 
 export async function deliverMarketplaceJob(opportunity,claim,deliverable,{env=process.env,credentials={},recordPendingClaim}={}) {
   if (opportunity.source==='clawlancer') return clawlancerAction('deliver',opportunity,{env,credentials,claim,deliverable});
   if (opportunity.source==='dealwork') return dealworkAction('deliver',opportunity,{env,credentials,claim,deliverable});
-  if (opportunity.source==='t2000') return t2000Action('deliver',opportunity,{env,credentials,claim,deliverable});
   if (opportunity.source==='workprotocol') return workProtocolAction('deliver',opportunity,{env,claim,deliverable});
-  if (opportunity.source==='superteam') return superteamAction('deliver',opportunity,{env,credentials,deliverable,recordPendingClaim});
   return {ok:false,reason:'connector_delivery_not_available'};
 }
 
@@ -247,16 +197,6 @@ export async function readMarketplaceWallets({env=process.env,credentials={}}={}
         ...(r.ok?{}:{error:String(body?.error||body?.message||`http_${r.status}`).slice(0,180)})
       };
     }catch(error){out.workprotocol={ok:false,error:String(error?.message||error).slice(0,180),agentId:wpAgentId}}
-  }
-  const tToken=t2000Token(env,credentials);
-  if(tToken){
-    try{
-      const client=new McpHttpClient({url:String(env.T2000_MCP_URL||T2000_DEFAULT_MCP_URL),token:tToken,timeoutMs:18000}); await client.initialize(); const tools=await client.listTools();
-      const balanceTool=tools.find(t=>t.name==='t2000_balance'),addressTool=tools.find(t=>t.name==='t2000_address');
-      const balance=balanceTool?extractMcpToolPayload(await client.callTool(balanceTool.name,{})):null;
-      const address=addressTool?extractMcpToolPayload(await client.callTool(addressTool.name,{})):null;
-      out.t2000={ok:true,network:'Sui',address:address?.address||address?.passportAddress||address?.passport_address||address||'',balance};
-    }catch(error){out.t2000={ok:false,error:String(error?.message||error).slice(0,180)}}
   }
   return out;
 }
@@ -294,28 +234,6 @@ async function discoverWorkProtocol(env,limit){
   }catch(error){return{signals:[],health:{ok:false,error:String(error?.message||error).slice(0,180),mode:'instant_escrow_claim'}}}
 }
 
-async function discoverMoltJobs(env,limit){
-  const key=String(env.MOLTJOBS_API_KEY||'').trim();
-  const base=String(env.MOLTJOBS_API_URL||'https://api.moltjobs.io/v1').replace(/\/$/,'');
-  try{
-    const r=await fetch(`${base}/jobs?status=OPEN&limit=${Math.min(50,limit)}`,{headers:{accept:'application/json','user-agent':'AutonomOS/7.7',...(key?{authorization:`Bearer ${key}`}:{})},signal:AbortSignal.timeout(15000)});
-    const body=await safeJson(r);
-    if(!r.ok)return{signals:[],health:{ok:false,status:r.status,error:body?.error?.message||body?.message||'moltjobs_discovery_failed',mode:'certified_bid_market'}};
-    const data=body?.data??body;
-    const rows=Array.isArray(data)?data:Array.isArray(data?.jobs)?data.jobs:Array.isArray(data?.items)?data.items:[];
-    const signals=rows.map(raw=>normalizeOpportunity('moltjobs',{
-      ...raw,
-      id:raw.id||raw.jobId,
-      title:raw.title||raw.name,
-      description:raw.description||raw.brief||raw.title,
-      category:raw.vertical||raw.category||'general',
-      budgetUsd:Number(raw.budgetUsdc??raw.budgetUSDC??raw.budget??raw.amountUsdc??0),
-      currency:'USDC',network:'base',escrowed:true,claimMode:'certified_bid',status:String(raw.status||'OPEN').toLowerCase(),deadline:raw.deadline||raw.expiresAt||'',url:raw.url||`https://app.moltjobs.io/jobs/${raw.id||raw.jobId||''}`,
-      requiredCertifications:raw.requiredCertifications||raw.certifications||[]
-    },{feePercent:5,currency:'USDC',network:'base',escrowed:true,claimMode:'certified_bid',status:'open'}));
-    return{signals,health:{ok:true,configured:Boolean(key),count:signals.length,bidReady:false,claimReady:false,deliveryReady:false,settlementReady:false,certificationRequired:true,mode:'certified_bid_market',disabledForAutoBid:true,lifecycle:'discovery_only_until_full_certified_bid_assignment_submission_settlement_is_implemented'}};
-  }catch(error){return{signals:[],health:{ok:false,error:String(error?.message||error).slice(0,180),mode:'certified_bid_market'}}}
-}
 
 async function workProtocolAction(kind,opportunity,{env=process.env,claim,deliverable}={}){
   const key=String(env.WORKPROTOCOL_API_KEY||'').trim();
@@ -454,78 +372,6 @@ async function discoverClawlancer(env,credentials,limit){
   const signals=rows.map(raw=>normalizeOpportunity('clawlancer',{...raw,url:raw.url||`https://clawlancer.ai/listings/${raw.id||raw.listing_id||''}`},{feePercent:2.5,currency:'USDC',network:'eip155:8453',escrowed:true,claimMode:key?'automatic':'credentials_required'})).filter(x=>x.status==='open'||x.status==='active'||x.status==='available'||!x.status);
   return {signals:signals.slice(0,limit),health:{ok:true,count:signals.length,authenticated:Boolean(key)}};
 }
-
-async function discoverSuperteam(credentials,limit){
-  const key=String(credentials?.superteam?.apiKey||'');
-  if(!key) return {signals:[],health:{ok:false,error:'superteam_not_registered_yet'}};
-  try{
-    const response=await fetch(`https://superteam.fun/api/agents/listings/live?take=${Math.min(limit,50)}`,{headers:{accept:'application/json','user-agent':'AutonomOS/7.7',authorization:`Bearer ${key}`},signal:AbortSignal.timeout(15000)});
-    const body=await safeJson(response);
-    if(!response.ok) return {signals:[],health:{ok:false,status:response.status,error:body?.error||body?.message||''}};
-    const rows=Array.isArray(body)?body:(body?.listings??body?.data?.listings??body?.data?.items??body?.data??body?.items??body?.results);
-    if(!Array.isArray(rows))return {signals:[],health:{ok:false,error:'superteam_invalid_live_feed_shape',authoritativeLiveSnapshot:false}};
-    const signals=rows.map(raw=>normalizeOpportunity('superteam',{
-      id:raw.id||raw.slug||raw._id,
-      title:raw.title||raw.name,
-      description:raw.description||raw.summary||raw.requirements||raw.title,
-      budgetUsd:raw.usdValue??raw.rewardInUsd??raw.reward??raw.rewardAmount??raw.compensationAmount??0,
-      category:raw.type||raw.skills?.[0]||'research',
-      url:raw.url||`https://superteam.fun/earn/listing/${raw.slug||raw.id||''}`,
-      status:raw.status||'open',
-      deadline:raw.deadline||raw.endsAt||raw.endDate||''
-    },{feePercent:0,currency:'USDC',network:'Solana',escrowed:false,claimMode:'competitive_submission'}));
-    const live=signals.filter(x=>['open','published','active'].includes(String(x.status||'').toLowerCase())&&(!x.deadline||Date.parse(x.deadline)>Date.now()));
-    const total=Number(body?.total??body?.totalCount??body?.meta?.total??body?.pagination?.total);
-    const complete=(rows.length<Math.min(limit,50)||(Number.isFinite(total)&&total>=0&&rows.length>=total))&&body?.hasMore!==true&&!body?.nextCursor;
-    return {signals:live,health:{ok:true,count:live.length,authoritativeLive:true,liveIds:live.map(x=>String(x.externalId)),complete,authoritativeLiveSnapshot:complete,liveExternalIds:live.map(x=>String(x.externalId))}};
-  }catch(error){return {signals:[],health:{ok:false,error:String(error?.message||error).slice(0,180)}}}
-}
-
-async function discoverClawJobs(env,limit){
-  try{
-    const key=String(env.CLAWJOBS_API_KEY||'').trim();
-    const response=await fetch(`https://clawjobs.com/api/v1/jobs?status=open&limit=${Math.min(100,limit)}`,{headers:{accept:'application/json','user-agent':'AutonomOS/7.7',...(key?{authorization:`Bearer ${key}`}:{})},signal:AbortSignal.timeout(15000)});
-    const body=await safeJson(response);
-    if(!response.ok)return{signals:[],health:{ok:false,status:response.status,error:body?.error||body?.message||''}};
-    const rows=Array.isArray(body)?body:findArrayByKey(body,['jobs','data','items','results']);
-    const signals=rows.slice(0,limit).map(raw=>normalizeOpportunity('clawjobs',{
-      ...raw,
-      externalId:raw.id||raw.jobId||raw.job_id||raw.slug,
-      title:raw.title||raw.name||'ClawJobs opportunity',
-      description:raw.description||raw.brief||raw.requirements||raw.title||'',
-      budgetUsd:Number(raw.budgetUsd??raw.rewardUsd??raw.reward??raw.amount??raw.price??0),
-      status:raw.status||'open',
-      url:raw.url||raw.link||`https://clawjobs.com/jobs/${raw.id||raw.jobId||raw.slug||''}`,
-      claimMode:'proposal_stake_required'
-    },{feePercent:3,currency:String(raw.currency||'USDC'),network:'Base',escrowed:true,claimMode:'proposal_stake_required'})).filter(x=>x.externalId);
-    return{signals,health:{ok:true,count:signals.length,authenticated:Boolean(key),claimReady:false,mode:'proposal_stake_required'}};
-  }catch(error){return{signals:[],health:{ok:false,error:String(error?.message||error).slice(0,180)}}}
-}
-
-async function discoverConfiguredFeed(source,url,apiKey,limit,defaults={}){
-  const endpoint=String(url||'').trim();
-  if(!endpoint)return{signals:[],health:{ok:true,count:0,disabled:true,reason:'verified_feed_url_not_configured'}};
-  if(!/^https:\/\//i.test(endpoint))return{signals:[],health:{ok:false,error:'feed_url_must_use_https'}};
-  try{
-    const key=String(apiKey||'').trim();
-    const response=await fetch(endpoint,{headers:{accept:'application/json','user-agent':'AutonomOS/7.7',...(key?{authorization:`Bearer ${key}`}:{})},signal:AbortSignal.timeout(15000)});
-    const body=await safeJson(response);
-    if(!response.ok)return{signals:[],health:{ok:false,status:response.status,error:body?.error||body?.message||''}};
-    const rows=Array.isArray(body)?body:findArrayByKey(body,['jobs','bounties','grants','listings','data','items','results']);
-    const signals=rows.slice(0,limit).map(raw=>normalizeOpportunity(source,{
-      ...raw,
-      externalId:raw.id||raw.jobId||raw.job_id||raw.slug||raw.uuid,
-      title:raw.title||raw.name||`${source} opportunity`,
-      description:raw.description||raw.brief||raw.summary||raw.requirements||raw.title||'',
-      budgetUsd:Number(raw.budgetUsd??raw.rewardUsd??raw.reward??raw.amount??raw.price??raw.budget??0),
-      status:raw.status||'open',
-      url:raw.url||raw.link||'',
-      claimMode:defaults.claimMode||'watchlist_only'
-    },defaults)).filter(x=>x.externalId);
-    return{signals,health:{ok:true,count:signals.length,configured:true,mode:defaults.claimMode||'watchlist_only'}};
-  }catch(error){return{signals:[],health:{ok:false,error:String(error?.message||error).slice(0,180)}}}
-}
-
 function extractDeliverableLink(deliverable){
   const calls=deliverable?.evidence?.toolCalls;
   if(!Array.isArray(calls))return'';
@@ -538,196 +384,6 @@ function extractDeliverableLink(deliverable){
   }
   return'';
 }
-
-// https://superteam.fun/earn/agents documents an authenticated listing-details read
-// and AGENT_ALLOWED/AGENT_ONLY eligibility. A cached listing is not a reservation.
-export async function verifySuperteamEligibility(opportunity,{credentials={}}={}){
-  const key=String(credentials?.superteam?.apiKey||'');
-  if(!key)return{ok:false,reason:'superteam_api_key_missing'};
-  let slug=String(opportunity?.raw?.slug||'');
-  if(!slug){try{const url=new URL(opportunity.url);if(url.hostname==='superteam.fun')slug=url.pathname.match(/\/earn\/listing\/([^/]+)/)?.[1]||'';}catch{}}
-  if(!slug)return{ok:false,reason:'superteam_listing_details_missing'};
-  try{
-    const response=await fetch(`https://superteam.fun/api/agents/listings/details/${encodeURIComponent(slug)}`,{headers:{accept:'application/json',authorization:`Bearer ${key}`},signal:AbortSignal.timeout(15000)});
-    const body=await safeJson(response);
-    if(!response.ok)return{ok:false,reason:`http_${response.status}:${body?.error||body?.message||''}`.slice(0,200)};
-    const listing=body?.listing||body?.bounty||body?.data||body;
-    if(String(listing?.id||'')!==String(opportunity.externalId))return{ok:false,reason:'superteam_listing_identity_unverified'};
-    const access=String(listing.agentAccess||'').toUpperCase();
-    if(!['AGENT_ALLOWED','AGENT_ONLY'].includes(access))return{ok:false,reason:access?'superteam_listing_not_agent_eligible':'superteam_listing_eligibility_unverified'};
-    const status=String(listing.status||'').toLowerCase();
-    if(['closed','expired','cancelled','canceled','completed','unpublished','draft'].includes(status))return{ok:false,reason:'superteam_listing_closed'};
-    if(listing.deadline&&Date.parse(listing.deadline)<=Date.now())return{ok:false,reason:'superteam_listing_expired'};
-    return{ok:true,listing};
-  }catch(error){return{ok:false,reason:String(error?.message||error).slice(0,200)};}
-}
-
-async function superteamAction(kind,opportunity,{env=process.env,credentials,deliverable,recordPendingClaim}={}){
-  const cred=credentials?.superteam; const key=String(cred?.apiKey||''); if(!key)return{ok:false,reason:'superteam_api_key_missing'};
-  // No escrow/reservation step exists on this platform — "claiming" is just proceeding
-  // straight to a submission. Verify the current listing contract before model spend.
-  if(kind==='claim'){
-    const verified=await verifySuperteamEligibility(opportunity,{credentials});
-    return verified.ok?{ok:true,jobId:opportunity.externalId,transactionId:'',workOrder:verified.listing}:verified;
-  }
-  try{
-    // Per superteam.fun/earn/agents: telegram is REQUIRED for project-type listings
-    // (optional otherwise) and must be the human operator's own t.me/<username> URL —
-    // an agent cannot supply this itself. Sending it on every submission is harmless
-    // for non-project listings, so no listing-type branch is needed here.
-    const telegram=String(env.SUPERTEAM_HUMAN_TELEGRAM||'').trim();
-    const payload={listingId:opportunity.externalId,link:extractDeliverableLink(deliverable),tweet:'',otherInfo:String(deliverable.content||'').slice(0,3000),eligibilityAnswers:[],ask:null,...(telegram?{telegram}:{})};
-    const response=await fetch('https://superteam.fun/api/agents/submissions/create',{method:'POST',headers:{'content-type':'application/json',accept:'application/json',authorization:`Bearer ${key}`,'user-agent':'AutonomOS/7.7'},body:JSON.stringify(payload),signal:AbortSignal.timeout(20000)});
-    const body=await safeJson(response);
-    if(!response.ok)return{ok:false,reason:`http_${response.status}:${body?.error||body?.message||''}`.slice(0,200)};
-    // This is the one marketplace where "delivered" genuinely does NOT mean "will be
-    // paid soon" — Superteam judges submissions over days/weeks, and even a win pays out
-    // to the human's own wallet only after they visit the claim URL below. Nothing about
-    // this can be automated further (by design — see superteam.fun/skill.md), so the
-    // dashboard needs to surface it clearly rather than implying it's handled.
-    // Submission is not a win. Keep the claimCode private until the marketplace reports a win.
-    return{ok:true,transactionId:opportunity.externalId,body,pendingHumanClaim:true};
-  }catch(error){return{ok:false,reason:String(error?.message||error).slice(0,200)}}
-}
-
-async function discoverT2000(env,credentials,limit){
-  const mcpUrl=String(env.T2000_MCP_URL||T2000_DEFAULT_MCP_URL);
-  const token=t2000Token(env,credentials);
-  if(!token) return {signals:[],health:{ok:false,connected:false,claimReady:false,error:'t2000_oauth_required'}};
-  try{
-    const client=new McpHttpClient({url:mcpUrl,token,timeoutMs:22000});
-    await client.initialize();
-    const tools=await client.listTools();
-    const boardTool=tools.find(t=>t.name==='t2000_job_board');
-    const inboxTool=tools.find(t=>t.name==='t2000_jobs');
-    const signals=[];
-    let openCount=0,sellerQueueCount=0;
-
-    if(boardTool){
-      // Fetch more than the first MCP page when the server supports offset/page cursors.
-      // Several earlier builds always showed the same ~6 jobs because discovery stopped
-      // after one tool call. We try conservative page shapes, dedupe by id, and stop when
-      // the server repeats the same page (covers implementations that simply ignore offset).
-      const openings=[]; const rawSeen=new Set(); const pageSize=Math.min(50,Math.max(10,limit));
-      for(let page=0;page<Math.min(10,Math.ceil(limit/pageSize));page++){
-        let payload=null;
-        const offset=page*pageSize;
-        const candidates=page===0?[{limit:pageSize},{limit:pageSize,offset:0},{page:1,limit:pageSize},{}]:[{limit:pageSize,offset},{page:page+1,limit:pageSize}];
-        for(const args of candidates){try{payload=extractMcpToolPayload(await client.callTool(boardTool.name,args));if(payload)break}catch{}}
-        const batch=findArrayByKey(payload,['jobs','openings','items','listings','data']);
-        if(!batch.length)break;
-        let added=0;
-        for(const raw of batch){const id=String(raw?.id||raw?.openingId||raw?.opening_id||raw?.jobId||raw?.job_id||'');if(!id||rawSeen.has(id))continue;rawSeen.add(id);openings.push(raw);added++;if(openings.length>=limit)break;}
-        if(openings.length>=limit||added===0||batch.length<pageSize)break;
-      }
-      const openSignals=openings.slice(0,limit).map(raw=>{
-        const batchId=String(raw.batchId||raw.batch_id||'');
-        const budgetUsd=t2000Amount(raw);
-        return normalizeOpportunity('t2000',{
-          ...raw,
-          externalId:raw.id||raw.openingId||raw.opening_id||raw.jobId||raw.job_id,
-          title:raw.title||raw.briefPreview||raw.brief_preview||raw.serviceName||'t2000 Open Job',
-          description:raw.briefPreview||raw.brief_preview||raw.brief||raw.description||raw.title||'t2000 Open Job',
-          budgetUsd,
-          status:'open',
-          claimMode:batchId?'automatic_mcp_batch':'automatic_mcp',
-          t2000BatchId:batchId,
-          url:raw.url||'https://t2000.ai/jobs'
-        },{feePercent:5,currency:'USDC',network:'Sui',escrowed:true,claimMode:batchId?'automatic_mcp_batch':'automatic_mcp'});
-      }).filter(x=>x.externalId);
-      signals.push(...openSignals); openCount=openSignals.length;
-    }
-
-    // A Service bought from our existing t2000 seller profile does NOT appear on the
-    // public Open Job board. The documented seller delivery queue is t2000_jobs with
-    // needsOnly:true + role:'seller'. These jobs are already assigned/funded, so runtime
-    // must execute them directly instead of attempting a second claim.
-    if(inboxTool){
-      let payload=null;
-      for(const args of [{needsOnly:true,role:'seller'},{role:'seller',needsOnly:true}]){
-        try{payload=extractMcpToolPayload(await client.callTool(inboxTool.name,args));if(payload)break}catch{}
-      }
-      const jobs=findArrayByKey(payload,['jobs','items','data','queue','matching']);
-      const sellerSignals=jobs.slice(0,limit).map(raw=>normalizeOpportunity('t2000',{
-        ...raw,
-        externalId:raw.jobId||raw.job_id||raw.id,
-        title:raw.title||raw.serviceName||raw.service_name||raw.listingName||raw.listing_name||'t2000 paid Service order',
-        description:raw.briefPreview||raw.brief_preview||raw.brief||raw.requirements||raw.description||'Paid t2000 Service order. Fetch the complete work order with t2000_job_status before execution.',
-        budgetUsd:t2000Amount(raw),
-        status:'available',
-        claimMode:'already_assigned',
-        t2000OriginalStatus:String(raw.status||raw.state||''),
-        url:raw.url||'https://t2000.ai/manage/jobs'
-      },{feePercent:5,currency:'USDC',network:'Sui',escrowed:true,claimMode:'already_assigned',status:'available'})).filter(x=>x.externalId);
-      signals.push(...sellerSignals); sellerQueueCount=sellerSignals.length;
-    }
-
-    return {signals,health:{ok:true,connected:true,claimReady:Boolean(boardTool),deliveryQueueReady:Boolean(inboxTool),openCount,sellerQueueCount,tools:tools.map(t=>t.name).filter(n=>n.startsWith('t2000_')).slice(0,60)}};
-  }catch(error){return{signals:[],health:{ok:false,connected:false,claimReady:false,error:String(error?.message||error).slice(0,220)}}}
-}
-
-async function t2000Action(kind,opportunity,{env,credentials,claim,deliverable}={}){
-  const mcpUrl=String(env.T2000_MCP_URL||T2000_DEFAULT_MCP_URL);
-  const token=t2000Token(env,credentials);
-  if(!token)return{ok:false,reason:'t2000_oauth_required'};
-  try{
-    const client=new McpHttpClient({url:mcpUrl,token,timeoutMs:22000}); await client.initialize(); const tools=await client.listTools();
-    const ext=String(opportunity.externalId||'');
-    if(kind==='claim'){
-      let claimed=null,claimToolName='already_assigned';
-      // Direct Service orders are already buyer-funded and assigned to this Passport.
-      // Claiming them again is incorrect; simply fetch their work order and execute.
-      if(opportunity.claimMode!=='already_assigned'){
-        const batchId=String(opportunity.raw?.t2000BatchId||opportunity.raw?.batchId||opportunity.raw?.batch_id||'');
-        const claimTool=opportunity.claimMode==='automatic_mcp_batch'
-          ? tools.find(t=>t.name==='t2000_job_batch_claim')
-          : tools.find(t=>t.name==='t2000_job_claim');
-        if(!claimTool)return{ok:false,reason:opportunity.claimMode==='automatic_mcp_batch'?'t2000_batch_claim_tool_not_found':'t2000_claim_tool_not_found',tools:tools.map(t=>t.name).slice(0,40)};
-        claimToolName=claimTool.name;
-        const claimCandidates=opportunity.claimMode==='automatic_mcp_batch'
-          ? [{batchId},{batch_id:batchId},{id:batchId}]
-          : [{openingId:ext},{id:ext},{opening_id:ext},{jobId:ext}];
-        let last='';
-        const selectedClaims=selectMcpArguments(claimTool?.inputSchema||claimTool?.parameters||null,claimCandidates);
-        if(!selectedClaims.length)return{ok:false,reason:'t2000_claim_schema_not_supported'};
-        for(const args of selectedClaims.slice(0,2)){
-          if(Object.values(args).every(v=>!String(v||'')))continue;
-          try{claimed=extractMcpToolPayload(await client.callTool(claimTool.name,args));if(claimed)break}catch(error){last=String(error?.message||error)}
-        }
-        if(!claimed)return{ok:false,reason:last.slice(0,220)||'t2000_claim_failed'};
-      }
-      const jobId=String(claimed?.jobId||claimed?.job_id||claimed?.id||ext);
-      const statusTool=tools.find(t=>t.name==='t2000_job_status');
-      if(!statusTool)return{ok:false,reason:'t2000_job_status_tool_not_found'};
-      let jobStatus=null,lastStatus='';
-      for(const args of [{jobId},{job_id:jobId},{id:jobId}]){
-        try{jobStatus=extractMcpToolPayload(await client.callTool(statusTool.name,args));if(jobStatus)break}catch(error){lastStatus=String(error?.message||error)}
-      }
-      if(!jobStatus)return{ok:false,reason:lastStatus.slice(0,220)||'t2000_work_order_unavailable'};
-      const workOrder=jobStatus?.workOrder||jobStatus?.work_order||jobStatus;
-      return{ok:true,tool:claimToolName,jobId,transactionId:String(claimed?.transactionId||claimed?.tx||claimed?.digest||''),body:claimed||jobStatus,workOrder,workOrderMissing:!workOrder,alreadyAssigned:opportunity.claimMode==='already_assigned'};
-    }
-    const deliverTool=tools.find(t=>t.name==='t2000_job_deliver');
-    if(!deliverTool)return{ok:false,reason:'t2000_deliver_tool_not_found',tools:tools.map(t=>t.name).slice(0,40)};
-    const jobId=String(claim?.jobId||ext);
-    const body=String(deliverable?.content||'');
-    const bytes=Buffer.byteLength(body,'utf8');
-    if(bytes>16*1024)return{ok:false,reason:`t2000_delivery_body_over_16kib:${bytes}`};
-    // Current t2000 docs define the delivery itself as the body string. Keep small
-    // backward-compatible fallbacks after the documented body shape in case their live
-    // tool schema names the field differently; tools/call will reject invalid shapes.
-    const candidateSet=[{jobId,body},{jobId,delivery:body},{jobId,deliverable:body},{job_id:jobId,body}];
-    const candidates=selectMcpArguments(deliverTool?.inputSchema || deliverTool?.parameters || null,candidateSet);
-    if (!candidates.length) return {ok:false,reason:'t2000_delivery_schema_not_supported',tool:deliverTool.name};
-    let last='';
-    for(const args of candidates.slice(0,2)){
-      try{const result=extractMcpToolPayload(await client.callTool(deliverTool.name,args));return{ok:true,tool:deliverTool.name,jobId:String(result?.jobId||result?.job_id||result?.id||jobId),transactionId:String(result?.transactionId||result?.tx||result?.digest||''),body:result}}catch(error){last=String(error?.message||error)}
-    }
-    return{ok:false,reason:last.slice(0,220)||'t2000_deliver_failed'};
-  }catch(error){return{ok:false,reason:String(error?.message||error).slice(0,240)}}
-}
-
-
 function selectMcpArguments(schema,candidates=[]){
   if(!schema||typeof schema!=='object') return candidates.slice(0,1);
   const props=Array.isArray(schema?.properties)?schema.properties:Object.keys(schema?.properties||{});
@@ -739,26 +395,6 @@ function selectMcpArguments(schema,candidates=[]){
     return true;
   });
 }
-
-function t2000Token(_env,credentials){return String(credentials?.t2000?.accessToken||'').trim();}
-export function t2000Amount(raw={}){
-  // Only accept fields whose units are explicit or are part of the documented t2000
-  // USD/USDC payloads. Never infer units from magnitude.
-  const explicit=[
-    ['sellerPayoutUsdc',raw.sellerPayoutUsdc],['seller_payout_usdc',raw.seller_payout_usdc],
-    ['payoutUsdc',raw.payoutUsdc],['payout_usdc',raw.payout_usdc],
-    ['maxUsdc',raw.maxUsdc],['max_usdc',raw.max_usdc],['minUsdc',raw.minUsdc],['min_usdc',raw.min_usdc],
-    ['priceUsdc',raw.priceUsdc],['price_usdc',raw.price_usdc],['budgetUsdc',raw.budgetUsdc],['budget_usdc',raw.budget_usdc],
-    ['rewardUsdc',raw.rewardUsdc],['reward_usdc',raw.reward_usdc],
-    ['budgetUsd',raw.budgetUsd],['priceUsd',raw.priceUsd],['amountUsd',raw.amountUsd],['rewardUsd',raw.rewardUsd],
-    ['budget',raw.budget],['price',raw.price],['reward',raw.reward]
-  ];
-  for(const [,value] of explicit){const n=Number(value);if(Number.isFinite(n)&&n>=0)return n;}
-  const atomic=[['amount_usdc_atomic',raw.amount_usdc_atomic],['amountAtomic',raw.amountAtomic],['amount_atomic',raw.amount_atomic],['price_usdc_atomic',raw.price_usdc_atomic],['reward_usdc_atomic',raw.reward_usdc_atomic]];
-  for(const [,value] of atomic){const n=Number(value);if(Number.isFinite(n)&&n>=0)return n/1e6;}
-  return 0;
-}
-
 function containsArrayByKey(value,keys,depth=0){
   if(depth>5||value==null)return false;if(Array.isArray(value))return true;if(typeof value!=='object')return false;
   for(const key of keys)if(Array.isArray(value[key]))return true;
@@ -1072,30 +708,6 @@ export async function syncMarketplaceTransactions({env=process.env,credentials={
     health.workprotocol={ok:true,checked,settledMapped:mapped};
   }
 
-  // t2000 settlement sync uses the documented read-only seller job inbox. Never pick a
-  // tool heuristically by a word like "payment": financial connectors must only call a
-  // known read tool here. Settled seller jobs are de-duplicated by job id in runtime.
-  const t2000Url=String(env.T2000_MCP_URL||T2000_DEFAULT_MCP_URL),t2000TokenValue=t2000Token(env,credentials);
-  if(t2000TokenValue){
-    try{
-      const client=new McpHttpClient({url:t2000Url,token:t2000TokenValue,timeoutMs:18000}); await client.initialize(); const tools=await client.listTools();
-      const jobsTool=tools.find(t=>t.name==='t2000_jobs');
-      if(jobsTool){
-        const payload=extractMcpToolPayload(await client.callTool(jobsTool.name,{role:'seller'}));
-        const jobs=findArrayByKey(payload,['jobs','items','data','queue','matching']);
-        let mapped=0;
-        for(const job of jobs.slice(0,150)){
-          const status=String(job.status||job.state||'').toLowerCase();
-          if(!['settled','released','completed','paid'].includes(status))continue;
-          const jobId=String(job.jobId||job.job_id||job.id||'');
-          const amountUsd=t2000Amount(job);
-          if(!jobId||amountUsd<=0)continue;
-          rows.push({source:'t2000',externalTransactionId:jobId,listingId:jobId,status,amountUsd,currency:'USDC',network:'Sui',payoutAddress:String(job.sellerAddress||job.seller_address||''),raw:job});mapped++;
-        }
-        health.t2000={ok:true,connected:true,count:jobs.length,settledMapped:mapped,tool:jobsTool.name};
-      } else health.t2000={ok:false,connected:true,error:'t2000_jobs_tool_not_found',tools:tools.map(t=>t.name).slice(0,40)};
-    }catch(error){health.t2000={ok:false,connected:false,error:String(error?.message||error).slice(0,180)}}
-  }
   return {transactions:rows,health};
 }
 

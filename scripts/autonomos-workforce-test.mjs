@@ -3,7 +3,6 @@ import { TaskAgentRuntime, collapseWorkerSteps } from '../src/autonomos/task-age
 import { orchestrateJob, distinctExecutionRoles, runHandoffChain } from '../src/autonomos/orchestration.js';
 import { createLlmClient } from '../src/autonomos/llm.js';
 import { exceedsJobSpendCeiling } from '../src/autonomos/job-executor.js';
-import { deliverMarketplaceJob } from '../src/autonomos/connectors/index.js';
 import { classifyOpportunity } from '../src/autonomos/capabilities.js';
 import { McpHttpClient } from '../src/autonomos/mcp-client.js';
 import { estimateOutcomeProbability } from '../src/autonomos/outcome-model.js';
@@ -40,44 +39,19 @@ assert.equal(claimedImpossible.ok,false,'recovery must stop retrying already-cla
   assert.equal(qa.ok,true,'an optional failed tool attempt must be evaluated contextually instead of causing automatic QA failure');
 }
 
-// The MCP 2025-06-18 spec requires the MCP-Protocol-Version header on every HTTP
-// request, not just initialize — without it a compliant server should silently fall
-// back to 2025-03-26 behavior for that request, a real risk for the one live
-// marketplace connector (t2000) built on this client.
-assert.equal(new McpHttpClient({url:'https://mcp.t2000.ai/mcp'}).headers()['mcp-protocol-version'],'2025-06-18','every request must carry the negotiated protocol version header');
+// Every MCP request must carry the negotiated protocol version header.
+assert.equal(new McpHttpClient({url:'https://mcp.example.test/mcp'}).headers()['mcp-protocol-version'],'2025-06-18','every request must carry the negotiated protocol version header');
 
-// Same class of bug as the learning fix in agency-intelligence.js, in a different file:
-// 'delivered' alone must not count as a confirmed success when estimating win probability,
-// or one real settlement plus several merely-submitted (never confirmed) Superteam jobs
-// would look like a 100% success rate and inflate the estimated probability for that source.
+// Submitted-but-unsettled work must remain pending in outcome history.
 {
   const rows=[
-    {source:'superteam',id:'a',status:'settled'},
-    {source:'superteam',id:'b',status:'delivered'},
-    {source:'superteam',id:'c',status:'delivered'},
+    {source:'dealwork',id:'a',status:'settled'},
+    {source:'dealwork',id:'b',status:'delivered'},
+    {source:'dealwork',id:'c',status:'delivered'},
   ];
-  const result=estimateOutcomeProbability({source:'superteam',budgetUsd:500},{executable:true,missingTools:[]},rows);
+  const result=estimateOutcomeProbability({source:'dealwork',budgetUsd:500},{executable:true,missingTools:[]},rows);
   assert.equal(result.history.samples,1,'only the confirmed settlement counts as a sample');
   assert.equal(result.history.pending,2,'unconfirmed deliveries must be tracked separately, not folded into successes');
-}
-
-// Per superteam.fun/earn/agents, telegram is REQUIRED for project-type listing
-// submissions. SUPERTEAM_HUMAN_TELEGRAM was declared as a connector option but never
-// actually read anywhere — configuring it had zero effect and any project-type
-// submission was guaranteed to fail. Prove the env var now really reaches the payload.
-{
-  const originalFetch=globalThis.fetch;
-  let sentPayload=null;
-  globalThis.fetch=async(_url,opts)=>{sentPayload=JSON.parse(opts.body);return{ok:true,json:async()=>({id:'sub_test'})};};
-  try{
-    const opportunity={source:'superteam',externalId:'listing-test',title:'Test listing'};
-    const deliverable={content:'work done',evidence:{toolCalls:[]}};
-    const credentials={superteam:{apiKey:'sk_test'}};
-    await deliverMarketplaceJob(opportunity,{ok:true},deliverable,{env:{SUPERTEAM_HUMAN_TELEGRAM:'http://t.me/operator'},credentials});
-    assert.equal(sentPayload.telegram,'http://t.me/operator','the configured telegram env var must reach the actual submission payload');
-    await deliverMarketplaceJob(opportunity,{ok:true},deliverable,{env:{},credentials});
-    assert.equal('telegram' in sentPayload,false,'telegram must be omitted, not sent empty, when not configured');
-  }finally{globalThis.fetch=originalFetch;}
 }
 
 // Each candidate's cost was only ever checked individually against the same earned-budget
@@ -85,7 +59,7 @@ assert.equal(new McpHttpClient({url:'https://mcp.t2000.ai/mcp'}).headers()['mcp-
 // several times that budget. $2.43 budget, 6 candidates at $0.60 each: only 4 must fit
 // (4×0.60=2.40 ≤ 2.43; a 5th would push it to 3.00).
 {
-  const rows=Array.from({length:6},(_,i)=>({source:'t2000',externalId:`job${i}`,economics:{outOfPocketCostUsd:0.60}}));
+  const rows=Array.from({length:6},(_,i)=>({source:'workprotocol',externalId:`job${i}`,economics:{outOfPocketCostUsd:0.60}}));
   const cfg={zeroSpendMode:false,earnedFundsOnly:true,allowExternalSpending:false,maxJobsPerCycle:6};
   assert.equal(selectBudgetAwareCandidates(rows,cfg,2.43).length,4,'must stop once cumulative cost would exceed the earned budget');
   assert.equal(selectBudgetAwareCandidates(rows,{...cfg,zeroSpendMode:true},0).length,6,'zero-spend mode already blocks all spend elsewhere — this check must not double-restrict');
@@ -105,9 +79,9 @@ assert.match(buildProofLog([{tool:'web_search',ok:false,error:'timeout'}]),/succ
 // oldest-first, newest-first, or shuffled must all agree on the same true latest row.
 {
   const rows=[
-    {id:'job-1',source:'t2000',externalId:'a',status:'claiming',startedAt:'2026-09-01T10:00:00.000Z'},
-    {id:'job-1',source:'t2000',externalId:'a',status:'claimed',at:'2026-09-01T10:00:05.000Z'},
-    {id:'job-1',source:'t2000',externalId:'a',status:'delivered',at:'2026-09-01T10:00:20.000Z'},
+    {id:'job-1',source:'workprotocol',externalId:'a',status:'claiming',startedAt:'2026-09-01T10:00:00.000Z'},
+    {id:'job-1',source:'workprotocol',externalId:'a',status:'claimed',at:'2026-09-01T10:00:05.000Z'},
+    {id:'job-1',source:'workprotocol',externalId:'a',status:'delivered',at:'2026-09-01T10:00:20.000Z'},
   ];
   const oldestFirst=latestStatuses(rows);
   const newestFirst=latestStatuses([...rows].reverse());
@@ -138,15 +112,15 @@ assert.equal(shouldReportSuccessToDurableDispatcher({claimed:true,delivered:fals
 assert.equal(shouldReportSuccessToDurableDispatcher({claimed:true,delivered:true}),true,'full success');
 
 const commissioningRows=[
-  {source:'t2000',externalId:'hard',budgetUsd:10,capability:{skill:'code-analysis',estimatedModelCostUsd:0.3},economics:{outOfPocketCostUsd:0.3,expectedProfitUsd:8.7},outcome:{probability:.9}},
+  {source:'workprotocol',externalId:'hard',budgetUsd:10,capability:{skill:'code-analysis',estimatedModelCostUsd:0.3},economics:{outOfPocketCostUsd:0.3,expectedProfitUsd:8.7},outcome:{probability:.9}},
   {source:'clawlancer',externalId:'simple',budgetUsd:.5,capability:{skill:'translation',estimatedModelCostUsd:0.01},economics:{outOfPocketCostUsd:0.01,expectedProfitUsd:.36},outcome:{probability:.75}},
   {source:'dealwork',externalId:'usd',budgetUsd:50,capability:{skill:'translation',estimatedModelCostUsd:0.01},economics:{outOfPocketCostUsd:0.01,expectedProfitUsd:45},outcome:{probability:.95}}
 ];
 const commissioningPicked=applyCommissioningCandidateGate(commissioningRows,{commissioningMode:true},{ledger:[],activeCount:0});
-assert.equal(commissioningPicked.length,1,'before first crypto payment commissioning must run one job at a time');
-assert.equal(commissioningPicked[0].externalId,'hard','commissioning must treat $0.50 as a floor, not a target, and prefer the stronger higher-value crypto candidate');
+assert.equal(commissioningPicked.length,1,'before first confirmed payment commissioning must run one job at a time');
+assert.equal(commissioningPicked[0].externalId,'hard','commissioning must treat $0.50 as a floor, not a target, and prefer the stronger higher-value active-rail candidate');
 assert.equal(applyCommissioningCandidateGate(commissioningRows,{commissioningMode:true},{ledger:[],activeCount:1}).length,0,'a commissioning job already in flight must block a second claim');
-assert.equal(applyCommissioningCandidateGate(commissioningRows,{commissioningMode:true},{ledger:[{type:'revenue',source:'t2000',amountUsd:.5,status:'settled'}],activeCount:0}).length,3,'after a real crypto settlement normal concurrency may resume');
+assert.equal(applyCommissioningCandidateGate(commissioningRows,{commissioningMode:true},{ledger:[{type:'revenue',source:'workprotocol',amountUsd:.5,status:'settled'}],activeCount:0}).length,3,'after a real settlement normal concurrency may resume');
 
 const events=[];
 const workforce=new TaskAgentRuntime({env:{AUTONOMOS_MAX_TASK_AGENTS_PER_JOB:'4'},onEvent:(type,detail)=>events.push({type,detail})});
@@ -224,39 +198,35 @@ assert.deepEqual(distinctExecutionRoles({steps:[{role:'code-worker'},{role:'rese
 // deterministic ledger id so a crash between ledger/registry/idempotency writes can replay
 // safely without creating detached or duplicate revenue.
 {
-  const registryRows={'t2000:job-77':{identity:'t2000:job-77',source:'t2000',externalId:'job-77',status:'delivered'}};
-  const jobs=[{id:'local-77',source:'t2000',externalId:'job-77',status:'delivered',at:'2026-09-05T10:00:00Z'}];
-  const resolved=resolveSettlementJobIdentity({source:'t2000',externalTransactionId:'chain-abc',listingId:'job-77'},{registryRows,jobs,inFlight:{}});
+  const registryRows={'workprotocol:job-77':{identity:'workprotocol:job-77',source:'workprotocol',externalId:'job-77',status:'delivered'}};
+  const jobs=[{id:'local-77',source:'workprotocol',externalId:'job-77',status:'delivered',at:'2026-09-05T10:00:00Z'}];
+  const resolved=resolveSettlementJobIdentity({source:'workprotocol',externalTransactionId:'chain-abc',listingId:'job-77'},{registryRows,jobs,inFlight:{}});
   assert.equal(resolved.ok,true,'a settled marketplace transaction must resolve to a registry identity');
-  assert.equal(resolved.identity,'t2000:job-77');
+  assert.equal(resolved.identity,'workprotocol:job-77');
   assert.equal(resolved.jobId,'local-77','settlement must link to the existing internal job, not create detached revenue');
-  assert.equal(resolveSettlementJobIdentity({source:'t2000',externalTransactionId:'chain-no-ref'},{registryRows,jobs,inFlight:{}}).ok,false,'a settlement without a marketplace job reference must be quarantined');
-  assert.equal(settlementLedgerId('t2000','chain-abc'),settlementLedgerId('t2000','chain-abc'),'settlement ledger identity must be deterministic across crash/retry');
-  assert.notEqual(settlementLedgerId('t2000','chain-abc'),settlementLedgerId('t2000','chain-def'),'different chain transactions must never collide');
+  assert.equal(resolveSettlementJobIdentity({source:'workprotocol',externalTransactionId:'chain-no-ref'},{registryRows,jobs,inFlight:{}}).ok,false,'a settlement without a marketplace job reference must be quarantined');
+  assert.equal(settlementLedgerId('workprotocol','chain-abc'),settlementLedgerId('workprotocol','chain-abc'),'settlement ledger identity must be deterministic across crash/retry');
+  assert.notEqual(settlementLedgerId('workprotocol','chain-abc'),settlementLedgerId('workprotocol','chain-def'),'different chain transactions must never collide');
 }
 
-// Marketplace 'paid' is not the same as 'money reached the owner wallet'. Keep custody
-// truth explicit so the commissioning proof can distinguish direct payout from a balance
-// that still requires withdrawal.
+// Marketplace settlement truth must distinguish direct owner-wallet payouts from
+// marketplace balances that still require withdrawal.
 {
   const owner='0x1111111111111111111111111111111111111111';
   const direct=settlementPayoutTruth({source:'clawlancer',payoutAddress:owner},{ownerWallet:owner,credentials:{clawlancer:{walletAddress:owner}}});
   assert.equal(direct.ownerWalletReached,true,'Clawlancer direct payout to the configured owner address must be recognized as owner-wallet paid');
   assert.equal(direct.withdrawalRequired,false);
-  const passport=settlementPayoutTruth({source:'t2000',payoutAddress:'0xsui-passport'},{ownerWallet:owner,marketplaceWallets:{t2000:{address:'0xsui-passport'}}});
-  assert.equal(passport.ownerWalletReached,false,'t2000 Passport balance must not be mislabeled as the owner EVM wallet');
-  assert.equal(passport.withdrawalRequired,true,'t2000 settlement should remain withdrawal-pending until funds reach the owner destination');
+  const managed=settlementPayoutTruth({source:'dealwork',payoutAddress:''},{ownerWallet:owner});
+  assert.equal(managed.fundsLocation,'dealwork_marketplace_balance');
+  assert.equal(managed.ownerWalletReached,false,'Dealwork marketplace balance must not be mislabeled as owner-wallet paid');
+  assert.equal(managed.withdrawalRequired,true,'Dealwork settlement remains withdrawal-pending until cashout');
   const wp=settlementPayoutTruth({source:'workprotocol',payoutAddress:''},{ownerWallet:owner});
   assert.equal(wp.fundsLocation,'workprotocol_registered_wallet');
   assert.equal(wp.verified,false,'without an authoritative registered wallet address WorkProtocol payout location must stay explicitly unverified');
   const wpDirect=settlementPayoutTruth({source:'workprotocol',payoutAddress:owner},{ownerWallet:owner});
-  assert.equal(wpDirect.fundsLocation,'owner_wallet','WorkProtocol pays the agent registered Base wallet directly; matching the owner address proves owner-wallet payout');
+  assert.equal(wpDirect.fundsLocation,'owner_wallet');
   assert.equal(wpDirect.ownerWalletReached,true);
   assert.equal(wpDirect.withdrawalRequired,false);
-  const t2000SameHex=settlementPayoutTruth({source:'t2000',payoutAddress:owner},{ownerWallet:owner,marketplaceWallets:{t2000:{address:owner}}});
-  assert.equal(t2000SameHex.ownerWalletReached,false,'a Sui Passport address must never be equated with an EVM owner wallet by string equality alone');
-  assert.equal(t2000SameHex.destinationCompatible,false,'t2000 Sui settlement requires a Sui-compatible owner destination or separate bridge/transfer action');
-  assert.equal(t2000SameHex.humanWalletActionRequired,true);
 }
 
 // Reproduce the production symptom: an OpenAI-compatible endpoint returns HTTP 200 but

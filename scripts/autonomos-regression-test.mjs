@@ -148,11 +148,11 @@ try{
 // Marketplace lifecycle truth: discovery-only connectors must never enter autonomous claim.
 {
   const runtimeSource=fs.readFileSync(path.join(process.cwd(),'src/autonomos/runtime.js'),'utf8');
-  assert.match(runtimeSource,/return \['clawlancer','t2000','dealwork','workprotocol','superteam'\]\.includes\(source\)/,'auto-claim allowlist must exclude ClawJobs and MoltJobs until their full lifecycle exists');
-  assert.match(runtimeSource,/clawjobs:\{discover:true,claim:false/,'ClawJobs must be explicitly discovery-only in lifecycle truth');
-  assert.match(runtimeSource,/moltjobs:\{discover:true,claim:false/,'MoltJobs must be explicitly discovery-only until certified bid lifecycle is implemented');
+  assert.match(runtimeSource,/return \['clawlancer','dealwork','workprotocol'\]\.includes\(source\)/,'auto-claim allowlist must contain only current full-lifecycle rails');
+  assert.doesNotMatch(runtimeSource,/clawjobs:\{discover:/i,'retired ClawJobs lifecycle must be absent');
+  assert.doesNotMatch(runtimeSource,/moltjobs:\{discover:/i,'retired MoltJobs lifecycle must be absent');
   assert.match(runtimeSource,/marketplace_lifecycle_not_auto_ready/,'incomplete marketplace lifecycle must be a visible candidacy blocker');
-  assert.match(runtimeSource,/const fastSources=config\.cryptoOnlyEarnings\?\['clawlancer','t2000','workprotocol'\]/,'Crypto-only mode excludes new fiat contracts');
+  assert.match(runtimeSource,/const fastSources=config\.cryptoOnlyEarnings\?\['clawlancer','workprotocol'\]/,'Crypto-only mode uses only current crypto-native rails');
   assert.match(runtimeSource,/source==='clawlancer'\)return\['direct_crypto'\]/,'Clawlancer payout must be represented as direct crypto, not a generic marketplace balance');
   assert.match(runtimeSource,/function buildEarningReadiness\(/,'runtime must produce one owner-facing earning readiness diagnosis per cycle');
   assert.match(runtimeSource,/cashout_action_required/,'earning readiness must distinguish settled marketplace money from owner-wallet cashout');

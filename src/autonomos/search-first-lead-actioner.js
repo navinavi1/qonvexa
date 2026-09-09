@@ -1,6 +1,6 @@
 import { BrowserlessLeadActioner, discoverEmailRoutes, discoverApplyLinks } from './browserless-lead-actioner.js';
 import { classifyOpportunity } from './capabilities.js';
-import { tavilySearch } from './tavily-tool.js';
+import { freeWebSearch } from './free-web-tool.js';
 
 const AGGREGATOR_HOST=/(^|\.)(indeed\.com|ziprecruiter\.com|dailyremote\.com|remoterocketship\.com|remoteleads\.io|euremotejobs\.com|weworkremotely\.com|nodesk\.co)$/i;
 const MAX_FETCH_BYTES=1_500_000;
@@ -125,7 +125,7 @@ async function searchForExplicitApplicationContact(lead,host,env){
   return{ok,text:text.slice(0,35_000),urls:unique(urls).slice(0,16)};
 }
 async function searchBundle(query,env,lead){
-  const result=await tavilySearch(query,env);if(!result.ok)return{ok:false,text:'',urls:[],error:String(result.error||'search_failed')};
+  const result=await freeWebSearch(query,env);if(!result.ok)return{ok:false,text:'',urls:[],error:String(result.error||'search_failed')};
   const rows=(result.results||[]).filter(row=>searchRowRelevant(row,lead)).slice(0,8);
   if(!rows.length)return{ok:false,text:'',urls:[],error:'no_title_relevant_search_results'};
   const text=rows.map(row=>`${row.title||''} ${row.snippet||''}`).join('\n').slice(0,25_000),urls=rows.map(row=>String(row.url||'')).filter(url=>/^https?:\/\//i.test(url));

@@ -1,11 +1,11 @@
 let globalFeedData={rows:[],counts:{},actioner:{},generatedAt:''};
 let globalFeedFilter='live';
 
-const LEGACY_SOURCES=new Set(['t2000','superteam','clawjobs','laborx','dework','bountycaster','questbook']);
+const LEGACY_SOURCES=new Set([]);
 function htmlEsc(v){return String(v??'').replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':'&quot;',"'":"&#39;"})[c]);}
 function time(v){const n=Date.parse(String(v||''));return Number.isFinite(n)?n:0;}
 function sourceId(row){return String(row?.source||'').toLowerCase().replace(/\s+/g,'');}
-function isLegacy(row){const s=sourceId(row);return LEGACY_SOURCES.has(s)||s.startsWith('t2000');}
+function isLegacy(){return false;}
 function statusLabel(row){const s=String(row?.status||row?.bucket||'').toLowerCase();if(['applied','applied_email'].includes(s))return'Заявку відправлено';if(s==='email_rate_limited')return'У черзі на подачу';if(['accepted','accepted_email','in_progress','working'].includes(s))return'Прийнято';if(s==='accepted_waiting_treasury')return'Прийнято · резерв бюджету';if(s==='accepted_needs_capability')return'Прийнято · готується інструмент';if(['executing','executing_email','delivery_email_in_progress','preparing','qa'].includes(s))return'Виконується';if(['submitted','submitted_email','delivery_ready'].includes(s))return'Здано';if(['paid','paid_or_approved','completed'].includes(s))return'Оплачено';if(s==='payout_unverified')return'Ціна не підтверджена';if(s==='needs_capability')return'Готується можливість';if(s==='no_direct_route')return'Немає каналу подачі';if(['new','ready',''].includes(s))return'Знайдено';return s.replaceAll('_',' ');}
 function rowTime(row,filter){if(filter==='applied')return time(row.appliedAt||row.lastSeenAt||row.firstSeenAt);if(filter==='working')return time(row.acceptedAt||row.updatedAt||row.lastSeenAt||row.firstSeenAt);if(filter==='done'||filter==='paid')return time(row.submittedAt||row.paidAt||row.updatedAt||row.lastSeenAt||row.firstSeenAt);return time(row.firstSeenAt||row.appliedAt||row.lastSeenAt);}
 function isActive(row){return row?.bucket!=='archive'&&!isLegacy(row);}
@@ -20,7 +20,6 @@ window.renderNewMarketplaces=function(){
 
 function removeLegacyDashboardNodes(){
   if(typeof document==='undefined'||!document?.querySelector)return;
-  document.querySelector('.autonomos-t2000-card')?.remove();
   document.querySelector('section[aria-label="AgentHansa and TaskBounty"]')?.remove();
   document.getElementById('new-marketplaces')?.remove();
   const radar=document.getElementById('autonomos-market-radar');

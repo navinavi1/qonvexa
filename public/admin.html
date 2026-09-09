@@ -8,7 +8,6 @@
   <link rel="stylesheet" href="styles.css">
   <link rel="stylesheet" href="admin.css">
   <link rel="icon" href="favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="marketplaces.css">
 </head>
 <body class="admin-body">
   <main class="admin-shell">
@@ -117,9 +116,7 @@
             <button id="autonomos-emergency" class="admin-secondary autonomos-danger" type="button">Emergency stop</button>
           </div>
         </div>
-
-        <section aria-label="AgentHansa and TaskBounty"><h2>AgentHansa + TaskBounty</h2><div id="new-marketplaces"></div></section>
-        <div class="autonomos-stat-grid autonomos-v7-metrics">
+<div class="autonomos-stat-grid autonomos-v7-metrics">
           <article class="autonomos-stat"><small>READY NOW</small><strong id="auto-ready">0</strong><span>qualified & executable</span></article>
           <article class="autonomos-stat"><small>NEW</small><strong id="auto-new">0</strong><span>first-seen job versions</span></article>
           <article class="autonomos-stat"><small>ACTIVE</small><strong id="auto-agents">0</strong><span>task agents working now</span></article>
@@ -179,13 +176,7 @@
             <div id="autonomos-market-jobs" class="autonomos-event-list autonomos-scroll-list"></div>
           </section>
         </div>
-
-        <section class="admin-panel autonomos-panel autonomos-t2000-card">
-          <div class="admin-panel-head autonomos-t2000-head"><div><small>T2000 · PASSPORT</small><h2>Open Jobs + Seller Orders</h2><p class="settings-note">Open-board jobs are filtered by payout; already-paid seller orders stay active even when the public board is weak.</p></div><div class="autonomos-t2000-actions"><span id="autonomos-t2000-badge" class="autonomos-mini-badge t2000-offline">Not connected</span><button id="autonomos-t2000-connect" class="button" type="button">Connect</button><button id="autonomos-t2000-refresh" class="admin-secondary" type="button" hidden>Refresh</button><button id="autonomos-t2000-disconnect" class="admin-secondary" type="button" hidden>Disconnect</button></div></div>
-          <div id="autonomos-t2000-details" class="autonomos-t2000-details"></div><p id="autonomos-t2000-status" class="admin-status" role="status"></p>
-        </section>
-
-        <div class="autonomos-two-col">
+<div class="autonomos-two-col">
           <section class="admin-panel autonomos-panel">
             <div class="admin-panel-head"><div><small>TREASURY & PAYMENTS</small><h2>Escrow, payout & owner wallet</h2></div><button id="autonomos-refresh-wallet" class="admin-link" type="button">Refresh →</button></div>
             <div id="autonomos-wallet" class="autonomos-wallet"></div><div id="autonomos-allocations" class="allocation-grid"></div>
@@ -207,10 +198,8 @@
             <div class="autonomos-form-grid">
               <label>Heartbeat, sec<input name="heartbeatSeconds" type="number" min="30" max="3600"></label><label>Fast poll, sec<input name="fastClaimPollSeconds" type="number" min="10" max="3600"></label><label>Minimum margin, %<input name="minMarginPercent" type="number" min="0" max="95" step="1"></label>
               <label>Global min payout, $<input name="minJobPayoutUsd" type="number" min="0" max="100000" step="0.01"></label><label>Clawlancer min, $<input name="clawlancerMinJobPayoutUsd" type="number" min="0" max="100000" step="0.01"></label><label>Dealwork min, $<input name="dealworkMinJobPayoutUsd" type="number" min="0" max="100000" step="0.01"></label>
-              <label>Superteam min, $<input name="superteamMinJobPayoutUsd" type="number" min="0" max="100000" step="0.01"></label><label>t2000 min, $<input name="t2000MinOpenJobPayoutUsd" type="number" min="0" max="100000" step="0.01"></label><label>Max API cost, % payout<input name="maxApiCostPercentOfPayout" type="number" min="0" max="80"></label>
               <label>Max workers<input name="maxChildren" type="number" min="1" max="32"></label><label>Jobs / cycle<input name="maxJobsPerCycle" type="number" min="0" max="20"></label><label>Max paid tool call, $<input name="maxPaidProcurementUsd" type="number" min="0" max="100000" step="0.01"></label>
               <label>Seed budget, $<input name="seedSpendBudgetUsd" type="number" min="0" max="50" step="0.5"></label><label>Reserve, %<input name="reservePercent" type="number" min="0" max="100"></label><label>Growth, %<input name="growthPercent" type="number" min="0" max="100"></label>
-              <label>Experiments, %<input name="experimentPercent" type="number" min="0" max="100"></label><label>Commissioning min, $<input name="commissioningMinPayoutUsd" type="number" min="0.01" max="10" step="0.01"></label><label>t2000 priority, $<input name="t2000PriorityOpenJobPayoutUsd" type="number" min="0" max="100000" step="1"></label><label>t2000 premium, $<input name="t2000PremiumOpenJobPayoutUsd" type="number" min="0" max="100000" step="1"></label>
             </div>
             <div class="autonomos-form-grid autonomos-policy-checks">
               <label class="autonomos-check"><input name="zeroSpendMode" type="checkbox"><span>Zero-spend mode</span></label><label class="autonomos-check"><input name="earnedFundsOnly" type="checkbox"><span>Earned-funds-only</span></label><label class="autonomos-check"><input name="allowExternalSpending" type="checkbox"><span>Allow external spending</span></label>
@@ -306,8 +295,7 @@
     <small>JOB / RUN DETAIL</small><h2 id="autonomos-job-dialog-title">Job detail</h2>
     <div id="autonomos-job-dialog-body" class="autonomos-job-detail"></div>
   </dialog>
-
-  <script src="marketplaces.js" defer></script>
-  <script src="admin.js" defer></script>
+  <script src="marketplaces.js?v=clean15" defer></script>
+<script src="admin.js" defer></script>
 </body>
 </html>

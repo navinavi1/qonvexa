@@ -131,7 +131,7 @@ await ok('earning connector list excludes zero-payout discovery-only Agentverse 
   const statuses = connectorStatuses({}, { enabled:false, configured:false, mode:'disabled' }, {});
   assert.equal(statuses.find(x=>x.id==='clawlancer').status, 'auto_bootstrap_available');
   assert.equal(statuses.some(x=>x.id==='agentverse'), false);
-  assert.equal(statuses.find(x=>x.id==='virtuals-acp').status, 'needs_credentials');
+  assert.equal(statuses.some(x=>x.id==='virtuals-acp'), false);
 });
 
 await ok('runtime boots without any paid API or private key', async () => {
@@ -168,7 +168,7 @@ await ok('Earned-funds-only alone (without allowExternalSpending) permits spend 
   // This replaces an earlier regression test that had it backwards: a previous fix made
   // allowExternalSpending a blanket AND-requirement for ANY spend, which silently broke
   // the documented, safer default path (Earned-funds-only on its own) and was the actual
-  // reason a correctly-configured deployment still couldn't spend a cent on Firecrawl/E2B.
+  // reason a correctly-configured deployment still couldn't spend a cent on external-tool.
   const cfg = normalizeConfig({ enabled:true, zeroSpendMode:false, earnedFundsOnly:true, allowExternalSpending:false });
   const withinBudget = evaluateOpportunity({ expectedRevenueUsd:10, successProbability:1, apiCostUsd:0.02 }, { ...cfg, availableSpendUsd:1 });
   assert.equal(withinBudget.allowed, true);
@@ -180,17 +180,14 @@ await ok('Earned-funds-only alone (without allowExternalSpending) permits spend 
   assert.equal(blocked.allowed, false);
   assert.equal(blocked.reason, 'blocked_by_external_spending_disabled');
   // validateAction (the per-tool-call gate) must agree with evaluateOpportunity here —
-  // this is what job-executor.js actually calls before offering Firecrawl/E2B to the LLM.
+  // this is what job-executor.js actually calls before offering external-tool to the LLM.
   const cfgWithCeiling = normalizeConfig({ enabled:true, zeroSpendMode:false, earnedFundsOnly:true, allowExternalSpending:false, maxPaidProcurementUsd:1 });
   assert.equal(validateAction({ kind:'spend', amountUsd:0.01 }, cfgWithCeiling).allowed, true);
 });
 
-await ok('P0: runTool refuses to spend when policy disallows it, without calling the API', async () => {
-  const cfg = normalizeConfig({ enabled:true, zeroSpendMode:true });
-  const result = await runTool('web_search', { query:'test' }, { FIRECRAWL_API_KEY:'unused_should_never_be_used' }, { config:cfg, validateAction });
-  assert.equal(result.ok, false);
-  assert.ok(String(result.error).startsWith('spend_not_authorized'));
-  assert.ok(TOOL_COST_ESTIMATES_USD.web_search > 0);
+await ok('free public web search has zero paid-tool cost', () => {
+  assert.equal(TOOL_COST_ESTIMATES_USD.web_search, 0);
+  assert.equal(TOOL_COST_ESTIMATES_USD.web_scrape, 0);
 });
 
 await ok('P1: capability engine refuses dev-workstation jobs it cannot actually do', () => {
@@ -200,11 +197,10 @@ await ok('P1: capability engine refuses dev-workstation jobs it cannot actually 
   assert.equal(cap.mode, 'unsupported_missing_tooling');
 });
 
-await ok('Firecrawl and E2B are visible connector/tool health entries', () => {
+await ok('retired Firecrawl connector is absent and E2B remains visible', () => {
   const statuses = connectorStatuses({}, { enabled:false, configured:false, mode:'disabled' }, {});
-  assert.ok(statuses.some(x=>x.id==='firecrawl'));
+  assert.equal(statuses.some(x=>x.id==='firecrawl'), false);
   assert.ok(statuses.some(x=>x.id==='e2b'));
-  assert.equal(statuses.find(x=>x.id==='firecrawl').status, 'needs_credentials');
 });
 
 await ok('GitHub PR tool is visible on dashboard and is capability-gated by config, not just a keyword match', () => {
@@ -251,11 +247,9 @@ await ok('P0: x402 only accepts USD-pegged stablecoins, never raw ETH/SOL/BTC at
   assert.ok(gateway.status().acceptedAssets.some(a => a.symbol === 'USDC'));
 });
 
-await ok('Superteam Earn is a visible connector and is exempt from the escrow requirement by design (no escrow exists on that platform)', () => {
+await ok('retired Superteam connector is absent from the clean earning surface', () => {
   const statuses = connectorStatuses({}, { enabled:false, configured:false, mode:'disabled' }, {});
-  assert.ok(statuses.some(x=>x.id==='superteam'));
-  const op = normalizeOpportunity('superteam', { id:'s1', title:'Write a Solana ecosystem report', description:'Research and write a report on Solana DeFi', category:'research', priceUsd:800 }, { escrowed:false, feePercent:0, currency:'USDC' });
-  assert.equal(op.escrowed, false);
+  assert.equal(statuses.some(x=>x.id==='superteam'), false);
 });
 await ok('Dealwork bid-mode jobs are discoverable with the correct shape (claimMode:bid, not escrowed yet)', () => {
   const op = normalizeOpportunity('dealwork', { id:'d1', title:'Write a blog post about AI collaboration', description:'800+ words', category:'writing', budgetUsd:50 }, { escrowed:false, feePercent:10, currency:'USD', claimMode:'bid' });
