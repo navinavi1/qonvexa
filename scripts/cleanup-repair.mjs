@@ -41,12 +41,19 @@ s=fs.readFileSync(p,'utf8');
 s=s.replace(/\/\/ Connector contract: a short, recognized Superteam live feed is complete;[\s\S]*?\n\}\n\n(?=\/\/|const |function |await |console\.|$)/m,'');
 fs.writeFileSync(p,s);
 
-// Marketplace hardening should continue to verify the live-search parser, but against the
-// free public search implementation instead of the retired Firecrawl API contract.
 p='scripts/marketplace-hardening-test.mjs';
 s=fs.readFileSync(p,'utf8');
 s=s.replace('import { firecrawlSearch } from "../src/autonomos/tools.js";','import { freeWebSearch } from "../src/autonomos/free-web-tool.js";');
 s=s.replace(/const originalFetch = globalThis\.fetch;[\s\S]*?console\.log\("PASS Firecrawl v2 web envelope and schema drift"\);/m,`const originalFetch = globalThis.fetch;\ntry {\n  globalThis.fetch = async () => new Response('<a class="result__a" href="https://example.org">Research</a>', {status:200,headers:{'content-type':'text/html'}});\n  const r = await freeWebSearch('query', { AUTONOMOS_FREE_SEARCH_MIN_GAP_MS:'0' });\n  assert(r.ok);\n  assert.equal(r.provider,'free_public_web');\n  assert.equal(r.results[0].url,'https://example.org/');\n  globalThis.fetch = async () => new Response('rate limited',{status:429});\n  assert.equal((await freeWebSearch('query-2',{AUTONOMOS_FREE_SEARCH_MIN_GAP_MS:'0'})).ok,false);\n} finally {\n  globalThis.fetch = originalFetch;\n}\nconsole.log('PASS free public web search envelope and HTTP failure handling');`);
+fs.writeFileSync(p,s);
+
+// Execution queue test had a dedicated Superteam permission/deadline path. That connector
+// no longer exists, so remove its import and scenario while preserving all generic queue,
+// recovery, budget, checkpoint and concurrency coverage.
+p='scripts/execution-queue-test.mjs';
+s=fs.readFileSync(p,'utf8');
+s=s.replace("import {verifySuperteamEligibility,claimMarketplaceJob} from '../src/autonomos/connectors/index.js';\n",'');
+s=s.replace(/\n\s*await test\('Superteam checks the current agent permission and deadline before claiming',[\s\S]*?\n\s*\}\);/m,'');
 fs.writeFileSync(p,s);
 
 console.log('[cleanup-repair] retired function tails/connectors removed and audits/regressions aligned to clean architecture');
