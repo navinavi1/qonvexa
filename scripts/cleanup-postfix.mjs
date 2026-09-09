@@ -8,6 +8,8 @@ write('src/autonomos/tools.js',s);
 s=read('src/autonomos/runtime.js');
 s=s.replace(/\n\s*\)\{\n\s*const status=await t2000OAuth\.finishConnect\(query\);[\s\S]*?\n\s*async refreshTreasury\(\)\{/m,'\n    async refreshTreasury(){');
 s=s.replace(/(cashoutReason=cashoutReady\?'':registered\?'workprotocol_registered_wallet_differs_from_owner':'workprotocol_registered_wallet_not_verified';)\s*else if\(id==='dealwork'\)/,"$1\n    }else if(id==='dealwork')");
+s=s.replace(/^\s*if\(op\.source==='t2000'\)\s*$/gm,'');
+s=s.replace(/^\s*jobRegistry\.reconcileCompetitiveFeed\('superteam'[^\n]*\n/gm,'');
 s=s.replace(/\n\s*archiveLegacyHistory\(\)\{[\s\S]*?\n\s*\},\n\s*(?=async reconcilePayments|async refreshTreasury|refreshTreasury)/m,'\n');
 write('src/autonomos/runtime.js',s);
 
@@ -21,4 +23,4 @@ const a=s.indexOf("el('#autonomos-archive-legacy')?.addEventListener");
 if(a>=0){const b=s.indexOf("el('#autonomos-config-form')?.addEventListener",a);if(b>a)s=s.slice(0,a)+s.slice(b);}
 write('public/admin.js',s);
 
-console.log('[cleanup-postfix] remaining paid-search/browser, T2000 runtime, lifecycle chain, and legacy maintenance controls removed');
+console.log('[cleanup-postfix] retired-source orphan statements, paid-search/browser paths, and legacy UI controls removed');
