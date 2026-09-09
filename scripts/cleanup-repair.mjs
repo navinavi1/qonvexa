@@ -16,6 +16,9 @@ s=s.replace(/\n\s*\)\{\s*\n\s*const endpoint=String\(url\|\|''\)\.trim\(\);[\s\S
 s=s.replace(/\n(?:\s*\/\/[^\n]*\n)*\s*=\{\}\)\{\s*\n\s*const key=String\(credentials\?\.superteam\?\.apiKey\|\|''\);[\s\S]*?\n\s*\}\s*\n(?=\s*=\{\}\)\{)/m,'\n');
 s=s.replace(/\n\s*=\{\}\)\{\s*\n\s*const cred=credentials\?\.superteam;[\s\S]*?\n\s*\}\s*\n(?=function selectMcpArguments\()/m,'\n');
 s=s.replace(/\n\s*\)\{\s*\n\s*(?:\/\/[^\n]*\n\s*)*const explicit=\[[\s\S]*?\n\s*return 0;\s*\n\s*\}\s*\n(?=function containsArrayByKey\()/m,'\n');
+// Firecrawl itself is retired, not merely unconfigured. Remove its dashboard connector
+// definition so it cannot keep producing a false "needs setup" state.
+s=s.replace(/^\s*\{\s*id:'firecrawl'[^\n]*\n/gm,'');
 fs.writeFileSync(p,s);
 
 // Align the audit with intentional removals. This does not weaken behavioral tests; it
@@ -28,4 +31,4 @@ s=s.replace(/await ok\('Firecrawl and E2B are visible connector\/tool health ent
 s=s.replace(/Firecrawl\/E2B/g,'external-tool');
 fs.writeFileSync(p,s);
 
-console.log('[cleanup-repair] retired function tails removed and audits aligned to clean architecture');
+console.log('[cleanup-repair] retired function tails/connectors removed and audits aligned to clean architecture');
