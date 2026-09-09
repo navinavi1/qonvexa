@@ -23,6 +23,10 @@ s=s.replace(/\n\s*\)\{\s*\n\s*const endpoint=String\(url\|\|''\)\.trim\(\);[\s\S
 s=s.replace(/\n(?:\s*\/\/[^\n]*\n)*\s*=\{\}\)\{\s*\n\s*const key=String\(credentials\?\.superteam\?\.apiKey\|\|''\);[\s\S]*?\n\s*\}\s*\n(?=\s*=\{\}\)\{)/m,'\n');
 s=s.replace(/\n\s*=\{\}\)\{\s*\n\s*const cred=credentials\?\.superteam;[\s\S]*?\n\s*\}\s*\n(?=function selectMcpArguments\()/m,'\n');
 
+// t2000Amount(raw={}) can suffer the same default-parameter removal bug. Remove the
+// orphaned amount-parser body while preserving selectMcpArguments and shared array helpers.
+s=s.replace(/\n\s*\)\{\s*\n\s*(?:\/\/[^\n]*\n\s*)*const explicit=\[[\s\S]*?\n\s*return 0;\s*\n\s*\}\s*\n(?=function containsArrayByKey\()/m,'\n');
+
 fs.writeFileSync(p,s);
 
-console.log('[cleanup-repair] malformed tails from retired credential/feed/Superteam functions removed');
+console.log('[cleanup-repair] malformed tails from retired credential/feed/Superteam/T2000 amount functions removed');
