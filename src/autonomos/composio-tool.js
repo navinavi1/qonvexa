@@ -1,7 +1,9 @@
-const BLOCKED_TOOL = /(^|_)(DELETE|REMOVE|REVOKE|TRANSFER|SEND_MONEY|CREATE_PAYMENT|WITHDRAW|BUY|SELL|TRADE|SWAP|CLOSE_ACCOUNT|CHANGE_PASSWORD|RESET_PASSWORD|CREATE_API_KEY|ROTATE_SECRET|EXPORT_SECRET|PRIVATE_KEY|SEED_PHRASE)(_|$)/i;
+import { reserveResource, observeResourceResult, resourceAvailability } from './resource-control.js';
+import { normalizeApp } from './capability-registry.js';
+const BLOCKED_TOOL = /(^|_)(DELETE|REMOVE|REVOKE|TRANSFER|SEND_MONEY|CREATE_PAYMENT|WITHDRAW|BUY|SELL|TRADE|SWAP|CLOSE_ACCOUNT|SUBSCRIBE|UPGRADE|PURCHASE|RECHARGE|ENABLE_BILLING|CHANGE_PLAN|CHANGE_PASSWORD|RESET_PASSWORD|CREATE_API_KEY|ROTATE_SECRET|EXPORT_SECRET|PRIVATE_KEY|SEED_PHRASE)(_|$)/i;
 const DEFAULT_DENY_TOOLKITS = new Set(['STRIPE','PAYPAL','COINBASE','BINANCE','BANKING','PLAID']);
 
-export async function composioSearch({query='',toolkit='',limit=12}={},env=process.env,signal){
+async function composioSearchImpl({query='',toolkit='',limit=12}={},env=process.env,signal){
   const key=String(env.COMPOSIO_API_KEY||'').trim();if(!key)return{ok:false,error:'composio_api_key_missing'};
   const qs=new URLSearchParams({query:String(query||'').slice(0,300),include_deprecated:'false',toolkit_versions:'latest',limit:String(Math.max(1,Math.min(30,Number(limit||12))))});
   if(toolkit)qs.set('toolkit_slug',String(toolkit).toLowerCase());
@@ -14,7 +16,7 @@ export async function composioSearch({query='',toolkit='',limit=12}={},env=proce
   }catch(error){return{ok:false,error:signal?.aborted?'aborted_by_emergency_stop':String(error?.message||error).slice(0,300)}}
 }
 
-export async function composioExecute({toolSlug,arguments:args={},connectedAccountId='',userId='',toolVersion=''}={},env=process.env,signal){
+async function composioExecuteImpl({toolSlug,arguments:args={},connectedAccountId='',userId='',toolVersion=''}={},env=process.env,signal){
   const key=String(env.COMPOSIO_API_KEY||'').trim();
   if(!key)return{ok:false,error:'composio_api_key_missing'};
   const slug=String(toolSlug||'').trim().toUpperCase();
@@ -25,6 +27,9 @@ export async function composioExecute({toolSlug,arguments:args={},connectedAccou
     const info=await resolveToolInfo(slug,key,signal);
     const toolkit=info.toolkit||inferredToolkit;
     if(!isAllowed(slug,toolkit,env))return{ok:false,error:'composio_tool_blocked_by_financial_destructive_or_allowlist_policy'};
+    const normalizedToolkit=normalizeApp(toolkit);
+    if(['canva','figma'].includes(normalizedToolkit)&&/(?:GENERATE|AI_|MAGIC|PREMIUM|PURCHASE|SUBSCRIBE)/i.test(slug))return{ok:false,error:'paid_media_operation_requires_verified_free_allowance',replacementRequired:true,alternatives:['e2b_open_source_media']};
+    {const allowance=await reserveResource(normalizedToolkit,1,env);if(!allowance.ok)return{...allowance,alternatives:normalizedToolkit==='canva'||normalizedToolkit==='figma'?['e2b_open_source_media']:['existing_connected_apps','open_source_recipe']};}
     const version=validVersion(toolVersion)||validVersion(info.version)||await resolveCatalogVersion(slug,toolkit,key,signal);
     const accountMap=parseJson(env.AUTONOMOS_COMPOSIO_ACCOUNTS_JSON,{});
     let account=String(connectedAccountId||accountMap[toolkit]||accountMap[toolkit.toLowerCase()]||'');
@@ -49,7 +54,7 @@ export async function composioExecute({toolSlug,arguments:args={},connectedAccou
       }
     }
 
-    return{ok:false,error:`composio_http_${response.status}`,detail:String(body?.error?.message||body?.error||body?.message||'').slice(0,500),toolkit,toolVersion:version||'',needsConnectedAccount:response.status===401||response.status===403||response.status===422};
+    return observeResourceResult(normalizedToolkit,{ok:false,error:`composio_http_${response.status}`,detail:String(body?.error?.message||body?.error||body?.message||'').slice(0,500),toolkit,toolVersion:version||'',needsConnectedAccount:response.status===401||response.status===403||response.status===422},env);
   }catch(error){return{ok:false,error:signal?.aborted?'aborted_by_emergency_stop':String(error?.message||error).slice(0,300)}}
 }
 
@@ -157,3 +162,6 @@ function buildRawGmailMessage({to,subject,body}){
   ].join('\r\n');
   return Buffer.from(message,'utf8').toString('base64url');
 }
+
+export async function composioSearch(args,env=process.env,signal){const cap=await reserveResource('composio',1,env);if(!cap.ok)return cap;return observeResourceResult('composio',await composioSearchImpl(args,env,signal),env);}
+export async function composioExecute(args,env=process.env,signal){const cap=await reserveResource('composio',1,env);if(!cap.ok)return cap;return observeResourceResult('composio',await composioExecuteImpl(args,env,signal),env);}

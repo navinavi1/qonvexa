@@ -1,3 +1,4 @@
+import { serveLocalArtifact } from './src/autonomos/local-artifacts.js';
 import 'dotenv/config';
 import express from 'express';
 import helmet from 'helmet';
@@ -845,6 +846,7 @@ app.use((req, res, next) => {
 // Serve public assets only after explicit dynamic/admin/SEO/API routes.
 // This prevents /admin, /robots.txt and /sitemap.xml from being intercepted
 // by express.static before their dedicated handlers run.
+app.get('/autonomos/artifacts/:id/:name',(req,res)=>serveLocalArtifact(req,res));
 app.use(express.static(publicDir, {
   extensions: ['html'],
   index: false,

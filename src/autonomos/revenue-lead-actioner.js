@@ -1,3 +1,4 @@
+import { minimumJobPayoutUsd } from './payout-floor.js';
 import { SearchFirstLeadActioner } from './search-first-lead-actioner.js';
 import { composioExecute } from './composio-tool.js';
 
@@ -45,7 +46,7 @@ export class RevenueLeadActioner extends SearchFirstLeadActioner{
       this.event('lead_application_suppressed',{id,host,reason:'salaried_employment_not_service_contract'});return;
     }
     if(!isSpecificWorkListing(lead)||!EXPLICIT_LISTING_INTENT.test(listingText)){if(id)this.setAction(id,{status:'archived',reason:'not a specific paid work listing; outbound application suppressed'});this.event('lead_application_suppressed',{id,host,reason:'not_specific_work_listing'});return;}
-    const floor=Math.max(0,Number(this.env.AUTONOMOS_GLOBAL_MIN_JOB_PAYOUT_USD||this.env.AUTONOMOS_MIN_JOB_PAYOUT_USD||0.5));
+    const floor=minimumJobPayoutUsd(this.env);
     if(Number(payout?.amountUsd||0)<floor){if(id)this.setAction(id,{status:'payout_unverified',reason:`priced payout below verification floor (${Number(payout?.amountUsd||0)} < ${floor})`,nextRetryAt:new Date(Date.now()+12*60*60_000).toISOString()});this.event('lead_application_suppressed',{id,host,reason:'payout_not_priced_above_floor',amountUsd:Number(payout?.amountUsd||0),floor});return;}
 
     const routeEmail=String(route?.email||'').trim().toLowerCase();

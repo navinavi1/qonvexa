@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {AgentMemory} from '../src/autonomos/memory.js';
+import {recordCapabilityProof} from '../src/autonomos/capability-registry.js';
 import {ArtifactStore} from '../src/autonomos/artifact-store.js';
 import {JobRegistry} from '../src/autonomos/job-registry.js';
 import {AutonomOSStore} from '../src/autonomos/store.js';
@@ -25,7 +26,7 @@ await test('failed semantic recall reports fallback and preserves scope',async()
  memory.pool={query:async(sql,args)=>{if(sql.includes('<=>'))throw new Error('vector unavailable');assert.deepEqual(args,['experience','tenant','job',2]);return {rows:[]};}};
  await memory.recall('query',{tenantScope:'tenant',jobScope:'job',limit:2});assert.equal(warned,true);
 });
-const env={R2_ENDPOINT:'https://r2.example',R2_BUCKET:'artifacts',R2_ACCESS_KEY_ID:'test',R2_SECRET_ACCESS_KEY:'test'};
+const env={STORAGE_DIR:dir,AUTONOMOS_OWNER_CAPPED_PROVIDERS:'r2',R2_ENDPOINT:'https://r2.example',R2_BUCKET:'artifacts',R2_ACCESS_KEY_ID:'test',R2_SECRET_ACCESS_KEY:'test'};
 await test('R2 aliases use the same storage configuration',async()=>{assert.equal(new ArtifactStore({env}).configured(),true);assert.equal(new ArtifactStore({env:{...env,R2_SECRET_ACCESS_KEY:''}}).configured(),false);});
 await test('upload is not successful delivery when signing fails',async()=>{const a=new ArtifactStore({env});a.client={send:async()=>({})};a.getDownloadUrl=async()=>({ok:false,reason:'signing failed'});const r=await a.putText('test.md','text');assert.equal(r.ok,false);assert.equal(r.uploaded,true);});
 await test('text research report needs sources, not invented file',async()=>{const op={category:'report',title:'Research report',description:'Research current sources and write a report in plain text.'};const cap=classifyOpportunity(op,{llmEnabled:true,hasWebSearchTool:true});assert.equal(cap.skill,'web-research');assert.equal(cap.requiresArtifact,false);assert.equal(buildAcceptanceContract({...op,capability:cap}).artifacts.length,0);});
@@ -42,9 +43,9 @@ await test('uncertain side effect cannot run again on retry',async()=>{let n=0;a
 await test('runtime business failure is returned, not thrown for durable retry',async()=>{const b={ok:false,handledByRuntime:true,retryScheduled:true};assert.deepEqual(await readDurableResponse(new Response(JSON.stringify(b))),b);});
 await test('HTTP 401 is terminal, HTTP 429 and 503 retry transport',async()=>{assert.equal((await readDurableResponse(new Response('{}',{status:401}))).terminal,true);for(const status of [429,503])await assert.rejects(readDurableResponse(new Response('{}',{status})));});
 await test('malformed success cannot be treated as completed',async()=>{await assert.rejects(readDurableResponse(new Response('bad json')));});
-await test('R2 tools build without missing ArtifactStore import',async()=>{let tools;const llm={enabled:true,complete:async x=>{tools=x.tools;return {ok:true,text:'Finished prose.'};}};await executeExternalOpportunity({title:'Write prose',description:'A short paragraph.'},{mode:'llm',skill:'copywriting'},{llm,env,config:{enabled:true,allowExternalSpending:true,zeroSpendMode:false,killSwitch:false,maxPaidProcurementUsd:1,availableSpendUsd:1}});assert.ok(tools.some(t=>t.function.name==='store_artifact')); });
+await test('R2 tools build without missing ArtifactStore import',async()=>{recordCapabilityProof('artifact',true,{reason:'mocked_verified_storage'},env);let tools;const llm={enabled:true,complete:async x=>{tools=x.tools;return {ok:true,text:'Finished prose.'};}};await executeExternalOpportunity({title:'Write prose',description:'A short paragraph.'},{mode:'llm',skill:'copywriting'},{llm,env,config:{enabled:true,allowExternalSpending:true,zeroSpendMode:false,killSwitch:false,maxPaidProcurementUsd:1,availableSpendUsd:1}});assert.ok(tools.some(t=>t.function.name==='store_artifact')); });
 await test('phase allowlist blocks a model-requested deployment',async()=>{
- let calls=0,round=0;const original=global.fetch;global.fetch=async()=>{calls++;return new Response('{}');};
+ let calls=0,round=0;const original=global.fetch;global.fetch=async(_url,init)=>{if(init?.method==='POST')calls++;return new Response('{}');};
  try{
  const llm={enabled:true,complete:async()=>++round===1?{ok:true,message:{role:'assistant',content:null,tool_calls:[{id:'x',type:'function',function:{name:'deploy_webhook',arguments:'{}'}}]},toolCalls:[{id:'x',function:{name:'deploy_webhook',arguments:'{}'}}]}:{ok:true,text:'Completed prose.'}};
  const r=await executeExternalOpportunity({title:'Write prose'},{mode:'llm',skill:'copywriting'},{llm,env:{AUTONOMOS_DEPLOY_WEBHOOK_URL:'https://example.test/deploy'},toolFilter:[],config:{enabled:true}});

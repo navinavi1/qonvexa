@@ -1,3 +1,5 @@
+import { minimumJobPayoutUsd } from './payout-floor.js';
+import { unifiedCapabilityContext, refreshCapabilities } from './capability-registry.js';
 import { isRetiredMarket } from './retired-markets.js';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -200,7 +202,7 @@ export class GlobalWorkHunter {
     try{
       const r=await fetch('https://task-force.app/api/agent/tasks?status=ACTIVE&limit=100',{headers,signal:AbortSignal.timeout(15000)});const data=await safeJson(r);if(!r.ok){this.event('taskforce_tasks_failed',{status:r.status,error:publicError(data)});return{open:0,applied:0};}
       const rows=arrayFrom(data,['tasks','items','data']);let open=0,applied=0;const maxApply=Math.max(1,Math.min(50,Number(this.env.AUTONOMOS_TASKFORCE_MAX_APPLY_PER_CYCLE||12)));
-      for(const raw of rows){const task=this.normalizeTaskForceTask(raw);if(!task)continue;open++;const capability=classifyOpportunity(task,this.capabilityContext());const key=task.externalId;this.state.taskforce.tasks[key]={...task,capability:{skill:capability.skill,executable:capability.executable,missingTools:capability.missingTools||[]},observedAt:new Date().toISOString()};if(applied>=maxApply||!credential.verified||!capability.executable||Number(task.budgetUsd||0)<0.5)continue;if(this.state.taskforce.applications[key])continue;const result=await this.applyTaskForce(task,capability,credential);if(result.ok)applied++;}
+      for(const raw of rows){const task=this.normalizeTaskForceTask(raw);if(!task)continue;open++;const capability=classifyOpportunity(task,this.capabilityContext());const key=task.externalId;this.state.taskforce.tasks[key]={...task,capability:{skill:capability.skill,executable:capability.executable,missingTools:capability.missingTools||[]},observedAt:new Date().toISOString()};if(applied>=maxApply||!credential.verified||!capability.executable||Number(task.budgetUsd||0)<minimumJobPayoutUsd(this.env))continue;if(this.state.taskforce.applications[key])continue;const result=await this.applyTaskForce(task,capability,credential);if(result.ok)applied++;}
       this.persist();this.event('taskforce_heartbeat',{connected:true,verified:Boolean(credential.verified),openTasks:open,applied});return{open,applied};
     }catch(error){this.event('taskforce_tasks_failed',{error:safeError(error)});return{open:0,applied:0};}
   }
@@ -218,7 +220,7 @@ export class GlobalWorkHunter {
     if(this.state.taskforce.events.length>300)this.state.taskforce.events.length=300;this.persist();if(ids.length)await fetch('https://task-force.app/api/agent/notifications/read',{method:'POST',headers:{...headers,'content-type':'application/json'},body:JSON.stringify({notificationIds:ids}),signal:AbortSignal.timeout(12000)}).catch(()=>{});
   }
 
-  capabilityContext(){return{llmEnabled:Boolean(this.llm?.available??this.llm?.enabled),hasGithubPrTool:Boolean(this.env.GITHUB_TOKEN),hasShellTool:Boolean(this.env.E2B_API_KEY),hasBrowserTool:false,hasDeployTool:Boolean(this.env.AUTONOMOS_DEPLOY_WEBHOOK_URL),hasArtifactTool:Boolean((this.env.S3_ENDPOINT||this.env.R2_ENDPOINT)&&(this.env.S3_BUCKET||this.env.R2_BUCKET)),hasAppTool:Boolean(this.env.COMPOSIO_API_KEY),connectedApps:[],hasWebSearchTool:true,hasDesignMediaTool:false};}
+  capabilityContext(){return unifiedCapabilityContext(this.env,{llm:this.llm});}
   saveTaskForceCredential(credential){const secrets=this.read(this.secretFile,{});secrets.taskforce=credential;this.writeSecret(this.secretFile,secrets);}
   archiveLead(id,reason,row={}){if(!id)return;this.state.ignored[id]={id,reason,source:row.source||'',title:String(row.title||'').slice(0,180),url:String(row.url||''),archivedAt:new Date().toISOString()};delete this.state.leads[id];if(Object.keys(this.state.ignored).length>10000){const oldest=Object.entries(this.state.ignored).sort((a,b)=>Date.parse(a[1].archivedAt||0)-Date.parse(b[1].archivedAt||0));for(const [key] of oldest.slice(0,1000))delete this.state.ignored[key];}}
   pruneLeads(){const cutoff=Date.now()-14*24*60*60_000;for(const [key,row] of Object.entries(this.state.leads)){if(Date.parse(String(row.lastSeenAt||row.firstSeenAt||0))<cutoff)this.archiveLead(key,'stale_14_days',row);}const rows=Object.entries(this.state.leads).sort((a,b)=>Date.parse(b[1].firstSeenAt||0)-Date.parse(a[1].firstSeenAt||0));for(const [key,row] of rows.slice(5000))this.archiveLead(key,'feed_capacity_archive',row);}

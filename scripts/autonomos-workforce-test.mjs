@@ -240,7 +240,7 @@ globalThis.fetch=async(_url,init)=>{
   return new Response(JSON.stringify({choices:[{message:{role:'assistant',content:'usable result'}}],usage:{prompt_tokens:10,completion_tokens:20}}),{status:200,headers:{'content-type':'application/json'}});
 };
 try{
-  const llm=createLlmClient({AUTONOMOS_LLM_BASE_URL:'https://example.test/v1',AUTONOMOS_LLM_API_KEY:'test',AUTONOMOS_LLM_MODEL:'gpt-5-mini'});
+  const llm=createLlmClient({AUTONOMOS_OWNER_CAPPED_PROVIDERS:'llm_example.test',AUTONOMOS_LLM_BASE_URL:'https://example.test/v1',AUTONOMOS_LLM_API_KEY:'test',AUTONOMOS_LLM_MODEL:'gpt-5-mini'});
   const result=await llm.complete({messages:[{role:'user',content:'work'}],maxTokens:800});
   assert.equal(result.ok,true);
   assert.equal(result.text,'usable result');

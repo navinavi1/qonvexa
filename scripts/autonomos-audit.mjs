@@ -103,7 +103,7 @@ await ok('AutonomOS 2.0 policy exposes guarded marketplace auto-claim controls',
   assert.equal(cfg.autoClaimJobs, true);
   assert.equal(cfg.requireEscrowForAutoClaim, true);
   assert.equal(cfg.maxJobsPerCycle, 3);
-  assert.equal(cfg.minJobPayoutUsd, .02);
+  assert.equal(cfg.minJobPayoutUsd, 5);
 });
 
 await ok('job normalizer creates a common escrow job shape', () => {
@@ -274,7 +274,7 @@ await ok('P0: LLM client surfaces the real API error message and auto-retries th
     return { ok:true, status:200, json:async()=>({choices:[{message:{content:'ok'}}],usage:{}}) };
   };
   try {
-    const client = createLlmClient({ AUTONOMOS_LLM_BASE_URL:'https://example.test/v1', AUTONOMOS_LLM_MODEL:'gpt-5-mini' });
+    const client = createLlmClient({ AUTONOMOS_OWNER_CAPPED_PROVIDERS:'llm_example.test',AUTONOMOS_LLM_BASE_URL:'https://example.test/v1', AUTONOMOS_LLM_MODEL:'gpt-5-mini' });
     const result = await client.complete({ messages:[{role:'user',content:'hi'}], maxTokens:100 });
     assert.equal(result.ok, true);
     assert.equal(callCount, 2);
@@ -285,7 +285,7 @@ await ok('P0: a genuinely unrecoverable LLM error now reports the real message i
   const originalFetch = global.fetch;
   global.fetch = async () => ({ ok:false, status:400, text:async()=>JSON.stringify({error:{message:'Invalid value for parameter tools: array too long'}}) });
   try {
-    const client = createLlmClient({ AUTONOMOS_LLM_BASE_URL:'https://example.test/v1', AUTONOMOS_LLM_MODEL:'gpt-5-mini' });
+    const client = createLlmClient({ AUTONOMOS_OWNER_CAPPED_PROVIDERS:'llm_example.test',AUTONOMOS_LLM_BASE_URL:'https://example.test/v1', AUTONOMOS_LLM_MODEL:'gpt-5-mini' });
     const result = await client.complete({ messages:[{role:'user',content:'hi'}] });
     assert.equal(result.ok, false);
     assert.ok(result.reason.includes('array too long'), `expected real error detail in reason, got: ${result.reason}`);

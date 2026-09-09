@@ -43,9 +43,9 @@ for(const key of ['OPENAI_API_KEY','DATABASE_URL','REDIS_URL','TRIGGER_SECRET_KE
 }
 
 const cfg=normalizeConfig({...DEFAULT_AUTONOMOS_CONFIG});
-check('Global minimum payout defaults to at least $0.50',Number(cfg.minJobPayoutUsd)>=0.5,`value=${cfg.minJobPayoutUsd}`);
-check('Clawlancer minimum defaults to at least $0.50',Number(cfg.clawlancerMinJobPayoutUsd)>=0.5,`value=${cfg.clawlancerMinJobPayoutUsd}`);
-check('Dealwork minimum defaults to at least $0.50',Number(cfg.dealworkMinJobPayoutUsd)>=0.5,`value=${cfg.dealworkMinJobPayoutUsd}`);
+check('Global minimum payout defaults to at least $5.00',Number(cfg.minJobPayoutUsd)>=5,`value=${cfg.minJobPayoutUsd}`);
+check('Clawlancer minimum defaults to at least $5.00',Number(cfg.clawlancerMinJobPayoutUsd)>=5,`value=${cfg.clawlancerMinJobPayoutUsd}`);
+check('Dealwork minimum defaults to at least $5.00',Number(cfg.dealworkMinJobPayoutUsd)>=5,`value=${cfg.dealworkMinJobPayoutUsd}`);
 check('Demo/test protection defaults ON',cfg.rejectDemoAndTestJobs===true);
 check('Explicit demo opportunity is rejected',isDemoOrTestOpportunity({title:'DEMO ONLY - no payment',environment:'sandbox'})===true);
 check('Legitimate software testing title is not rejected solely for word test',isDemoOrTestOpportunity({title:'QA engineer to test production web app',budgetUsd:500})===false);
@@ -58,7 +58,7 @@ for(const id of ['openai_agents','langgraph','memory','redis','redis_streams','t
 const html=read('public/admin.html'),js=read('public/admin.js');
 check('Admin exposes demo/test safety toggle',/name="rejectDemoAndTestJobs"/.test(html));
 check('Admin submits demo/test safety toggle',/rejectDemoAndTestJobs:f\.elements\.rejectDemoAndTestJobs\.checked/.test(js));
-check('Admin copy reflects $0.50 general floor',/global floor \$0\.50/.test(html));
+check('Admin copy reflects $5.00 general floor',/global floor \$5\.00/.test(html));
 
 const forbiddenInPublic=['server.js','package.json','render.yaml','Procfile','scripts'];
 for(const name of forbiddenInPublic)check(`public/${name} does not exist (would be served to the internet)`,!fs.existsSync(path.join(root,'public',name)));

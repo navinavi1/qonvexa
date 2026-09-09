@@ -1,3 +1,6 @@
+import { resourceSnapshot } from './resource-control.js';
+import { recoverFreeCapability } from './free-tool-recovery.js';
+import { unifiedCapabilityContext, refreshCapabilities } from './capability-registry.js';
 import { isRetiredMarket } from './retired-markets.js';
 import { executionDiagnostics, logExecutionEvent } from './execution-diagnostics.js';
 import { createJobBudget } from './job-budget.js';
@@ -201,7 +204,7 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
   // Agency Intelligence is advisory: it may rank already-qualified jobs, but it cannot
   // weaken safety, spend, credential, payout or QA policy.
 
-  const integrationsReady=Promise.allSettled([memory.init(),eventBus.init(),cache.init(),artifactStore.init()]);
+  const integrationsReady=Promise.allSettled([memory.init(),eventBus.init(),cache.init(),artifactStore.init(),refreshCapabilities(env)]);
   let credentials = store.readJson('credentials.private.json', {});
   let config = normalizeConfig(store.readJson('config.json', {
     ...DEFAULT_AUTONOMOS_CONFIG,
@@ -352,6 +355,7 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
         products:currentProducts().map(product=>({ ...product, payment:x402.status() })),
         connectors:connectorStatuses(env, x402.status(), credentials).map(c=>{ const h=state.connectorHealth?.[c.id]||state.connectorHealth?.[`${c.id}-public`]||null; const lifecycle=marketplaceLifecycleWithCashout(c.id); const base=h&&c.configured&&!h.ok?{...c,status:'degraded',health:h}:{...c,health:h}; return {...base,lifecycle}; }),
         infrastructure:infrastructureStatus(env),
+        verifiedCapabilities:capabilityContext(),resourceLimits:resourceSnapshot(env),
         payouts:paymentDestinations(env),
         opportunities, jobs, events, missing:missingSetup(), pendingHumanClaims,
         jobRegistry:{summary:jobRegistry.summary(),queues:jobRegistry.queues({limit:80})},
@@ -630,9 +634,9 @@ async refreshTreasury(){
     return {...base,workAutoReady,cashoutReady,fullAutoReady:Boolean(workAutoReady&&cashoutReady),cashoutState,cashoutReason};
   }
 
-  function effectiveJobFloor(op={}){    if(op?.source==='clawlancer')return Number(config.clawlancerMinJobPayoutUsd??0.5);
-    if(op?.source==='dealwork')return Number(config.dealworkMinJobPayoutUsd??0.5);
-    return Number(config.minJobPayoutUsd??0.5);
+  function effectiveJobFloor(op={}){    if(op?.source==='clawlancer')return Number(config.clawlancerMinJobPayoutUsd??5);
+    if(op?.source==='dealwork')return Number(config.dealworkMinJobPayoutUsd??5);
+    return Number(config.minJobPayoutUsd??5);
   }
 
   // Paid/escrowed assignments are obligations we already accepted, not fresh market
@@ -767,6 +771,9 @@ async refreshTreasury(){
 
   async function processMarketplaceOpportunity(inputOp){
     if(isRetiredMarket(inputOp))return {claimed:false,delivered:false,preclaimRejected:true,reasons:['marketplace_retired']};
+    await refreshCapabilities(env);
+    const initial=classifyOpportunity(inputOp,capabilityContext());
+    for(const gap of initial.missingTools||[])await recoverFreeCapability(gap,env);
     let op=revalidateOpportunityBeforeAction(inputOp);
     const preclaim=explainCandidacy(op);
     if(!preclaim.isCandidate){
@@ -1097,6 +1104,8 @@ async refreshTreasury(){
       // cannot truthfully perform. Keep the claim visible for manual resolution, but do not
       // burn more model/tool budget retrying an impossible workflow.
       const recoveryDescription=claim.workOrder?`${op.description||''}\n\n${typeof claim.workOrder==='string'?claim.workOrder:JSON.stringify(claim.workOrder).slice(0,4000)}`:op.description;
+      const missing=classifyOpportunity({...op,description:recoveryDescription},capabilityContext()).missingTools||[];
+      for(const gap of missing)await recoverFreeCapability(gap,env);
       const recoveryCheck=revalidateClaimedCapability({...op,description:recoveryDescription},capabilityContext());
       if(!recoveryCheck.ok){
         const reason=recoveryCheck.reason||'claimed_job_capability_no_longer_executable';
@@ -1288,7 +1297,7 @@ async refreshTreasury(){
   }
   function buildCommissioningProof(rows,jobs=[],ledger=[]){
     const sources=new Set(['clawlancer','workprotocol']);
-    const floor=Number(config.commissioningMinPayoutUsd||0.5);
+    const floor=Number(config.commissioningMinPayoutUsd||5);
     const lane=rows.filter(x=>sources.has(String(x.source||''))&&isCryptoNativeEarning(x)&&Number(x.budgetUsd||0)>=floor);
     const ready=lane.filter(x=>explainCandidacy(x).isCandidate);
     const paidRows=(ledger||[]).filter(x=>x.type==='revenue'&&!x.testnet&&sources.has(String(x.source||''))&&Number(x.amountUsd||0)>=floor);
@@ -1483,10 +1492,11 @@ async refreshTreasury(){
     }catch(error){event('fast_cycle_failed',{error:String(error?.message||error)});return{ok:false,reason:String(error?.message||error).slice(0,200)};}
     finally{fastCycleRunning=false;}
   }
-  function connectedApps(){try{const raw=JSON.parse(String(env.AUTONOMOS_CONNECTED_APPS_JSON||'[]'));if(Array.isArray(raw))return raw.map(x=>String(x).toLowerCase().trim()).filter(Boolean);}catch{}return String(env.AUTONOMOS_CONNECTED_APPS||'').split(',').map(x=>x.toLowerCase().trim()).filter(Boolean);}
-  function capabilityContext(){return{llmEnabled:Boolean(llm.available??llm.enabled),hasGithubPrTool:Boolean(env.GITHUB_TOKEN),hasShellTool:Boolean(env.E2B_API_KEY),hasBrowserTool:false,hasDeployTool:Boolean(env.AUTONOMOS_DEPLOY_WEBHOOK_URL),hasArtifactTool:artifactStore.configured(),hasAppTool:Boolean(env.COMPOSIO_API_KEY),connectedApps:connectedApps(),hasWebSearchTool:true,hasDesignMediaTool:false};}
+  function connectedApps(){return unifiedCapabilityContext(env,{llm}).connectedApps;}
+  function capabilityContext(){return unifiedCapabilityContext(env,{llm});}
   function capabilityVersion(){
-    return crypto.createHash('sha256').update(JSON.stringify({rules:'16',credentialVersion:crypto.createHash('sha256').update(JSON.stringify(Object.entries(env).filter(([k])=>/API_KEY|TOKEN|AGENT_ID/.test(k)))).digest('hex'),model:llm.model||'',e2b:Boolean(env.E2B_API_KEY),composio:Boolean(env.COMPOSIO_API_KEY),connectedApps:connectedApps().sort(),github:Boolean(env.GITHUB_TOKEN),artifact:artifactStore.configured(),designMedia:Boolean(env.CANVA_API_KEY||env.FIGMA_ACCESS_TOKEN||env.FIGMA_API_KEY)})).digest('hex').slice(0,16);
+    const {verifiedAt,...verifiedContext}=capabilityContext();
+    return crypto.createHash('sha256').update(JSON.stringify({rules:'unified-1',verifiedContext,credentialVersion:crypto.createHash('sha256').update(JSON.stringify(Object.entries(env).filter(([k])=>/API_KEY|TOKEN|AGENT_ID/.test(k)))).digest('hex'),model:llm.model||'',e2b:Boolean(env.E2B_API_KEY),composio:Boolean(env.COMPOSIO_API_KEY),connectedApps:connectedApps().sort(),github:Boolean(env.GITHUB_TOKEN),artifact:artifactStore.configured(),designMedia:Boolean(env.CANVA_API_KEY||env.FIGMA_ACCESS_TOKEN||env.FIGMA_API_KEY)})).digest('hex').slice(0,16);
   }
   function buildIncidents(){
     const out=[];const now=Date.now();const summary=jobRegistry.summary();

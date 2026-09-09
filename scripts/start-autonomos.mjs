@@ -1,3 +1,4 @@
+import { startUnifiedCapabilities, migrateUnifiedRelease } from '../src/autonomos/unified-runtime-bootstrap.js';
 import 'dotenv/config';
 import '../src/autonomos/taskforce-live-recovery-patch.js';
 import '../src/autonomos/revenue-lifecycle-hardening-patch.js';
@@ -20,6 +21,9 @@ import { GlobalFeedPublisher } from '../src/autonomos/global-feed-publisher.js';
 import { probeRuntimeEmailChannel } from '../src/autonomos/email-channel-probe.js';
 
 if (/^(1|true|yes|on)$/i.test(String(process.env.AUTONOMOS_PRODUCTION_SWARM_MODE||''))) process.env.AUTONOMOS_RUNTIME_ENV_OVERRIDES='true';
+
+migrateUnifiedRelease(process.env);
+const stopUnifiedCapabilities=await startUnifiedCapabilities(process.env,console);
 
 cleanLegacyState({storageDir:process.env.STORAGE_DIR,logger:console});
 migrateGlobalActionerState({env:process.env,storageDir:process.env.STORAGE_DIR,logger:console});
@@ -52,6 +56,6 @@ internetHunter?.start();globalHunter.start();agrentingWorker?.start();marketScou
 if(outboundEmailRequested){await ensureRevenueEmailLane();if(!browserlessActioner){const every=Math.max(30_000,Number(process.env.AUTONOMOS_EMAIL_REAUTH_POLL_MS||60_000));emailGateTimer=setInterval(()=>ensureRevenueEmailLane().catch(()=>{}),every);emailGateTimer.unref?.();}}
 taskForceVerifier.start();if(enabled(process.env.AUTONOMOS_TASKFORCE_WORKER_ENABLED,'true'))taskForceWorker.start();globalFeedPublisher.start();
 
-const stop=()=>{internetHunter?.stop();globalHunter.stop();agrentingWorker?.stop();marketScout?.stop();marketExpansion?.stop();skillLibrary.stop();skillAcquirer?.stop();moneyReporter.stop();fiatRoutePlanner.stop();browserlessActioner?.stop();gmailJobMonitor?.stop();taskForceVerifier.stop();taskForceWorker.stop();globalFeedPublisher.stop();if(emailGateTimer)clearInterval(emailGateTimer);emailGateTimer=null;};
+const stop=()=>{stopUnifiedCapabilities();internetHunter?.stop();globalHunter.stop();agrentingWorker?.stop();marketScout?.stop();marketExpansion?.stop();skillLibrary.stop();skillAcquirer?.stop();moneyReporter.stop();fiatRoutePlanner.stop();browserlessActioner?.stop();gmailJobMonitor?.stop();taskForceVerifier.stop();taskForceWorker.stop();globalFeedPublisher.stop();if(emailGateTimer)clearInterval(emailGateTimer);emailGateTimer=null;};
 process.on('SIGTERM',stop);process.on('SIGINT',stop);await import('../server.js');
 function enabled(value,fallback='false'){return !/^(0|false|no|off)$/i.test(String(value??fallback));}

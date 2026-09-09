@@ -1,3 +1,4 @@
+import { reserveResource } from './resource-control.js';
 let setupPromise=null;
 let tracingModule=null;
 
@@ -17,6 +18,7 @@ async function setup(env=process.env){
 }
 
 export async function withAgentTrace(name,metadata,fn,{env=process.env}={}){
+  const allowance=await reserveResource('langfuse',1,env);if(!allowance.ok)return fn();
   const ready=await setup(env);
   if(!ready||!tracingModule?.startActiveObservation)return fn();
   return tracingModule.startActiveObservation(String(name||'autonomos-operation'),async span=>{

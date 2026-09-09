@@ -1,3 +1,4 @@
+import { minimumJobPayoutUsd } from './payout-floor.js';
 import { GlobalWorkHunter } from './global-work-hunter.js';
 import { freeWebSearch } from './free-web-tool.js';
 import { classifyOpportunity } from './capabilities.js';
@@ -110,7 +111,7 @@ export class RevenueGlobalWorkHunter extends GlobalWorkHunter{
       if(!r.ok){this.event('taskforce_tasks_failed',{status:r.status,error:publicError(data)});return stats;}
       const rows=arrayFrom(data,['tasks','items','data']);
       const maxApply=Math.max(1,Math.min(50,Number(this.env.AUTONOMOS_TASKFORCE_MAX_APPLY_PER_CYCLE||12)));
-      const minPayout=Math.max(0.01,Number(this.env.AUTONOMOS_MIN_JOB_PAYOUT_USD||0.5));
+      const minPayout=minimumJobPayoutUsd(this.env);
       const retryMs=Math.max(60_000,Number(this.env.AUTONOMOS_TASKFORCE_APPLY_RETRY_MS||15*60_000));
       for(const raw of rows){
         const task=this.normalizeTaskForceTask(raw);if(!task)continue;stats.open++;

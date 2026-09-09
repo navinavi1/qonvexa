@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { reserveResource } from "./resource-control.js";
 
 const quote = (value) => "'" + String(value).replace(/'/g, "'\\''") + "'";
 const safePath = (value) =>
@@ -101,6 +102,7 @@ export async function executeCodingJob(
     )
   )
     throw new Error("github_repository_url_missing");
+  const allowance=await reserveResource("e2b",1,env);if(!allowance.ok)throw new Error(allowance.error);
   const duration = Math.min(
     1800000,
     Math.max(120000, Number(env.AUTONOMOS_CODING_TIMEOUT_MS || 900000)),

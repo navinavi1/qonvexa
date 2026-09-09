@@ -52,7 +52,7 @@ await test('Code verification cannot be substituted by successful web search',()
 });
 await test('Shell and Python share files until execution cleanup; jobs stay isolated',async()=>{
  let creates=0,kills=0;const files=new Map();
- const session=new SandboxSession({env:{E2B_API_KEY:'test'},create:async()=>{creates++;return {files:{write:async(p,c)=>files.set(p,c)},commands:{run:async cmd=>({exitCode:0,stdout:cmd==='read'?files.get('/home/user/code.py'):'written'})},runCode:async()=>({logs:{stdout:[files.get('/home/user/code.py')]}}),kill:async()=>kills++};}});
+ const session=new SandboxSession({env:{E2B_API_KEY:'test'},create:async()=>{creates++;return {files:{write:async(p,c)=>files.set(p,c)},commands:{run:async cmd=>({exitCode:0,stdout:cmd.split('\n').at(-1)==='read'?files.get('/home/user/code.py'):'written'})},runCode:async()=>({logs:{stdout:[files.get('/home/user/code.py')]}}),kill:async()=>kills++};}});
  const env={E2B_API_KEY:'test'};
  await e2bRunShell({command:'write',files:[{path:'code.py',content:'persisted'}]},env,null,session);
  assert.equal((await e2bRunShell({command:'read'},env,null,session)).stdout,'persisted');

@@ -1,3 +1,4 @@
+import { unifiedCapabilityContext } from './capability-registry.js';
 // Free-first capability policy for AutonomOS.
 // This module does not buy tools, enable subscriptions, or bypass identity/security gates.
 // It expands what agents may attempt using already-connected hard-capped/free resources.
@@ -42,27 +43,7 @@ const CATEGORY_TO_SKILL=Object.freeze({
   browser:'browser-ops', website:'code-analysis', deploy:'deploy'
 });
 
-export function freeCapabilityContext(env=process.env){
-  const hasE2B=Boolean(env.E2B_API_KEY);
-  const hasComposio=Boolean(env.COMPOSIO_API_KEY);
-  return {
-    llmEnabled:Boolean(env.OPENAI_API_KEY),
-    hasGithubPrTool:Boolean(env.GITHUB_TOKEN),
-    hasShellTool:hasE2B,
-    // Interactive work uses Playwright/Puppeteer inside the isolated E2B sandbox. It is
-    // never used to bypass CAPTCHA/KYC/2FA or to impersonate a human identity.
-    hasBrowserTool:hasE2B,
-    // Vercel/Netlify are already connected through the free Composio app gateway.
-    hasDeployTool:Boolean(env.AUTONOMOS_DEPLOY_WEBHOOK_URL)||hasComposio,
-    hasArtifactTool:Boolean((env.S3_ENDPOINT||env.R2_ENDPOINT)&&(env.S3_BUCKET||env.R2_BUCKET))||hasComposio,
-    hasAppTool:hasComposio,
-    connectedApps:[...FREE_CONNECTED_APPS],
-    // E2B gives agents a real public-HTTP execution environment. Current-fact work must
-    // still cite actual URLs/API responses; this flag does not enable paid search.
-    hasWebSearchTool:hasE2B||Boolean(env.GITHUB_TOKEN),
-    hasDesignMediaTool:hasE2B
-  };
-}
+export function freeCapabilityContext(env=process.env){return unifiedCapabilityContext(env);}
 
 export function normalizeOpportunityForFreeSkills(op={}){
   const category=String(op.category||'').toLowerCase().trim();

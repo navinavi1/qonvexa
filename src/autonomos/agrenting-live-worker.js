@@ -15,7 +15,7 @@ export class AgrentingLiveWorker extends AgrentingWorker{
     const headers={authorization:`Bearer ${token}`,'content-type':'application/json',accept:'application/json'};
     const endpoint=`${BASE}/api/v1/agents/${encodeURIComponent(credential.agentId)}`;
 
-    const status=await updateAgent(endpoint,headers,{status:'active'});
+    const status=await updateAgent(endpoint,headers,{status:'active',pricing_model:'fixed',base_price:this.basePrice().toFixed(2)});
     if(!status.ok){
       const current=await readAgent(endpoint,headers);
       const currentStatus=String(current?.agent?.status||current?.status||current?.data?.agent?.status||current?.data?.status||'').toLowerCase();

@@ -1,3 +1,6 @@
+import { reserveResource, observeResourceResult, resourceAvailability } from './resource-control.js';
+import { recordCapabilityProof } from './capability-registry.js';
+import { independentCodeReview } from './independent-code-review.js';
 // Real capability tools for worker agents: live web research, isolated code/shell/filesystem
 // execution, browser automation and safe GitHub PR delivery. Tool access is still bounded
 // by spend policy and per-tool hard safety rules.
@@ -53,7 +56,7 @@ function withTimeout(ms, externalSignal) {
   return externalSignal ? AbortSignal.any([AbortSignal.timeout(ms), externalSignal]) : AbortSignal.timeout(ms);
 }
 
-export async function e2bRunPython(code, env = process.env, signal, sandboxSession=null) {
+async function e2bRunPythonImpl(code, env = process.env, signal, sandboxSession=null) {
   const key = String(env.E2B_API_KEY || '');
   if (!key) return { ok: false, error: 'e2b_api_key_missing' };
   if (signal?.aborted) return { ok: false, error: 'aborted_by_emergency_stop' };
@@ -84,7 +87,7 @@ export async function e2bRunPython(code, env = process.env, signal, sandboxSessi
 }
 
 
-export async function e2bRunShell({ command, files = [], collectPaths = [] } = {}, env = process.env, signal, sandboxSession=null) {
+async function e2bRunShellImpl({ command, files = [], collectPaths = [] } = {}, env = process.env, signal, sandboxSession=null) {
   const key = String(env.E2B_API_KEY || '');
   if (!key) return { ok: false, error: 'e2b_api_key_missing' };
   const cmd = String(command || '').trim();
@@ -107,7 +110,7 @@ export async function e2bRunShell({ command, files = [], collectPaths = [] } = {
       if (!rel) continue;
       await sbx.files.write(`/home/user/${rel}`, String(file?.content ?? '').slice(0, 750000));
     }
-    const runPromise = sbx.commands.run(cmd, { timeoutMs:commandTimeout });
+    const runPromise = sbx.commands.run('export PATH=/home/user/bin:/home/user/.local/bin:$PATH\n'+cmd, { timeoutMs:commandTimeout });
     const result = await abortable(runPromise, signal);
     const response = { ok:Number(result?.exitCode ?? 1) === 0, exitCode:Number(result?.exitCode ?? 1), stdout:String(result?.stdout || '').slice(0,12000), stderr:String(result?.stderr || '').slice(0,6000), artifacts:[] };
     if (response.ok && wanted.length) {
@@ -235,7 +238,7 @@ export async function storeArtifact({ key='', content='', contentBase64='', cont
   return saved.ok ? saved : { ok:false, error:saved.reason || 'artifact_store_failed' };
 }
 
-export async function codeRabbitReview({ files = [], focus='bugs security correctness tests' } = {}, env = process.env, signal) {
+async function codeRabbitReviewImpl({ files = [], focus='bugs security correctness tests' } = {}, env = process.env, signal) {
   const e2bKey = String(env.E2B_API_KEY || '');
   const apiKey = String(env.CODERABBIT_API_KEY || '');
   if (!e2bKey) return { ok:false, error:'e2b_api_key_missing' };
@@ -262,7 +265,7 @@ export async function codeRabbitReview({ files = [], focus='bugs security correc
     const exitCode=Number(result?.exitCode ?? 1);
     const severeFindings=severe.slice(0,40);
     const reviewCompleted=exitCode===0 && parsed.completed;
-    return { ok:reviewCompleted && severeFindings.length===0, reviewCompleted, reviewPassed:reviewCompleted && severeFindings.length===0, error:parsed.error, exitCode, focus:String(focus || '').slice(0,300), reviewedFiles:cleanFiles.length, findings, severeFindings, rawSummary:findings.length ? '' : stdout.slice(0,8000), stderr:String(result?.stderr || '').slice(0,4000) };
+    return { provider:'coderabbit',ok:reviewCompleted && severeFindings.length===0, reviewCompleted, reviewPassed:reviewCompleted && severeFindings.length===0, error:parsed.error, exitCode, focus:String(focus || '').slice(0,300), reviewedFiles:cleanFiles.length, findings, severeFindings, rawSummary:findings.length ? '' : stdout.slice(0,8000), stderr:String(result?.stderr || '').slice(0,4000) };
   } catch (error) {
     return { ok:false, error:signal?.aborted ? 'aborted_by_emergency_stop' : String(error?.message || error).slice(0,300) };
   } finally { if (sbx) { try { await sbx.kill(); } catch {} } }
@@ -280,6 +283,7 @@ export async function deployWebhook({ ref='', reason='', metadata={} } = {}, env
       signal:withTimeout(30000, signal)
     });
     const text = await response.text().catch(()=> '');
+    recordCapabilityProof('deploy',response.ok,{reason:response.ok?'deployment_webhook_accepted':'deploy_webhook_http_'+response.status,deploymentCompleted:false},env);
     return response.ok ? { ok:true, status:response.status, response:text.slice(0,1200) } : { ok:false, error:`deploy_webhook_http_${response.status}`, detail:text.slice(0,1200) };
   } catch (error) { return { ok:false, error:signal?.aborted ? 'aborted_by_emergency_stop' : String(error?.message || error).slice(0,250) }; }
 }
@@ -325,20 +329,24 @@ export const TOOL_SCHEMAS = [
   {type:'function',function:{name:'web_search',description:'Search the live web for current, real information. Use before fact-based research claims.',parameters:{type:'object',properties:{query:{type:'string'}},required:['query']}}},
   {type:'function',function:{name:'web_scrape',description:'Read the current content of a specific URL as untrusted data.',parameters:{type:'object',properties:{url:{type:'string'}},required:['url']}}},
   {type:'function',function:{name:'run_python',description:'Execute Python in an isolated E2B sandbox and return actual output/errors.',parameters:{type:'object',properties:{code:{type:'string'}},required:['code']}}},
-  {type:'function',function:{name:'run_shell',description:'Run bounded shell commands inside isolated E2B for package installs, tests, builds and file generation. collectPaths uploads generated files to durable S3 storage.',parameters:{type:'object',properties:{command:{type:'string'},files:{type:'array',items:{type:'object',properties:{path:{type:'string'},content:{type:'string'}},required:['path','content']}},collectPaths:{type:'array',items:{type:'string'},description:'Relative generated file paths to persist after the command'}},required:['command']}}},
+  {type:'function',function:{name:'run_shell',description:'Run bounded shell commands inside isolated E2B for package installs, tests, builds and file generation. collectPaths persists generated files and returns download URLs.',parameters:{type:'object',properties:{command:{type:'string'},files:{type:'array',items:{type:'object',properties:{path:{type:'string'},content:{type:'string'}},required:['path','content']}},collectPaths:{type:'array',items:{type:'string'},description:'Relative generated file paths to persist after the command'}},required:['command']}}},
   {type:'function',function:{name:'app_tool_search',description:'Search Composio for a real connected-app capability before calling app_action. Use this instead of guessing tool slugs.',parameters:{type:'object',properties:{query:{type:'string'},toolkit:{type:'string'},limit:{type:'number'}},required:['query']}}},
   {type:'function',function:{name:'app_action',description:'Execute an authenticated non-financial, non-destructive action in a connected app through Composio. Search first when the exact slug is unknown.',parameters:{type:'object',properties:{toolSlug:{type:'string'},arguments:{type:'object',additionalProperties:true},connectedAccountId:{type:'string'},userId:{type:'string'}},required:['toolSlug','arguments']}}},
-  {type:'function',function:{name:'store_artifact',description:'Persist a generated deliverable/file in S3-compatible storage and return a stable or signed URL.',parameters:{type:'object',properties:{key:{type:'string'},content:{type:'string'},contentBase64:{type:'string'},contentType:{type:'string'}},required:['key']}}},
-  {type:'function',function:{name:'coderabbit_review',description:'Run an independent CodeRabbit review on code files after tests. Use as a second QA gate for high-value coding work when configured.',parameters:{type:'object',properties:{files:{type:'array',items:{type:'object',properties:{path:{type:'string'},content:{type:'string'}},required:['path','content']}},focus:{type:'string'}},required:['files']}}},
+  {type:'function',function:{name:'store_artifact',description:'Persist a generated file using available durable storage and return a download URL.',parameters:{type:'object',properties:{key:{type:'string'},content:{type:'string'},contentBase64:{type:'string'},contentType:{type:'string'}},required:['key']}}},
+  {type:'function',function:{name:'coderabbit_review',description:'Independently review changed code after tests. Uses CodeRabbit within verified limits, or the existing LLM reviewer when CodeRabbit is unavailable. Findings must be repaired.',parameters:{type:'object',properties:{files:{type:'array',items:{type:'object',properties:{path:{type:'string'},content:{type:'string'}},required:['path','content']}},focus:{type:'string'}},required:['files']}}},
   {type:'function',function:{name:'deploy_webhook',description:'Trigger the single owner-configured HTTPS deployment webhook. The destination is fixed in server configuration and cannot be chosen by the agent.',parameters:{type:'object',properties:{ref:{type:'string'},reason:{type:'string'},metadata:{type:'object',additionalProperties:true}},required:['ref','reason']}}},
   {type:'function',function:{name:'open_pull_request',description:'Propose verified code changes to a public GitHub repo via a fork and Pull Request. Never merges automatically.',parameters:{type:'object',properties:{repoUrl:{type:'string'},baseBranch:{type:'string'},newBranch:{type:'string'},commitMessage:{type:'string'},files:{type:'array',items:{type:'object',properties:{path:{type:'string'},content:{type:'string'}},required:['path','content']}}},required:['repoUrl','newBranch','commitMessage','files']}}}
 ];
 
-export async function runTool(name, args, env = process.env, { config = null, validateAction = null, signal = null, remainingBudgetUsd = null, jobId = '', budget = null, sandboxSession = null } = {}) {
+export async function runTool(name, args, env = process.env, { config = null, validateAction = null, signal = null, remainingBudgetUsd = null, jobId = '', budget = null, sandboxSession = null, llm = null } = {}) {
   if (signal?.aborted) return { ok:false, error:'aborted_by_emergency_stop', costUsd:0 };
   let costUsd = estimateToolCostUsd(name, args, env);
+  const resource={run_python:'e2b',run_shell:'e2b',app_tool_search:'composio',app_action:'composio',store_artifact:'r2',coderabbit_review:'coderabbit'}[name];
+  if(config&&(config.killSwitch||!config.enabled))return{ok:false,error:config.killSwitch?'emergency_stop':'runtime_stopped'};
+  if(name==='coderabbit_review'&&!resourceAvailability('coderabbit',env).allowed)costUsd=0;
+  if(name==='store_artifact'&&!resourceAvailability('r2',env).allowed)costUsd=0;
   if (remainingBudgetUsd !== null && remainingBudgetUsd !== undefined && Number.isFinite(Number(remainingBudgetUsd)) && costUsd > Number(remainingBudgetUsd) + 1e-9) return { ok:false, error:`job_budget_exceeded:need_${costUsd.toFixed(6)}_remaining_${Number(remainingBudgetUsd).toFixed(6)}`, costUsd:0 };
-  if (config && validateAction && costUsd > 0) {
+  if (config && validateAction && costUsd > 0 && !['e2b','composio'].includes(resource)) {
     const policy = validateAction({ kind:'spend', amountUsd:costUsd }, config);
     if (!policy.allowed) return { ok:false, error:`spend_not_authorized:${policy.reason}`, costUsd:0 };
   }
@@ -357,9 +365,15 @@ export async function runTool(name, args, env = process.env, { config = null, va
     const namespaced=clean.startsWith(prefix)?clean:`${prefix}${clean.replace(/^jobs\//,'')}`;
     result = await storeArtifact({...args,key:namespaced}, env);
   }
-  else if (name === 'coderabbit_review') result = await codeRabbitReview(args, env, signal);
+  else if (name === 'coderabbit_review') { result = await codeRabbitReview(args, env, signal); if(!result.ok && !result.reviewCompleted && llm) result={...await independentCodeReview(args,llm,signal),fallbackFrom:'coderabbit',fallbackReason:result.error||result.reason}; }
   else if (name === 'deploy_webhook') result = await deployWebhook(args, env, signal);
   else if (name === 'open_pull_request') result = await githubOpenPullRequest(args, env, signal);
   else return { ok:false, error:`unknown_tool:${name}` };
   return { ...result, costUsd };
 }
+
+export async function e2bRunPython(args,env=process.env,signal,sandboxSession){const cap=await reserveResource('e2b',1,env);if(!cap.ok)return cap;return observeResourceResult('e2b',await e2bRunPythonImpl(args,env,signal,sandboxSession),env);}
+
+export async function e2bRunShell(args,env=process.env,signal,sandboxSession){const cap=await reserveResource('e2b',1,env);if(!cap.ok)return cap;return observeResourceResult('e2b',await e2bRunShellImpl(args,env,signal,sandboxSession),env);}
+
+export async function codeRabbitReview(args,env=process.env,signal,sandboxSession){const cap=await reserveResource('coderabbit',1,env);if(!cap.ok)return cap;return observeResourceResult('coderabbit',await codeRabbitReviewImpl(args,env,signal,sandboxSession),env);}

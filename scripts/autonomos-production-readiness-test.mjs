@@ -11,7 +11,7 @@ const pkg=JSON.parse(fs.readFileSync(path.join(root,'package.json'),'utf8'));
 const triggerTask=fs.readFileSync(path.join(root,'trigger/autonomos-paid-job.js'),'utf8');
 
 assert.match(runtime,/version:'15\.0\.0'/,'runtime snapshot must identify AutonomOS 15.0.0');
-assert.match(runtime,/rules:'16'/,'capability fingerprint must use the current rules generation');
+assert.match(runtime,/rules:'unified-1'/,'capability fingerprint must use the current rules generation');
 assert.ok(pkg.scripts['autonomos-regression-test'],'current regression script name must be version-neutral');
 assert.ok(!pkg.scripts['autonomos71-regression-test'],'stale 7.1 regression script alias must be removed');
 assert.match(pkg.scripts.verify,/autonomos-production-readiness-test/,'production readiness audit must run inside npm run verify');

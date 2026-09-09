@@ -1,3 +1,5 @@
+import { reserveResource, observeResourceResult, resourceAvailability } from './resource-control.js';
+import { localArtifactReady, putLocalArtifact } from './local-artifacts.js';
 import path from 'node:path';
 
 export class ArtifactStore {
@@ -14,11 +16,12 @@ export class ArtifactStore {
   }
 
   configured() {
-    return Boolean(this.bucket && this.env.S3_ENDPOINT && this.env.S3_ACCESS_KEY_ID && this.env.S3_SECRET_ACCESS_KEY);
+    return Boolean(this.bucket && this.env.S3_ENDPOINT && this.env.S3_ACCESS_KEY_ID && this.env.S3_SECRET_ACCESS_KEY)||localArtifactReady(this.env);
   }
 
   async init() {
     if (!this.configured()) return { ok:false, reason:'s3_not_configured' };
+    if(!resourceAvailability('r2',this.env).allowed&&localArtifactReady(this.env))return{ok:true,provider:'persistent_local_artifact'};
     try {
       const { S3Client } = await import('@aws-sdk/client-s3');
       this.client = new S3Client({
@@ -57,6 +60,8 @@ export class ArtifactStore {
     const body = Buffer.isBuffer(content) ? content : Buffer.from(content ?? '');
     const maxBytes = Math.max(1, Number(this.env.AUTONOMOS_ARTIFACT_MAX_BYTES || 25 * 1024 * 1024));
     if (body.length > maxBytes) return { ok:false, reason:`artifact_too_large:${body.length}>${maxBytes}` };
+    const allowance=await reserveResource('r2',body.length,this.env);
+    if(!allowance.ok)return putLocalArtifact(cleanKey,body,contentType,this.env);
     try {
       const { PutObjectCommand } = await import('@aws-sdk/client-s3');
       const command=()=>new PutObjectCommand({ Bucket:this.bucket, Key:cleanKey, Body:body, ContentType:String(contentType || 'application/octet-stream') });
@@ -74,7 +79,8 @@ export class ArtifactStore {
       if(!access.ok||!access.url)return {ok:false,reason:access.reason||'artifact_download_url_unavailable',bucket:this.bucket,key:cleanKey,uploaded:true};
       return { ok:true, bucket:this.bucket, key:cleanKey, bytes:body.length, contentType, url:access.url || '', urlExpiresInSeconds:access.expiresInSeconds || null };
     } catch (error) {
-      return { ok:false, reason:String(error?.message || error).slice(0,300) };
+      observeResourceResult('r2',{error:String(error?.message||error)},this.env);
+      return putLocalArtifact(cleanKey,body,contentType,this.env);
     }
   }
 
@@ -96,7 +102,7 @@ export class ArtifactStore {
       const url = await getSignedUrl(this.client, new GetObjectCommand({ Bucket:this.bucket, Key:cleanKey }), { expiresIn });
       return { ok:true, url, public:false, expiresInSeconds:expiresIn };
     } catch (error) {
-      return { ok:false, reason:String(error?.message || error).slice(0,300) };
+      return {ok:false,reason:String(error?.message||error).slice(0,300)};
     }
   }
 }

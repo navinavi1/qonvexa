@@ -21,7 +21,7 @@ const REQUIRES_HUMAN_IDENTITY=/\b(kyc|selfie|government id|passport verification
 const REQUIRES_DESIGN_MEDIA=/\b(logo design|podcast cover|cover art|illustration|brand identity|graphic design|figma design|canva design|video edit|motion graphics|3d render)\b/i;
 const REQUIRES_ONCHAIN_TX=/\b(?:deploy\w*\b[\s\S]{0,40}?\b(?:mainnet|testnet|sepolia|goerli|mumbai|polygon|base|arbitrum|optimism|devnet|solana)\b|sign(?:ed|ing)?\s+(?:a\s+|the\s+)?transaction|broadcast\s+(?:a\s+|the\s+)?transaction|mint\w*\b[\s\S]{0,20}?\bfunded\s+wallet|funded\s+(?:deployer\s+)?wallet)\b/i;
 
-export function classifyOpportunity(opportunity,{llmEnabled=false,hasGithubPrTool=false,hasShellTool=false,hasBrowserTool=false,hasDeployTool=false,hasArtifactTool=false,hasAppTool=false,connectedApps=[],hasWebSearchTool=false,hasDesignMediaTool=false}={}){
+export function classifyOpportunity(opportunity,{llmEnabled=false,hasGithubPrTool=false,hasShellTool=false,hasBrowserTool=false,hasDeployTool=false,hasArtifactTool=false,hasAppTool=false,connectedApps=[],hasWebSearchTool=false,hasDesignMediaTool=false,strictCapabilityProof=false}={}){
   const category=String(opportunity?.category||'').toLowerCase(),title=String(opportunity?.title||''),description=String(opportunity?.description||'');
   const hay=`${category} ${title} ${description} ${(Array.isArray(opportunity.skills)?opportunity.skills:[]).join(' ')}`.toLowerCase();
   const safety=safetyCheck(hay);const matched=RULES.map(rule=>({rule,score:(rule.categories.includes(category)?4:0)+rule.words.reduce((n,w)=>n+(containsWord(hay,w)?1:0),0)})).sort((a,b)=>b.score-a.score)[0];
@@ -30,13 +30,13 @@ export function classifyOpportunity(opportunity,{llmEnabled=false,hasGithubPrToo
   // Free-first bridge: an E2B shell can run Playwright/Puppeteer, public HTTP/API clients,
   // ffmpeg/Pillow and open-source converters. Composio can deploy through already connected
   // Vercel/Netlify accounts. These are capabilities, not permission to bypass identity gates.
-  const effectiveBrowser=Boolean(hasBrowserTool||hasShellTool);
+  const effectiveBrowser=Boolean(hasBrowserTool||(!strictCapabilityProof&&hasShellTool));
   const effectiveWebResearch=Boolean(hasWebSearchTool||hasShellTool||hasGithubPrTool);
-  const effectiveDesignMedia=Boolean(hasDesignMediaTool||hasShellTool);
-  const effectiveDeploy=Boolean(hasDeployTool||(hasAppTool&&(connected.has('vercel')||connected.has('netlify'))));
+  const effectiveDesignMedia=Boolean(hasDesignMediaTool||(!strictCapabilityProof&&hasShellTool));
+  const effectiveDeploy=Boolean(hasDeployTool||(!strictCapabilityProof&&hasAppTool&&(connected.has('vercel')||connected.has('netlify'))));
   const needs={github:REQUIRES_GITHUB_PR.test(hay),shell:REQUIRES_SHELL.test(hay)||skill==='document-generation'||(skill==='code-analysis'&&!/\b(?:explain|summarize|document|describe)\b/i.test(title)),browser:REQUIRES_BROWSER.test(hay)||skill==='browser-ops',deploy:REQUIRES_DEPLOY.test(hay),artifact:REQUIRES_ARTIFACT.test(hay)||skill==='document-generation',app:REQUIRES_APP.test(hay),onchainTx:REQUIRES_ONCHAIN_TX.test(hay)||/\b(?:solana|ethereum|polygon|arbitrum|sepolia|devnet|mainnet|testnet)\b[\s\S]{0,100}\bsubmit\s+(?:the |your )?deployed\s+(?:application|dapp|contract)\b/i.test(hay)||/\b(?:swap|send|transfer)\s+(?:[0-9.]+\s+|a |the |your )?(?:usdc|usdt|sui|sol|eth|btc|tokens?|crypto|funds)\b/i.test(hay),procurement:REQUIRES_PROCUREMENT.test(hay),physical:REQUIRES_PHYSICAL.test(hay),humanIdentity:REQUIRES_HUMAN_IDENTITY.test(hay)||/\b(?:join (?:the |our |a )?(?:community|discord|telegram)|referral|invite (?:your )?friends)\b/i.test(hay),designMedia:REQUIRES_DESIGN_MEDIA.test(hay),liveVerification:skill==='web-research'&&!deterministic};
   const requiredApps=inferRequiredApps(hay),missing=[];
-  if(needs.github&&!hasGithubPrTool)missing.push('github_pr');if(needs.shell&&!hasShellTool)missing.push('sandbox_shell');if(needs.browser&&!effectiveBrowser)missing.push('browser');if(needs.deploy&&!effectiveDeploy)missing.push('deploy');if(needs.artifact&&!hasArtifactTool&&!(needs.github&&hasGithubPrTool)&&!hasAppTool)missing.push('artifact_storage');if(needs.app&&!hasAppTool)missing.push('connected_app_gateway');
+  if(needs.github&&!hasGithubPrTool)missing.push('github_pr');if(needs.shell&&!hasShellTool)missing.push('sandbox_shell');if(needs.browser&&!effectiveBrowser)missing.push('browser');if(needs.deploy&&!effectiveDeploy)missing.push('deploy');if(needs.artifact&&!hasArtifactTool&&!(needs.github&&hasGithubPrTool)&&(!hasAppTool||(strictCapabilityProof&&!connected.has('google_drive'))))missing.push('artifact_storage');if(needs.app&&!hasAppTool)missing.push('connected_app_gateway');
   if(needs.app&&hasAppTool&&requiredApps.length)for(const app of requiredApps)if(!connected.has(app))missing.push(`connected_app:${app}`);
   if(needs.procurement)missing.push('external_procurement');if(needs.physical)missing.push('physical_world_action');if(needs.humanIdentity)missing.push('human_identity_or_reputation');if(needs.designMedia&&!effectiveDesignMedia)missing.push('design_media_tool');if(needs.liveVerification&&!effectiveWebResearch)missing.push('web_search');if(needs.onchainTx)missing.push('signed_onchain_transaction');
   const needsUnavailableTooling=missing.length>0,generalDigitalFallback=!recognized&&llmEnabled&&!needsUnavailableTooling&&safety.safe;

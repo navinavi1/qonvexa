@@ -1,3 +1,5 @@
+import { recoverFreeCapability } from './free-tool-recovery.js';
+import { unifiedCapabilityContext, refreshCapabilities } from './capability-registry.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -48,15 +50,17 @@ export class TaskForceWorker {
       await this.withdrawOwnerShare(credential).catch(error=>this.event('withdraw_error',{error:safeError(error)}));
       const global=this.read(this.globalStateFile,{});
       const applications=global?.taskforce?.applications||{};
+      await refreshCapabilities(this.env);
       const accepted=Object.entries(applications).filter(([,app])=>ACCEPTED.has(String(app?.status||'').toUpperCase()));
       for(const [taskId,app] of accepted){
         const row=this.state.tasks[taskId]||{};
         const appStatus=String(app?.status||'').toUpperCase();
-        if(['submitted','submission_uncertain','completed','paid','blocked_capability'].includes(row.status)&&appStatus!=='SUBMISSION_REJECTED')continue;
+        if(['submitted','submission_uncertain','completed','paid'].includes(row.status)&&appStatus!=='SUBMISSION_REJECTED')continue;
         if(appStatus==='SUBMISSION_REJECTED'&&Number(row.repairCycles||0)>=3){this.state.tasks[taskId]={...row,status:'rejected_after_repairs',updatedAt:new Date().toISOString()};this.persist();continue;}
+        if(row.retryAt&&Date.parse(row.retryAt)>Date.now())continue;
         await this.executeAccepted(taskId,app,global,credential);
         // One accepted task at a time prevents several workers reserving the same earned treasury.
-        break;
+        if(!['blocked_capability','waiting_agent_treasury','task_detail_unavailable'].includes(this.state.tasks[taskId]?.status))break;
       }
     }finally{this.running=false;}
   }
@@ -69,9 +73,10 @@ export class TaskForceWorker {
     if(!task){this.state.tasks[taskId]={...this.state.tasks[taskId],status:'task_detail_unavailable',updatedAt:new Date().toISOString()};this.persist();return;}
     const messages=await this.fetchMessages(taskId,credential);
     const opportunity={...task,jobId:`taskforce_${taskId}`,source:'taskforce',externalId:taskId,escrowed:true,status:'active',claimMode:'already_assigned',description:[task.description,messages.length?'\nTask conversation / clarifications:\n'+messages.map(m=>`- ${m}`).join('\n'):''].join('\n').slice(0,14000)};
-    const capability=classifyOpportunity(opportunity,this.capabilityContext());
+    let capability=classifyOpportunity(opportunity,this.capabilityContext());
+    if(!capability.executable){for(const gap of capability.missingTools||[])await recoverFreeCapability(gap,this.env);capability=classifyOpportunity(opportunity,this.capabilityContext());}
     if(!capability.executable){
-      this.state.tasks[taskId]={...this.state.tasks[taskId],status:'blocked_capability',skill:capability.skill,missingTools:capability.missingTools||[],updatedAt:new Date().toISOString()};this.persist();
+      this.state.tasks[taskId]={...this.state.tasks[taskId],status:'blocked_capability',retryAt:new Date(Date.now()+60_000).toISOString(),skill:capability.skill,missingTools:capability.missingTools||[],updatedAt:new Date().toISOString()};this.persist();
       this.event('task_blocked_capability',{taskId,skill:capability.skill,missingTools:capability.missingTools||[]});return;
     }
 
@@ -175,7 +180,7 @@ export class TaskForceWorker {
 
   currentConfig(){const raw=this.store.readJson('config.json',{...DEFAULT_AUTONOMOS_CONFIG,enabled:true});return normalizeConfig(raw);}
   recordCost(taskId,amount){if(!(Number(amount)>0))return;appendUniqueLedgerEntry(this.store,ledgerEntry({id:`taskforce_cost_${taskId}_${crypto.randomUUID()}`,type:'cost',jobId:`taskforce_${taskId}`,externalId:taskId,source:'taskforce',amountUsd:Number(amount),currency:'USD',status:'estimated',estimated:true,note:'TaskForce execution/QA reserved model or tool cost'}));}
-  capabilityContext(){return{llmEnabled:Boolean(this.llm?.available??this.llm?.enabled),hasGithubPrTool:Boolean(this.env.GITHUB_TOKEN),hasShellTool:Boolean(this.env.E2B_API_KEY),hasBrowserTool:false,hasDeployTool:Boolean(this.env.AUTONOMOS_DEPLOY_WEBHOOK_URL),hasArtifactTool:Boolean((this.env.S3_ENDPOINT||this.env.R2_ENDPOINT)&&(this.env.S3_BUCKET||this.env.R2_BUCKET)),hasAppTool:Boolean(this.env.COMPOSIO_API_KEY),connectedApps:[],hasWebSearchTool:true,hasDesignMediaTool:false};}
+  capabilityContext(){return unifiedCapabilityContext(this.env,{llm:this.llm});}
   read(file,fallback){try{return JSON.parse(fs.readFileSync(file,'utf8'));}catch{return structuredClone(fallback);}}
   persist(){const tmp=`${this.stateFile}.${process.pid}.${Date.now()}.tmp`;fs.writeFileSync(tmp,JSON.stringify(this.state,null,2),{mode:0o600});fs.renameSync(tmp,this.stateFile);}
   event(type,detail={}){const row={at:new Date().toISOString(),type,...detail};this.state.events.unshift(row);if(this.state.events.length>500)this.state.events.length=500;this.persist();try{this.logger.info?.('[TaskForceWorker] '+JSON.stringify(row));}catch{}}

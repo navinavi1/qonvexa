@@ -1,0 +1,37 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { resourcePolicy, resourceAvailability, reserveResource, markResourceUnavailable, observeResourceResult } from '../src/autonomos/resource-control.js';
+import { saveCapabilities, unifiedCapabilityContext, refreshCapabilities } from '../src/autonomos/capability-registry.js';
+import { freeCapabilityContext } from '../src/autonomos/free-capability-layer.js';
+import { classifyOpportunity } from '../src/autonomos/capabilities.js';
+import { normalizeConfig } from '../src/autonomos/policy-engine.js';
+import { minimumJobPayoutUsd } from '../src/autonomos/payout-floor.js';
+import { independentCodeReview } from '../src/autonomos/independent-code-review.js';
+import { runTool } from '../src/autonomos/tools.js';
+import { putLocalArtifact, serveLocalArtifact } from '../src/autonomos/local-artifacts.js';
+import { migrateUnifiedRelease } from '../src/autonomos/unified-runtime-bootstrap.js';
+import { TaskForceWorker } from '../src/autonomos/taskforce-worker.js';
+import { GlobalWorkHunter } from '../src/autonomos/global-work-hunter.js';
+import { GlobalLeadActioner } from '../src/autonomos/global-lead-actioner.js';
+const root=fs.mkdtempSync(path.join(os.tmpdir(),'autonomos-unified-'));
+const env={STORAGE_DIR:root,SITE_URL:'https://example.test',E2B_API_KEY:'fixture-e2b',COMPOSIO_API_KEY:'fixture-composio',GITHUB_TOKEN:'fixture-github',OPENAI_API_KEY:'fixture-openai'};
+let count=0;const test=async(name,fn)=>{await fn();count++;console.log('PASS '+name);};
+try{
+await test('API keys alone do not announce connected apps, browser or shell',()=>{const c=unifiedCapabilityContext(env);assert.equal(c.hasShellTool,false);assert.deepEqual(c.connectedApps,[]);assert.equal(c.hasBrowserTool,false);assert.equal(c.hasDeployTool,false);});
+const proof={ok:true,expiresAt:new Date(Date.now()+60_000).toISOString()};
+await test('all worker lanes consume identical verified account evidence',()=>{saveCapabilities({shell:proof,github:proof,apps:{...proof,connectedApps:['gmail']}},env);const expected=unifiedCapabilityContext(env);assert.deepEqual(freeCapabilityContext(env),expected);for(const proto of [TaskForceWorker.prototype,GlobalWorkHunter.prototype,GlobalLeadActioner.prototype])assert.deepEqual(proto.capabilityContext.call({env}),expected);assert.equal(classifyOpportunity({title:'Send an email to our customer',category:'customer-support'},expected).executable,true);assert.equal(classifyOpportunity({title:'Post to Slack',category:'automation'},expected).executable,false);});
+await test('shell is not proof of installed browser or media tools',()=>{const c=unifiedCapabilityContext(env);assert.equal(c.hasShellTool,true);assert.equal(classifyOpportunity({title:'Browser automation and navigate the dashboard',category:'browser'},c).executable,false);assert.equal(classifyOpportunity({title:'Logo design in Figma',category:'graphic-design'},c).executable,false);});
+await test('changed credentials invalidate old readiness evidence',()=>{assert.equal(unifiedCapabilityContext({...env,E2B_API_KEY:'rotated'}).hasShellTool,false);});
+await test('quota reservations persist and cannot overshoot with concurrent calls',async()=>{const e={...env,AUTONOMOS_FREE_RESOURCE_LIMITS_JSON:JSON.stringify({public_http:{limit:2}})};const results=await Promise.all([reserveResource('public_http',1,e),reserveResource('public_http',1,e),reserveResource('public_http',1,e)]);assert.equal(results.filter(x=>x.ok).length,2);assert.equal(resourceAvailability('public_http',e).allowed,false);});
+await test('unverified third-party free quota cannot be mistaken for zero-cost access',()=>{assert.equal(resourcePolicy('unknown_cloud',env).allowed,false);assert.equal(resourcePolicy('r2',env).allowed,false);assert.equal(resourcePolicy('e2b',env).mode,'owner_capped');assert.equal(resourcePolicy('composio',env).allowed,true);});
+await test('authentication errors differ from exhausted quota and owner-capped providers pause on 402',()=>{observeResourceResult('composio',{error:'composio_http_401'},env);assert.equal(resourceAvailability('composio',env).allowed,true);observeResourceResult('composio',{error:'composio_http_402'},env);assert.equal(resourceAvailability('composio',env).allowed,false);assert.equal(resourceAvailability('e2b',env).allowed,true);});
+await test('temporary resource exhaustion clears at retry time without deleting connector',()=>{markResourceUnavailable('github','rate_limit',env,new Date(Date.now()-1).toISOString());assert.equal(resourceAvailability('github',env).allowed,true);});
+await test('independent QA fails on concrete defects and malformed responses',async()=>{const args={files:[{path:'a.js',content:'export const value=1;'}]};const llm={enabled:true,complete:async()=>({ok:true,text:JSON.stringify({passed:true,findings:[{severity:'high',path:'a.js',description:'Incorrect required value'}],summary:'Fix the value'})})};assert.equal((await independentCodeReview(args,llm)).ok,false);assert.equal((await independentCodeReview(args,{...llm,complete:async()=>({ok:true,text:'looks fine'})})).ok,false);});
+await test('CodeRabbit outage selects actual independent review while preserving gate',async()=>{let calls=0;const llm={enabled:true,complete:async()=>{calls++;return{ok:true,text:JSON.stringify({passed:true,findings:[],summary:'No defects found in the supplied small change'})};}};const result=await runTool('coderabbit_review',{files:[{path:'a.js',content:'export const x=1;'}]},env,{config:{enabled:true,killSwitch:false,zeroSpendMode:true},llm});assert.equal(result.ok,true);assert.equal(result.provider,'independent_qa');assert.equal(result.fallbackFrom,'coderabbit');assert.equal(calls,1);});
+await test('persistent local artifact fallback produces a retrievable real file and rejects traversal',async()=>{const saved=await putLocalArtifact('output.txt',Buffer.from('completed output'),'text/plain',env);assert.equal(saved.ok,true);const u=new URL(saved.url);const pieces=u.pathname.split('/');let file='';const res={set(){},sendFile(p){file=p;},sendStatus(code){return code;}};serveLocalArtifact({params:{id:pieces[3],name:pieces[4]}},res,env);assert.equal(fs.readFileSync(file,'utf8'),'completed output');assert.equal(serveLocalArtifact({params:{id:'../config',name:'output.txt'}},res,env),404);});
+await test('new job floor is at least five even with persisted old commissioning settings',()=>{const c=normalizeConfig({minJobPayoutUsd:.5,clawlancerMinJobPayoutUsd:.5,dealworkMinJobPayoutUsd:.5,commissioningMinPayoutUsd:.5});for(const k of ['minJobPayoutUsd','clawlancerMinJobPayoutUsd','dealworkMinJobPayoutUsd','commissioningMinPayoutUsd'])assert.equal(c[k],5);assert.equal(minimumJobPayoutUsd({AUTONOMOS_MIN_JOB_PAYOUT_USD:'.5'}),5);assert.equal(minimumJobPayoutUsd({AUTONOMOS_MIN_JOB_PAYOUT_USD:'30'}),30);});
+await test('one authorized launch preserves subsequent stop across restarts and keeps 50/50',()=>{const e={...env,AUTONOMOS_ENABLED:'true'};migrateUnifiedRelease(e);const f=path.join(root,'autonomos/config.json');const c=JSON.parse(fs.readFileSync(f));assert.equal(c.enabled,true);assert.equal(c.ownerRevenuePercent,50);assert.equal(c.agentTreasuryPercent,50);fs.writeFileSync(f,JSON.stringify({...c,enabled:false,killSwitch:true}));migrateUnifiedRelease(e);assert.equal(JSON.parse(fs.readFileSync(f)).killSwitch,true);});
+console.log(`UNIFIED RESOURCES: ${count}/${count} passed`);
+}finally{fs.rmSync(root,{recursive:true,force:true});}

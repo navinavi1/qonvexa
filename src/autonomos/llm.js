@@ -1,3 +1,4 @@
+import { reserveResource, observeResourceResult, resourceAvailability, markResourceUnavailable } from './resource-control.js';
 import { resolveLlmEndpoint } from './llm-router.js';
 
 export function createLlmClient(env = process.env) {
@@ -10,7 +11,7 @@ export function createLlmClient(env = process.env) {
     enabled,
     provider: enabled ? initial.gateway : 'deterministic',
     model: initial.model || 'none',
-    get available(){return enabled&&Date.now()>=circuitOpenUntil;},
+    get available(){return enabled&&Date.now()>=circuitOpenUntil&&resourceAvailability(llmResource(initial.baseUrl),env).allowed;},
     status(){return{enabled,available:enabled&&Date.now()>=circuitOpenUntil,provider:client.provider,model:client.model,consecutiveFailures,circuitOpenUntil:circuitOpenUntil?new Date(circuitOpenUntil).toISOString():''};},
     async complete({ system, user, messages, tools, maxTokens = 700, temperature, signal, task='general', model:requestedModel='', maxEmptyRetries=1 }) {
       const route=resolveLlmEndpoint(env,{task});
@@ -32,6 +33,7 @@ export function createLlmClient(env = process.env) {
         // no visible text. Retry empty completions once with a larger completion budget
         // and low reasoning effort instead of failing every paid job as llm_empty_response.
         for (let attempt = 0; attempt < 4; attempt++) {
+          const allowance=await reserveResource(llmResource(baseUrl),1,env);if(!allowance.ok)return{ok:false,reason:allowance.error,model,provider:route.gateway,replacementRequired:true};
           const response = await fetch(`${baseUrl}/chat/completions`, { method:'POST', headers, body:JSON.stringify(requestBody), signal:combinedSignal });
           if(!response.ok){
             const errBody = await safeJsonOrText(response);
@@ -45,7 +47,7 @@ export function createLlmClient(env = process.env) {
             }
             if(adapted)continue;
             registerFailure(response.status>=500||response.status===429);
-            return {ok:false,reason:lastReason,model,provider:route.gateway};
+            return observeResourceResult(llmResource(baseUrl),{ok:false,reason:lastReason,model,provider:route.gateway},env);
           }
 
           const respBody=await response.json();
@@ -80,7 +82,7 @@ export function createLlmClient(env = process.env) {
   function registerFailure(count=true){
     if(!count)return;
     consecutiveFailures++;
-    if(consecutiveFailures>=3)circuitOpenUntil=Date.now()+Math.max(30_000,Number(env.AUTONOMOS_LLM_CIRCUIT_BREAKER_MS||120000));
+    if(consecutiveFailures>=3){circuitOpenUntil=Date.now()+Math.max(30_000,Number(env.AUTONOMOS_LLM_CIRCUIT_BREAKER_MS||120000));markResourceUnavailable(llmResource(initial.baseUrl),'llm_circuit_open',env,new Date(circuitOpenUntil).toISOString());}
   }
   return client;
 }
@@ -91,3 +93,5 @@ function extractText(content){
   return String(content?.text||'').trim();
 }
 async function safeJsonOrText(response) {const raw = await response.text().catch(() => '');try { return JSON.parse(raw); } catch { return raw.slice(0, 500); }}
+
+function llmResource(baseUrl){try{const host=new URL(baseUrl).hostname;return host==='api.openai.com'?'openai':'llm_'+host;}catch{return'openai';}}

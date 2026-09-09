@@ -1,3 +1,5 @@
+import { recoverFreeCapability } from './free-tool-recovery.js';
+import { unifiedCapabilityContext, refreshCapabilities } from './capability-registry.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -62,11 +64,12 @@ export class AgrentingWorker{
   }
 
   async executeHiring(h,credential){
-    const minimum=this.basePrice();if(h.price+1e-9<minimum){await this.failHiring(h,credential,`Price ${h.price} is below configured minimum ${minimum}`);return;}
+    // Pending hirings are already funded/assigned obligations; price filters apply to new offers only.
     const opportunity={source:'agrenting',externalId:h.id,jobId:`agrenting_${h.id}`,title:h.title,description:`${h.description}\n${h.clientMessage}\n${safeJson(h.taskInput)}`.slice(0,12000),category:categoryFor(h.capability),budgetUsd:h.price,currency:'USD',network:'crypto_convertible',escrowed:true,claimMode:'already_assigned',status:'active',url:`${BASE}/`,skills:[h.capability]};
-    const capability=classifyOpportunity(opportunity,this.capabilityContext());
-    if(!capability.executable){this.state.hirings[h.id]={...h,status:'unsupported',missingTools:capability.missingTools||[],updatedAt:new Date().toISOString()};this.persist();await this.failHiring(h,credential,`AutonomOS lacks required tooling: ${(capability.missingTools||[]).join(', ')||'unsupported scope'}`);return;}
-    const config=normalizeConfig(this.store.readJson('config.json',{...DEFAULT_AUTONOMOS_CONFIG,enabled:true}));const treasury=computeEarnedSpendBudgetUsd(this.store.readNdjson('ledger.ndjson',-1),config);const maxJobSpend=Math.max(0.05,Number(this.env.AUTONOMOS_AGRENTING_MAX_JOB_SPEND_USD||2));const spendCap=Math.min(treasury,maxJobSpend);
+    await refreshCapabilities(this.env);let capability=classifyOpportunity(opportunity,this.capabilityContext());
+    if(!capability.executable){for(const gap of capability.missingTools||[])await recoverFreeCapability(gap,this.env);capability=classifyOpportunity(opportunity,this.capabilityContext());}
+    if(!capability.executable){this.state.hirings[h.id]={...h,status:'waiting_capability',missingTools:capability.missingTools||[],retryAt:new Date(Date.now()+60_000).toISOString(),updatedAt:new Date().toISOString()};this.persist();return;}
+    const config=normalizeConfig(this.store.readJson('config.json',{...DEFAULT_AUTONOMOS_CONFIG,enabled:true}));const treasury=computeEarnedSpendBudgetUsd(this.store.readNdjson('ledger.ndjson',-1),config);const maxJobSpend=Math.max(0.05,Number(this.env.AUTONOMOS_AGRENTING_MAX_JOB_SPEND_USD||2));const spendCap=config.survivalMode&&config.noAbandonAcceptedJobs?treasury:Math.min(treasury,maxJobSpend);
     if(spendCap<=0.000001&&!capability.mode?.includes('deterministic')){this.state.hirings[h.id]={...h,status:'waiting_treasury',updatedAt:new Date().toISOString()};this.persist();return;}
     const budget=createJobBudget(Math.max(0,spendCap),{env:this.env,onCost:amount=>this.recordCost(h.id,amount)});const llm=budget.llm(this.llm);const execConfig={...config,availableSpendUsd:spendCap,maxPaidProcurementUsd:0,allowExternalSpending:false};
     let deliverable=null,qa=null,briefing='';const repairs=Math.max(1,Math.min(4,Number(this.env.AUTONOMOS_AGRENTING_QA_REPAIRS||3)));
@@ -74,7 +77,7 @@ export class AgrentingWorker{
     for(let attempt=1;attempt<=repairs;attempt++){
       try{deliverable=await executeExternalOpportunity(opportunity,capability,{llm,siteUrl:String(this.env.SITE_URL||''),env:this.env,config:execConfig,briefing,budget});qa=await evaluateDeliverable(opportunity,deliverable,{llm,env:this.env});if(qa.ok)break;briefing=`Repair against QA: ${(qa.reasons||[]).join('; ')}. Previous output:\n${String(deliverable?.content||'').slice(0,5000)}`;}catch(error){briefing=`Execution failed; use another available zero-procurement approach. Error: ${safe(error)}`;}
     }
-    if(!deliverable||!qa?.ok){this.state.hirings[h.id]={...this.state.hirings[h.id],status:'qa_failed',qaReasons:qa?.reasons||[],updatedAt:new Date().toISOString()};this.persist();await this.failHiring(h,credential,'Unable to produce a QA-verified deliverable within the accepted scope');return;}
+    if(!deliverable||!qa?.ok){this.state.hirings[h.id]={...this.state.hirings[h.id],status:'qa_failed',qaReasons:qa?.reasons||[],updatedAt:new Date().toISOString()};this.persist();this.event('hiring_qa_retry_pending',{id:h.id,reasons:qa?.reasons||[]});return;}
     const urls=(deliverable?.evidence?.toolCalls||[]).flatMap(x=>x?.artifacts||[]).filter(x=>x?.ok&&x?.url).map(x=>x.url).slice(0,10);
     const payload={output:{content:String(deliverable.content||'').slice(0,30000),artifacts:urls,qa_score:Number(qa.score||1),completed_by:'AutonomOS'}};
     const r=await fetch(`${BASE}/api/v1/hirings/${encodeURIComponent(h.id)}/result`,{method:'POST',headers:{'x-api-key':credential.apiKey,'content-type':'application/json',accept:'application/json','idempotency-key':`autonomos-result-${h.id}`},body:JSON.stringify(payload),signal:AbortSignal.timeout(20_000)});const data=await json(r);
@@ -92,7 +95,7 @@ export class AgrentingWorker{
     if(status==='completed'&&!this.state.hirings[id].revenueRecordedAt){const price=Number(row?.price||this.state.hirings[id]?.price||0);const fee=Math.max(0,price*0.05);appendUniqueLedgerEntry(this.store,ledgerEntry({id:`agrenting_revenue_${id}`,type:'revenue',jobId:`agrenting_${id}`,externalId:id,source:'agrenting',grossUsd:price,amountUsd:price,feeUsd:fee,currency:'USD',rail:'agrenting_escrow',status:'settled',note:'Agrenting reports hiring completed; provider balance credited after platform fee'}));this.state.hirings[id].revenueRecordedAt=new Date().toISOString();this.state.hirings[id].settledNetUsd=Math.max(0,price-fee);this.event('revenue_settled',{id,grossUsd:price,feeUsd:fee,netUsd:Math.max(0,price-fee)});}this.persist();
   }
 
-  capabilityContext(){return{llmEnabled:Boolean(this.llm?.enabled),hasGithubPrTool:Boolean(this.env.GITHUB_TOKEN),hasShellTool:Boolean(this.env.E2B_API_KEY),hasBrowserTool:false,hasDeployTool:false,hasArtifactTool:Boolean((this.env.S3_ENDPOINT||this.env.R2_ENDPOINT)&&(this.env.S3_BUCKET||this.env.R2_BUCKET)),hasAppTool:Boolean(this.env.COMPOSIO_API_KEY),connectedApps:['gmail','google_drive','google_sheets','google_calendar','github','slack','notion'],hasWebSearchTool:false,hasDesignMediaTool:false};}
+  capabilityContext(){return unifiedCapabilityContext(this.env,{llm:this.llm});}
   basePrice(){return Math.max(10,Number(this.env.AUTONOMOS_AGRENTING_MIN_PRICE_USD||30));}
   recordCost(id,amount){const n=Number(amount||0);if(!(n>0))return;appendUniqueLedgerEntry(this.store,ledgerEntry({id:`agrenting_cost_${id}_${crypto.randomUUID()}`,type:'cost',jobId:`agrenting_${id}`,externalId:id,source:'agrenting',amountUsd:n,grossUsd:n,currency:'USD',status:'incurred',note:`Execution cost for Agrenting hiring ${id}`}));}
   event(type,detail={}){const row={at:new Date().toISOString(),type,...detail};this.state.events.unshift(row);if(this.state.events.length>300)this.state.events.length=300;this.persist();try{this.logger.info?.('[AgrentingWorker] '+JSON.stringify(row));}catch{}}
