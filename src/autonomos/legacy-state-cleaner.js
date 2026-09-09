@@ -1,8 +1,17 @@
-import fs from 'node:fs';import path from 'node:path';
-const ACTIVE_MARKETS=new Set(['dealwork','clawlancer','workprotocol','agenthansa','taskbounty','x402-bazaar','agrenting']);
-const GLOBAL_PREFIXES=['webwork_','jobicy_','remoteok_','weworkremotely_','remotive_','taskforce_'];
-function readJson(p,f={}){try{return JSON.parse(fs.readFileSync(p,'utf8'))}catch{return f}}
-function writeJson(p,v){fs.writeFileSync(p,JSON.stringify(v,null,2))}
-function sourceOf(row,key=''){return String(row?.source||row?.op?.source||key.split(':')[0]||'').toLowerCase()}
-function keep(source,key=''){if(!source)return true;if(ACTIVE_MARKETS.has(source))return true;if(GLOBAL_PREFIXES.some(p=>String(key).startsWith(p)))return true;return !/^(?:market|agent|task|claw|work|deal|quest|bounty|open)/.test(source);}
-export function cleanLegacyState({storageDir=process.env.STORAGE_DIR,logger=console}={}){const root=path.join(storageDir||'data','autonomos');if(!fs.existsSync(root))return{ok:true,skipped:true};const summary={registry:0,inFlight:0,credentials:0};for(const [name,key] of [['job-registry.json','registry'],['in-flight-jobs.json','inFlight']]){const file=path.join(root,name),rows=readJson(file,{});for(const [k,v] of Object.entries(rows))if(!keep(sourceOf(v,k),k)){delete rows[k];summary[key]++;}writeJson(file,rows);}const cPath=path.join(root,'credentials.private.json'),cred=readJson(cPath,{});for(const k of Object.keys(cred))if(!ACTIVE_MARKETS.has(String(k).toLowerCase())&&!['gmail','github'].includes(String(k).toLowerCase())){delete cred[k];summary.credentials++;}writeJson(cPath,cred);try{logger.info?.('[LegacyStateCleaner] '+JSON.stringify(summary));}catch{}return{ok:true,...summary};}
+import fs from 'node:fs';
+import path from 'node:path';
+import { isRetiredMarket } from './retired-markets.js';
+export function cleanLegacyState({storageDir=process.env.STORAGE_DIR,logger=console}={}){
+ const root=path.join(storageDir||'data','autonomos');if(!fs.existsSync(root))return{ok:true,skipped:true};
+ let retired=0;
+ for(const name of ['job-registry.json','in-flight-jobs.json']){
+  const file=path.join(root,name);if(!fs.existsSync(file))continue;
+  const rows=JSON.parse(fs.readFileSync(file,'utf8'));
+  for(const [id,row] of Object.entries(rows))if(isRetiredMarket(row.op||row.opportunity||row)||isRetiredMarket(id.split(':')[0])){
+   if(row.status==='retired')continue;
+   rows[id]={...row,previousStatus:row.status,status:'retired',retiredAt:new Date().toISOString(),reason:'DO_NOT_RESTORE'};retired++;
+  }
+  const tmp=file+'.retired.tmp';fs.writeFileSync(tmp,JSON.stringify(rows,null,2),{mode:0o600});fs.renameSync(tmp,file);
+ }
+ logger.info?.('[LegacyStateCleaner] '+JSON.stringify({retired,financialHistoryPreserved:true}));return{ok:true,retired};
+}

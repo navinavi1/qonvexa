@@ -19,6 +19,6 @@ export function migrateUnifiedRelease(env=process.env){
   const root=resourceRoot(env);fs.mkdirSync(root,{recursive:true});const marker=path.join(root,'unified-resource-release-v1.json');if(fs.existsSync(marker))return;
   const file=path.join(root,'config.json');let config={};try{config=JSON.parse(fs.readFileSync(file,'utf8'));}catch{}
   const floor=minimumJobPayoutUsd(env,config);
-  const next={...config,enabled:true,killSwitch:false,zeroSpendMode:false,survivalMode:true,ownerRevenuePercent:50,agentTreasuryPercent:50,noAbandonAcceptedJobs:true,emergencyFinishMode:true,skillAcquisitionMode:true,minJobPayoutUsd:floor,clawlancerMinJobPayoutUsd:Math.max(floor,Number(config.clawlancerMinJobPayoutUsd||0)),dealworkMinJobPayoutUsd:Math.max(floor,Number(config.dealworkMinJobPayoutUsd||0)),commissioningMinPayoutUsd:floor,updatedAt:new Date().toISOString()};
+  const next={...config,enabled:true,killSwitch:false,zeroSpendMode:false,survivalMode:true,ownerRevenuePercent:50,agentTreasuryPercent:50,noAbandonAcceptedJobs:true,emergencyFinishMode:true,skillAcquisitionMode:true,minJobPayoutUsd:floor,commissioningMinPayoutUsd:floor,updatedAt:new Date().toISOString()};
   const tmp=file+'.unified.tmp';fs.writeFileSync(tmp,JSON.stringify(next,null,2),{mode:0o600});fs.renameSync(tmp,file);fs.writeFileSync(marker,JSON.stringify({at:new Date().toISOString(),minimumJobPayoutUsd:floor,ownerAuthorizedStart:true}),{mode:0o600});
 }

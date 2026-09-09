@@ -125,38 +125,12 @@ assert.equal(registry.blockReason(dispatchOp)?.status,'dispatch_pending','stale 
 assert.equal(registry.releaseDispatchPending(dispatchOp,{leaseId:'lease-new'}).released,true);
 assert.equal(registry.blockReason(dispatchOp),null,'matching durable worker callback must release only the dispatch reservation before fresh preclaim checks');
 
-const originalFetch=global.fetch;
-try{
-  const calls=[];
-  global.fetch=async (url,opts={})=>{
-    calls.push({url:String(url),method:String(opts.method||'GET')});
-    if(String(url).includes('/api/jobs?'))return new Response(JSON.stringify({jobs:[{id:'wp-job-1',title:'Summarize release notes',description:'Create a concise summary and deliver it as a URL',category:'content',paymentAmount:'2.50',paymentCurrency:'USDC',paymentRail:'base',status:'open'}]}),{status:200,headers:{'content-type':'application/json'}});
-    if(String(url).endsWith('/api/jobs/wp-job-1/claim'))return new Response(JSON.stringify({claim:{id:'claim-wp-1',status:'claimed'}}),{status:200,headers:{'content-type':'application/json'}});
-    if(String(url).endsWith('/api/jobs/wp-job-1/deliver'))return new Response(JSON.stringify({claim:{id:'claim-wp-1',status:'delivered'}}),{status:200,headers:{'content-type':'application/json'}});
-    if(String(url).endsWith('/api/jobs/wp-job-1'))return new Response(JSON.stringify({job:{id:'wp-job-1',status:'completed',paymentAmount:'2.50',paymentCurrency:'USDC',paymentRail:'base'},claims:[{id:'claim-wp-1',agentId:'agent-wp'}],payments:[{id:'pay-wp-1',claimId:'claim-wp-1',status:'released',amount:'2.50',currency:'USDC',txHash:'0xabc'}]}),{status:200,headers:{'content-type':'application/json'}});
-    return new Response(JSON.stringify({data:[]}),{status:200,headers:{'content-type':'application/json'}});
-  };
-  const wpEnv={WORKPROTOCOL_API_KEY:'wp_test',WORKPROTOCOL_AGENT_ID:'agent-wp',WORKPROTOCOL_API_URL:'https://workprotocol.test'};
-  const discovered=await discoverMarketOpportunities({env:wpEnv,credentials:{},limit:10,sources:['workprotocol']});
-  assert.equal(discovered.signals.length,1,'WorkProtocol discovery must normalize open escrow work');
-  assert.equal(discovered.signals[0].escrowed,true);
-  const wpClaim=await claimMarketplaceJob(discovered.signals[0],{env:wpEnv,credentials:{}});
-  assert.equal(wpClaim.ok,true);
-  const wpDeliver=await deliverMarketplaceJob(discovered.signals[0],wpClaim,{content:'done',format:'text/markdown',evidence:{artifactUrl:'https://artifacts.test/job.md'}},{env:wpEnv,credentials:{}});
-  assert.equal(wpDeliver.ok,true);
-  const wpSync=await syncMarketplaceTransactions({env:wpEnv,credentials:{},knownJobs:[{source:'workprotocol',externalId:'wp-job-1',status:'delivered'}]});
-  assert.equal(wpSync.transactions.find(x=>x.source==='workprotocol')?.amountUsd,2.5,'released WorkProtocol USDC must reconcile into the settlement feed');
-} finally { global.fetch=originalFetch; }
-
 // Marketplace lifecycle truth: discovery-only connectors must never enter autonomous claim.
 {
   const runtimeSource=fs.readFileSync(path.join(process.cwd(),'src/autonomos/runtime.js'),'utf8');
-  assert.match(runtimeSource,/return \['clawlancer','dealwork','workprotocol'\]\.includes\(source\)/,'auto-claim allowlist must contain only current full-lifecycle rails');
   assert.doesNotMatch(runtimeSource,/oldsourcea:\{discover:/i,'retired OldSourceA lifecycle must be absent');
   assert.doesNotMatch(runtimeSource,/oldsourceb:\{discover:/i,'retired OldSourceB lifecycle must be absent');
   assert.match(runtimeSource,/marketplace_lifecycle_not_auto_ready/,'incomplete marketplace lifecycle must be a visible candidacy blocker');
-  assert.match(runtimeSource,/const fastSources=config\.cryptoOnlyEarnings\?\['clawlancer','workprotocol'\]/,'Crypto-only mode uses only current crypto-native rails');
-  assert.match(runtimeSource,/source==='clawlancer'\)return\['direct_crypto'\]/,'Clawlancer payout must be represented as direct crypto, not a generic marketplace balance');
   assert.match(runtimeSource,/function buildEarningReadiness\(/,'runtime must produce one owner-facing earning readiness diagnosis per cycle');
   assert.match(runtimeSource,/cashout_action_required/,'earning readiness must distinguish settled marketplace money from owner-wallet cashout');
   assert.match(runtimeSource,/waiting_for_eligible_job/,'earning readiness must explicitly represent no eligible job instead of generic Ready/0');

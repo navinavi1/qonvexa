@@ -1,3 +1,4 @@
+import { isRetiredResource } from './retired-resources.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { unifiedCapabilityContext, refreshCapabilities, recordCapabilityProof, readCapabilities } from './capability-registry.js';
@@ -12,7 +13,7 @@ const RECIPES=Object.freeze({
 });
 const inFlight=new Map();const sessionIds=new WeakMap();let nextSessionId=1;
 export async function recoverFreeCapability(gap,env=process.env,{sandboxSession=null,signal=null}={}){
-  const key=String(gap||'');if(sandboxSession&&!sessionIds.has(sandboxSession))sessionIds.set(sandboxSession,nextSessionId++);const id=resourceRoot(env)+':'+key+':'+(sandboxSession?sessionIds.get(sandboxSession):'probe');if(inFlight.has(id))return inFlight.get(id);
+  const key=String(gap||'');if(['tools','skills','providers'].some(k=>isRetiredResource(key,k)))return{ok:false,error:'DO_NOT_RESTORE'};if(sandboxSession&&!sessionIds.has(sandboxSession))sessionIds.set(sandboxSession,nextSessionId++);const id=resourceRoot(env)+':'+key+':'+(sandboxSession?sessionIds.get(sandboxSession):'probe');if(inFlight.has(id))return inFlight.get(id);
   const task=(async()=>{
     if(signal?.aborted)return{ok:false,error:'aborted_by_emergency_stop'};
     if(key.startsWith('connected_app:')||key==='connected_app_gateway'){await refreshCapabilities(env,{force:true});const c=unifiedCapabilityContext(env);return{ok:key.includes(':')?c.connectedApps.includes(key.split(':')[1]):c.hasAppTool,route:'verified_connected_account',reason:'account_access_required_if_absent'};}

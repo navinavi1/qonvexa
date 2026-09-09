@@ -1,3 +1,5 @@
+import { ActionJournal } from './action-journal.js';
+import { hardenedTaskForceTick, hardenedTaskForceSubmit } from './revenue-lifecycle.js';
 import { recoverFreeCapability } from './free-tool-recovery.js';
 import { unifiedCapabilityContext, refreshCapabilities } from './capability-registry.js';
 import fs from 'node:fs';
@@ -25,7 +27,7 @@ export class TaskForceWorker {
     this.globalStateFile=path.join(this.root,'global-work-hunter.json');
     this.secretFile=path.join(this.root,'global-work-credentials.private.json');
     this.stateFile=path.join(this.root,'taskforce-worker.json');
-    this.store=new AutonomOSStore(this.root);
+    this.actionJournal=new ActionJournal(this.root);this.store=new AutonomOSStore(this.root);
     this.llm=createLlmClient(env);
     this.state=this.read(this.stateFile,{version:1,tasks:{},settlements:{},withdrawals:{},events:[]});
     this.timer=null;this.running=false;
@@ -40,30 +42,7 @@ export class TaskForceWorker {
   }
   stop(){if(this.timer)clearInterval(this.timer);this.timer=null;}
 
-  async tick(){
-    if(this.running)return;
-    this.running=true;
-    try{
-      const credential=this.read(this.secretFile,{}).taskforce;
-      if(!credential?.apiKey||!credential?.verified)return;
-      await this.reconcileEarnings(credential).catch(error=>this.event('earnings_error',{error:safeError(error)}));
-      await this.withdrawOwnerShare(credential).catch(error=>this.event('withdraw_error',{error:safeError(error)}));
-      const global=this.read(this.globalStateFile,{});
-      const applications=global?.taskforce?.applications||{};
-      await refreshCapabilities(this.env);
-      const accepted=Object.entries(applications).filter(([,app])=>ACCEPTED.has(String(app?.status||'').toUpperCase()));
-      for(const [taskId,app] of accepted){
-        const row=this.state.tasks[taskId]||{};
-        const appStatus=String(app?.status||'').toUpperCase();
-        if(['submitted','submission_uncertain','completed','paid'].includes(row.status)&&appStatus!=='SUBMISSION_REJECTED')continue;
-        if(appStatus==='SUBMISSION_REJECTED'&&Number(row.repairCycles||0)>=3){this.state.tasks[taskId]={...row,status:'rejected_after_repairs',updatedAt:new Date().toISOString()};this.persist();continue;}
-        if(row.retryAt&&Date.parse(row.retryAt)>Date.now())continue;
-        await this.executeAccepted(taskId,app,global,credential);
-        // One accepted task at a time prevents several workers reserving the same earned treasury.
-        if(!['blocked_capability','waiting_agent_treasury','task_detail_unavailable'].includes(this.state.tasks[taskId]?.status))break;
-      }
-    }finally{this.running=false;}
-  }
+  async tick(){return hardenedTaskForceTick.call(this);}
 
   async executeAccepted(taskId,application,global,credential){
     const started=Date.now();
@@ -84,9 +63,10 @@ export class TaskForceWorker {
     const ledger=this.store.readNdjson('ledger.ndjson',-1);
     const treasuryUsd=computeEarnedSpendBudgetUsd(ledger,config);
     if(treasuryUsd<=0.000001){this.state.tasks[taskId]={...this.state.tasks[taskId],status:'waiting_agent_treasury',updatedAt:new Date().toISOString()};this.persist();return;}
-    const budget=createJobBudget(treasuryUsd,{env:this.env,onCost:amount=>this.recordCost(taskId,amount)});
+    const spendLimit=Math.min(treasuryUsd,Number(opportunity.budgetUsd||0)*.35,Number(config.maxPaidProcurementUsd||3));if(!(spendLimit>0))return;
+    const budget=createJobBudget(spendLimit,{env:this.env,onCost:amount=>this.recordCost(taskId,amount)});
     const budgetedLlm=budget.llm(this.llm);
-    const executionConfig={...config,availableSpendUsd:treasuryUsd,maxPaidProcurementUsd:Math.max(Number(config.maxPaidProcurementUsd||0),treasuryUsd)};
+    const executionConfig={...config,availableSpendUsd:spendLimit,maxPaidProcurementUsd:spendLimit};
     let briefing='';let deliverable=null;let qa=null;const maxRepairs=Math.max(1,Math.min(5,Number(this.env.AUTONOMOS_TASKFORCE_QA_REPAIRS||3)));
     const baseRepair=String(application?.status||'').toUpperCase()==='SUBMISSION_REJECTED'?Number(previous.repairCycles||0)+1:Number(previous.repairCycles||0);
 
@@ -111,9 +91,11 @@ export class TaskForceWorker {
     await this.submit(taskId,deliverable,qa,credential,{started,repairCycles:baseRepair,budgetSpentUsd:budget.spent});
   }
 
-  async submit(taskId,deliverable,qa,credential,meta={}){
+  async submit(taskId,deliverable,qa,credential,meta={}){return hardenedTaskForceSubmit.call(this,taskId,deliverable,qa,credential,meta,this.submitCore);}
+
+  async submitCore(taskId,deliverable,qa,credential,meta={}){
     const artifactUrls=(deliverable?.evidence?.toolCalls||[]).flatMap(row=>row?.artifacts||[]).filter(x=>x?.ok&&x?.url).map(x=>x.url).slice(0,10);
-    const intentId=crypto.randomUUID();
+    const intent=this.actionJournal.begin('taskforce',taskId,'deliver:'+Number(meta.repairCycles||0));if(!intent.ok){if(intent.status!=='confirmed'){this.state.tasks[taskId]={...this.state.tasks[taskId],status:'submission_uncertain'};this.persist();}return;}const intentId=intent.id;
     this.state.tasks[taskId]={...(this.state.tasks[taskId]||{}),status:'submitting',submissionIntentId:intentId,submissionIntentAt:new Date().toISOString(),updatedAt:new Date().toISOString()};this.persist();
     const body={
       feedback:String(deliverable.content||'').slice(0,5000),
@@ -124,14 +106,15 @@ export class TaskForceWorker {
       const r=await fetch(`${BASE}/api/agent/tasks/${encodeURIComponent(taskId)}/submit`,{method:'POST',headers:{...authHeaders(credential.apiKey),'content-type':'application/json'},body:JSON.stringify(body),signal:AbortSignal.timeout(20000)});
       const data=await safeJson(r);
       if(r.ok||r.status===409&&/already|submitted/i.test(publicError(data))){
-        const submission=data?.submission||data?.data||data;
+        const submission=data?.submission||data?.data||data;if(!submission?.id){this.actionJournal.finish(intentId,'uncertain',{httpStatus:r.status});this.state.tasks[taskId]={...this.state.tasks[taskId],status:'submission_uncertain',submitError:'external_submission_id_missing'};this.persist();return;}this.actionJournal.finish(intentId,'confirmed',{externalId:String(submission.id)});
         this.state.tasks[taskId]={...(this.state.tasks[taskId]||{}),status:'submitted',submissionId:String(submission?.id||''),submittedAt:new Date().toISOString(),repairCycles:Number(meta.repairCycles||0),budgetSpentUsd:Number(meta.budgetSpentUsd||0),qaScore:Number(qa.score||1),updatedAt:new Date().toISOString()};this.persist();
         this.event('task_submitted',{taskId,submissionId:String(submission?.id||''),qaScore:Number(qa.score||1)});return;
       }
-      const uncertain=r.status>=500||r.status===408||r.status===429;
+      const uncertain=r.status>=500||r.status===408;this.actionJournal.finish(intentId,uncertain?'uncertain':'definite_failure',{httpStatus:r.status});
       this.state.tasks[taskId]={...(this.state.tasks[taskId]||{}),status:uncertain?'submission_uncertain':'submit_failed',submitHttpStatus:r.status,submitError:publicError(data),updatedAt:new Date().toISOString()};this.persist();
       this.event('task_submit_failed',{taskId,status:r.status,uncertain,error:publicError(data)});
     }catch(error){
+      this.actionJournal.finish(intentId,'uncertain');
       // The request may have reached the marketplace. Never replay an uncertain submit blindly.
       this.state.tasks[taskId]={...(this.state.tasks[taskId]||{}),status:'submission_uncertain',submitError:safeError(error),updatedAt:new Date().toISOString()};this.persist();
       this.event('task_submit_uncertain',{taskId,error:safeError(error)});
@@ -153,8 +136,8 @@ export class TaskForceWorker {
     const r=await fetch(`${BASE}/api/agent/earnings`,{headers:authHeaders(credential.apiKey),signal:AbortSignal.timeout(12000)});const data=await safeJson(r);if(!r.ok)return;
     const config=this.currentConfig();
     for(const tx of arrayFrom(data,['transactions','items','data'])){
-      const amount=Number(tx?.amount||tx?.amountUsd||0);if(!(amount>0))continue;
-      const stable=String(tx?.transactionHash||tx?.txHash||hash(JSON.stringify([tx?.taskTitle,amount,tx?.date])));
+      const amount=Number(tx?.amount||tx?.amountUsd||0);if(!(amount>0)||!['paid','settled','completed','released','confirmed'].includes(String(tx.status||'').toLowerCase())||!String(tx.id||tx.transactionHash||tx.txHash||''))continue;
+      const stable=String(tx?.transactionHash||tx?.txHash||tx.id);
       const id=`taskforce_revenue_${hash(stable)}`;const allocation=allocateRevenue(amount,config);
       const added=appendUniqueLedgerEntry(this.store,ledgerEntry({id,type:'revenue',source:'taskforce',grossUsd:amount,amountUsd:amount,currency:'USDC',rail:'taskforce_solana_wallet',network:'solana',txId:String(tx?.transactionHash||tx?.txHash||''),status:'settled',allocation,note:String(tx?.taskTitle||'TaskForce completed task').slice(0,200)}));
       this.state.settlements[id]={id,amountUsd:amount,allocation,txHash:String(tx?.transactionHash||tx?.txHash||''),taskTitle:String(tx?.taskTitle||''),date:String(tx?.date||''),ledgerRecorded:true,ownerWithdrawn:Boolean(this.state.settlements[id]?.ownerWithdrawn),withdrawalState:this.state.settlements[id]?.withdrawalState||''};

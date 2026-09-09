@@ -29,7 +29,7 @@ try{
   for(const tab of dom.window.document.querySelectorAll('[data-view]')){tab.click();assert.equal(dom.window.document.querySelector('.admin-view.active').dataset.panel,tab.dataset.view);}
   dom.window.location.hash='leads';await new Promise(r=>setTimeout(r,30));assert.equal(dom.window.document.querySelector('.admin-view.active').dataset.panel,'leads');
   dom.window.document.querySelector('[data-view="autonomos"]').click();
-  const snapshot=await(await fetch(base+'/api/admin/autonomos',{headers:{cookie}})).json();assert(!snapshot.newMarketplaces,'retired marketplace manager must not run');assert(!snapshot.connectors.some(x=>['agenthansa','taskbounty'].includes(x.id)));assert(snapshot.connectors.some(x=>x.id==='workprotocol'));assert(snapshot.connectors.some(x=>x.id==='dealwork'));
+  const snapshot=await(await fetch(base+'/api/admin/autonomos',{headers:{cookie}})).json();assert(!snapshot.newMarketplaces,'retired marketplace manager must not run');assert(!snapshot.connectors.some(x=>['agenthansa','taskbounty'].includes(x.id)));assert(!snapshot.connectors.some(x=>x.id==='workprotocol'));assert(!snapshot.connectors.some(x=>x.id==='dealwork'));
   assert.deepEqual(errors,[]);
   globalThis.console.log('PASS real HTTP server: auth, cross-origin rejection, removed provider routes, cleaned admin rendering and remaining connectors');
 }finally{dom?.window.close();proc.kill('SIGTERM');await Promise.race([once(proc,'exit'),new Promise(r=>setTimeout(r,3000))]);await fs.rm(dir,{recursive:true,force:true});}

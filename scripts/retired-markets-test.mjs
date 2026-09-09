@@ -13,12 +13,12 @@ const originalFetch=globalThis.fetch;
 const requests=[];
 let runtime;
 try {
-  for(const source of ['AgentHansa','TaskBounty'])assert(isRetiredMarket({source}));
+  for(const source of ['AgentHansa','TaskBounty','dealwork','workprotocol','clawlancer','superteam','t2000'])assert(isRetiredMarket({source}));
   assert(isRetiredMarket({url:'https://www.task-bounty.com/browse'}));
   assert(isRetiredMarket({marketHost:'api.agenthansa.com'}));
   assert(!isRetiredMarket({url:'https://example.org/task-bounty.com'}));
   assert(!isRetiredMarket({url:'https://agenthansa.com.example.org/jobs'}));
-  for(const source of ['dealwork','workprotocol','clawlancer','taskforce','agrenting','github-bounties'])assert(!isRetiredMarket({source}));
+  for(const source of ['taskforce','agrenting','github-bounties'])assert(!isRetiredMarket({source}));
 
   const hunter=Object.create(GlobalWorkHunter.prototype);
   const listing={title:'Paid API bug fix bounty project $100',snippet:'Open paid software project: fix the API bug for $100.'};
@@ -47,7 +47,7 @@ try {
   const snapshot=await runtime.snapshot();
   assert(!snapshot.newMarketplaces);
   assert(!snapshot.connectors.some(c=>['taskbounty','agenthansa'].includes(c.id)));
-  for(const id of ['dealwork','workprotocol','clawlancer'])assert(snapshot.connectors.some(c=>c.id===id));
+  for(const id of ['dealwork','workprotocol','clawlancer'])assert(!snapshot.connectors.some(c=>c.id===id));
   for(const source of ['taskbounty','agenthansa']) {
     const result=await runtime.processDurableOpportunity({source,externalId:'cached-dispatch',title:'Old queued job',budgetUsd:100});
     assert.equal(result.preclaimRejected,true);

@@ -168,6 +168,7 @@ function renderAutonomOS(){
   renderAutonomosJobQueue(a);
   const funnel=el('#autonomos-funnel');
   if(funnel){const f=a.runtime?.marketFunnel||{};funnel.innerHTML=[['Raw jobs',f.rawSignals],['Priced',f.pricedJobs??f.paidJobs],['≥ Floor',f.aboveFloor],['Executable',f.executable],['Profitable',f.profitable],['Claimable',f.claimable],['Ready',f.ready??registrySummary.ready]].map(([label,value])=>`<span><b>${Number(value||0)}</b>${esc(label)}</span>`).join('')}
+  if(a.business){const b=a.business,c=b.counts||{};if(funnel)funnel.innerHTML=[['Знайдено',c.discovered],['Маршрут',c.routable],['Придатні',c.eligible],['Заявки',c.applications],['Прийнято',c.accepted],['Виконуються',c.executing],['Доставлено',c.delivered],['Оплачено',c.paid]].map(([label,value])=>`<span><b>${Number(value||0)}</b>${esc(label)}</span>`).join('');setText('#auto-opportunities',String(c.discovered||0));setText('#auto-claimed',String(c.accepted||0));setText('#auto-delivered',String(c.delivered||0));setText('#auto-paid',String(c.paid||0));setText('#auto-agents',String(b.workforce?.active||0));}
   const startButton=el('#autonomos-start'),stopButton=el('#autonomos-stop');
   if(startButton){startButton.disabled=['running','working'].includes(status);startButton.textContent=['running','working'].includes(status)?'✓ Running':'▶ Start 24/7';}
   if(stopButton)stopButton.disabled=!['running','working'].includes(status);

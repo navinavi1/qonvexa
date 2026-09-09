@@ -1,3 +1,5 @@
+import { coordinateExecution } from './execution-coordinator.js';
+import { isRetiredMarket } from './retired-markets.js';
 import { unifiedCapabilityContext, refreshCapabilities } from './capability-registry.js';
 import { prepareExecutionTools } from './free-tool-recovery.js';
 import { resourceAvailability } from './resource-control.js';
@@ -17,17 +19,22 @@ const VERIFY_TOOLS_BY_SKILL = Object.freeze({
 
 const TOOL_RETRY_SAFE = new Set(['web_search','web_scrape','app_tool_search']);
 const TOOL_RETRY_DELAY_MS = 600;
+const executionControllers=new Set();
+export function stopAcceptedExecutions(){for(const controller of executionControllers)controller.abort(new Error('runtime_stopping'));}
+
 
 export function exceedsJobSpendCeiling(toolCostUsd,ceilingUsd){
   return Number(ceilingUsd)>0 && Number(toolCostUsd)>Number(ceilingUsd);
 }
 
 export async function executeExternalOpportunity(opportunity, capability, opts={}) {
+  if(isRetiredMarket(opportunity))throw Error('DO_NOT_RESTORE');
+  const controller=new AbortController();executionControllers.add(controller);const executionOptions={...opts,abortSignal:opts.abortSignal?AbortSignal.any([opts.abortSignal,controller.signal]):controller.signal};
   const effectState={possible:false};
   const sandboxSession=opts.sandboxSession || new SandboxSession({env:opts.env});
-  try { return await executeOpportunity(opportunity,capability,{...opts,sandboxSession,effectState}); }
+  try { return await coordinateExecution(opportunity,opts.env||process.env,()=>executeOpportunity(opportunity,capability,{...executionOptions,sandboxSession,effectState})); }
   catch(error) { if(!effectState.possible)error.safeToRetry=true;throw error; }
-  finally { if(!opts.sandboxSession)await sandboxSession.close(); }
+  finally { executionControllers.delete(controller);if(!opts.sandboxSession)await sandboxSession.close(); }
 }
 
 async function executeOpportunity(opportunity, capability, { llm, siteUrl='', env=process.env, config=null, abortSignal=null, memoryContext='', toolFilter=null, briefing='', effectState, budget=null, sandboxSession=null }  = {}) {
@@ -65,7 +72,7 @@ async function executeOpportunity(opportunity, capability, { llm, siteUrl='', en
 
   add('web_search');
   add('web_scrape');
-  if (actualCapabilities.hasBrowserTool) add('browser_read');
+  if (actualCapabilities.hasBrowserTool) {add('browser_read');if(opportunity.jobId&&opportunity.claimMode==='already_assigned')add('browser_action');}
   if (actualCapabilities.hasShellTool) { add('run_python'); add('run_shell'); }
   if (actualCapabilities.hasAppTool) { add('app_tool_search'); add('app_action'); }
   if (actualCapabilities.hasArtifactTool) add('store_artifact');

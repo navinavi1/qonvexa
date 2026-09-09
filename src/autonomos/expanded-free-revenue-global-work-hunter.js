@@ -12,7 +12,7 @@ export class ExpandedFreeRevenueGlobalWorkHunter extends FreeRevenueGlobalWorkHu
       if(lead.terminal){this.archiveLead(lead.id,'listing_terminal',lead);continue;}
       if(lead.humanGate){this.archiveLead(lead.id,'protected_registration_or_identity_step_required',lead);continue;}
       const prev=this.state.leads?.[lead.id];if(!prev)dynamicNew++;
-      this.state.leads[lead.id]={...prev,...lead,directRouteHint:true,freeSource:`dynamic:${row.marketName||row.marketHost||'market'}`,marketId:String(row.marketId||''),marketHost:String(row.marketHost||''),marketRegistered:Boolean(row.registered),firstSeenAt:prev?.firstSeenAt||new Date().toISOString(),lastSeenAt:new Date().toISOString()};
+      this.state.leads[lead.id]={...prev,...lead,externalId:row.externalId,observedAt:row.observedAt,currency:row.currency,directRouteHint:true,freeSource:`dynamic:${row.marketName||row.marketHost||'market'}`,marketId:String(row.marketId||''),marketHost:String(row.marketHost||''),marketRegistered:Boolean(row.registered),firstSeenAt:prev?.firstSeenAt||new Date().toISOString(),lastSeenAt:new Date().toISOString()};
     }
     if(dynamicSeen)this.event('dynamic_market_feed_ingested',{rows:dynamicSeen,newLeads:dynamicNew});
     this.persist();return{...base,newLeads:Number(base.newLeads||0)+dynamicNew,dynamicMarketRows:dynamicSeen,dynamicMarketNewLeads:dynamicNew};

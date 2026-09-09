@@ -1,3 +1,4 @@
+import { lifecycleAwareShouldInspect } from './revenue-lifecycle.js';
 import { gmailMessageIdentity } from './gmail-mailbox.js';
 import { minimumJobPayoutUsd } from './payout-floor.js';
 import { SearchFirstLeadActioner } from './search-first-lead-actioner.js';
@@ -20,7 +21,8 @@ const CONTRACT_OVERRIDE=/\b(?:freelance|freelancer|independent contractor|contra
 export class RevenueLeadActioner extends SearchFirstLeadActioner{
   priority(lead){return super.priority(lead)+(lead?.directRouteHint?120:0);}
 
-  shouldBrowserlessInspect(lead){
+  shouldBrowserlessInspect(lead){return lifecycleAwareShouldInspect.call(this,lead,this.inspectCandidate);}
+  inspectCandidate(lead){
     const action=this.state?.actions?.[lead?.id];
     if(String(action?.status||'')==='human_gate')return true;
     return super.shouldBrowserlessInspect(lead);
@@ -64,7 +66,7 @@ export class RevenueLeadActioner extends SearchFirstLeadActioner{
     const prior=this.state.actions?.[id]||{};if(['email_send_in_progress','applied_email','application_uncertain'].includes(String(prior.status||'')))return;
     this.setAction(id,{status:'email_send_in_progress',recipient:route.email,applicationUrl:lead.url,proposal:String(proposal||'').slice(0,1800),payout,skill:capability.skill,emailStartedAt:new Date().toISOString(),nextRetryAt:''});
     const result=await composioExecute({toolSlug:'GMAIL_SEND_EMAIL',arguments:{recipient_email:String(route.email||''),subject:String(subject||'').slice(0,240),body:String(body||'').slice(0,7000)}},this.env);
-    if(result.ok){this.setAction(id,{status:'applied_email',appliedAt:new Date().toISOString(),emailLogId:String(result.logId||''),...gmailMessageIdentity(result.data),emailSubject:subject,recipient:route.email,reason:'targeted application sent to explicit public application contact',nextCheckAt:new Date(Date.now()+30*60_000).toISOString()});this.state.stats.applied=Number(this.state.stats.applied||0)+1;this.event('lead_applied_email',{id,host,recipient:maskEmail(route.email),title:String(lead.title||'').slice(0,120),amountUsd:payout.amountUsd,currency:payout.currency,skill:capability.skill});return;}
+    if(result.ok&&gmailMessageIdentity(result.data).gmailMessageId){this.setAction(id,{status:'applied_email',appliedAt:new Date().toISOString(),emailLogId:String(result.logId||''),...gmailMessageIdentity(result.data),emailSubject:subject,recipient:route.email,reason:'targeted application sent to explicit public application contact',nextCheckAt:new Date(Date.now()+30*60_000).toISOString()});this.state.stats.applied=Number(this.state.stats.applied||0)+1;this.event('lead_applied_email',{id,host,recipient:maskEmail(route.email),title:String(lead.title||'').slice(0,120),amountUsd:payout.amountUsd,currency:payout.currency,skill:capability.skill});return;}
     if(result.needsConnectedAccount||/connected.?account|auth|unauthor|forbidden/i.test(`${result.error||''} ${result.detail||''}`)){this.setAction(id,{status:'email_channel_unavailable',reason:String(result.detail||result.error||'gmail_not_connected').slice(0,240),nextRetryAt:new Date(Date.now()+60*60_000).toISOString()});return;}
     this.setAction(id,{status:'application_uncertain',reason:`email send outcome uncertain: ${String(result.detail||result.error||'unknown').slice(0,220)}`,recipient:route.email,nextCheckAt:new Date(Date.now()+60*60_000).toISOString()});
   }

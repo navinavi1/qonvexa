@@ -1,0 +1,33 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { ActionJournal, classifyFailure } from '../src/autonomos/action-journal.js';
+import { canonicalOpportunity, eligibility } from '../src/autonomos/canonical-opportunity.js';
+import { deriveMarketState } from '../src/autonomos/dynamic-market-registry.js';
+import { GlobalWorkHunter } from '../src/autonomos/global-work-hunter.js';
+import { FreeRevenueLeadActioner } from '../src/autonomos/free-revenue-lead-actioner.js';
+import { TaskForceWorker } from '../src/autonomos/taskforce-worker.js';
+import { MarketExpansionEngine } from '../src/autonomos/market-expansion-engine.js';
+import { isRetiredMarket } from '../src/autonomos/retired-markets.js';
+import { resourcePolicy } from '../src/autonomos/resource-control.js';
+import { coordinateExecution } from '../src/autonomos/execution-coordinator.js';
+const root=fs.mkdtempSync(path.join(os.tmpdir(),'production-lifecycle-')),env={STORAGE_DIR:root,AUTONOMOS_ENABLED:'true'};
+const priorFetch=globalThis.fetch;let count=0;
+const test=async(name,fn)=>{await fn();console.log('PASS '+name);count++;};
+try{
+ await test('write-ahead action survives restart and prevents replay',()=>{const a=new ActionJournal(root),i=a.begin('market','job','apply');assert(i.ok);assert.equal(new ActionJournal(root).begin('market','job','apply').ok,false);assert.throws(()=>a.finish(i.id,'confirmed'),/external_proof/);a.finish(i.id,'confirmed',{externalId:'actual-id'});assert.equal(new ActionJournal(root).begin('market','job','apply').proof.externalId,'actual-id');});
+ await test('definite failure retries; ambiguous write never retries blindly',()=>{const a=new ActionJournal(root),i=a.begin('m','2','apply');a.finish(i.id,'definite_failure',{httpStatus:429});assert(a.begin('m','2','apply').ok);const j=a.begin('m','3','apply');a.finish(j.id,'uncertain');assert(!a.begin('m','3','apply').ok);});
+ await test('schema/auth/payment failures do not retry indefinitely',()=>{for(const c of [401,402,403,404,422])assert.equal(classifyFailure(c).retryable,false);assert.equal(classifyFailure(429).type,'RATE_LIMIT');});
+ await test('coin amount is not USD and $5 floor is job reward',()=>{const base={id:'1',source:'m',workType:'REAL_MARKET_JOB',applicationRoute:'API_APPLICATION'};assert.equal(canonicalOpportunity({...base,payout:100,currency:'SOL'}).payoutUsd,null);assert(eligibility(canonicalOpportunity({...base,payout:4.99,currency:'USDC'}),env).reasons.includes('BELOW_MIN_JOB_VALUE'));assert(eligibility(canonicalOpportunity({...base,payout:5,currency:'USDC'}),env).eligible);});
+ await test('unknown contest win rate cannot imply profitable work',()=>{assert.equal(canonicalOpportunity({payout:100,currency:'USD',competitive:true}).expectedNetProfit,null);});
+ await test('catalog or credentials cannot imply full automatic readiness',()=>{assert.equal(deriveMarketState({id:'new',registered:true,jobs:{path:'/jobs'},claim:{path:'/claim'}}),'DISCOVERED');const evidence=Object.fromEntries(['authentication','jobs','details','application','execution','delivery','status','payout'].map(k=>[k,{verified:true,url:'https://example.com/proof',verifiedAt:new Date().toISOString()}]));assert.equal(deriveMarketState({id:'new',evidence}),'FULL_AUTO_READY');delete evidence.payout;assert.notEqual(deriveMarketState({id:'new',evidence}),'FULL_AUTO_READY');});
+ await test('all owner-retired markets and paid browser stay retired',()=>{for(const source of ['t2000','dealwork','workprotocol','taskbounty','agenthansa','superteam','clawjobs'])assert(isRetiredMarket(source));assert(!isRetiredMarket('taskforce'));assert.equal(resourcePolicy('browserbase',{AUTONOMOS_OWNER_CAPPED_PROVIDERS:'browserbase'}).reason,'DO_NOT_RESTORE');});
+ await test('email accepted work has real config, ledger and cost recorder',()=>{const a=new FreeRevenueLeadActioner({env,logger:{}});assert(a.currentConfig().enabled);a.recordCost('accepted',.01);assert.equal(a.store.readNdjson('ledger.ndjson',-1).length,1);assert.equal(a.shouldBrowserlessInspect({id:'x',url:'https://example.com/project'}),true);a.state.actions.x={status:'accepted_email'};assert.equal(a.shouldBrowserlessInspect({id:'x',url:'https://example.com/project'}),false);});
+ await test('HTTP 200 without external application ID is uncertain',async()=>{const h=new GlobalWorkHunter({env,logger:{}});let calls=0;globalThis.fetch=async()=>{calls++;return new Response('{}',{status:200});};const op={externalId:'proofless',title:'Paid task',budgetUsd:20};assert.equal((await h.applyTaskForce(op,{skill:'copywriting'},{apiKey:'test'})).ok,false);assert.equal(h.state.taskforce.applications.proofless.status,'application_uncertain');await h.applyTaskForce(op,{skill:'copywriting'},{apiKey:'test'});assert.equal(calls,1);});
+ await test('HTTP 200 without external delivery ID is uncertain',async()=>{const w=new TaskForceWorker({env,logger:{}});globalThis.fetch=async()=>new Response('{}',{status:200});await w.submit('proofless',{content:'Verified output'},{ok:true,score:1},{apiKey:'test'});assert.equal(w.state.tasks.proofless.status,'submission_uncertain');});
+ await test('expansion retains fresh feed while scans are deferred',async()=>{const e=new MarketExpansionEngine({env,logger:{}});const r={marketId:'example.com',url:'https://example.com/job/1',title:'A job',observedAt:new Date().toISOString()};fs.writeFileSync(e.feedFile,JSON.stringify({rows:[r]}));fs.writeFileSync(e.scoutFile,JSON.stringify({candidates:{}}));await e.tick();assert.equal(JSON.parse(fs.readFileSync(e.feedFile)).rows.length,1);});
+ await test('duplicate execution cannot spawn another same-job worker',async()=>{let release;const waiting=new Promise(r=>release=r);const op={jobId:'unique',source:'m'};const first=coordinateExecution(op,env,()=>waiting);await assert.rejects(()=>coordinateExecution(op,env,async()=>{}),/already_executing/);release();await first;const state=JSON.parse(fs.readFileSync(path.join(root,'autonomos','execution-workforce.json')));assert.equal(state.unique.active,false);});
+ await test('old read acceptance notification does not regress approved work',async()=>{const h=new GlobalWorkHunter({env,logger:{}});h.state.taskforce.applications.old={status:'PAID_OR_APPROVED'};globalThis.fetch=async()=>new Response(JSON.stringify({notifications:[{id:'old',taskId:'old',type:'APPLICATION_ACCEPTED',read:true}]}),{status:200});await h.pollTaskForceNotifications({apiKey:'test'});assert.equal(h.state.taskforce.applications.old.status,'PAID_OR_APPROVED');});
+ console.log(`PRODUCTION LIFECYCLE: ${count}/${count} passed`);
+}finally{globalThis.fetch=priorFetch;fs.rmSync(root,{recursive:true,force:true});}

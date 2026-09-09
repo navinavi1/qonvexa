@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "markets": [
+    {"id":"t2000","aliases":["t2000.ai"],"type":"market","retiredAt":"2026-09-09","reason":"Owner final production brief: do not restore","ownerApproved":true,"neverRestore":true},
+    {"id":"dealwork","aliases":["dealwork.ai"],"type":"market","retiredAt":"2026-09-09","reason":"Owner final production brief: do not restore","ownerApproved":true,"neverRestore":true},
+    {"id":"workprotocol","aliases":["workprotocol.ai"],"type":"market","retiredAt":"2026-09-09","reason":"Owner final production brief: do not restore","ownerApproved":true,"neverRestore":true},
+    {"id":"taskbounty","aliases":["task-bounty.com","taskbounty.com"],"type":"market","retiredAt":"2026-09-09","reason":"Owner final production brief: do not restore","ownerApproved":true,"neverRestore":true},
+    {"id":"agenthansa","aliases":["agenthansa.com"],"type":"market","retiredAt":"2026-09-09","reason":"Owner final production brief: do not restore","ownerApproved":true,"neverRestore":true},
+    {"id":"superteam","aliases":["superteam.fun","earn.superteam.fun"],"type":"market","retiredAt":"2026-09-09","reason":"Owner final production brief: do not restore","ownerApproved":true,"neverRestore":true},
+    {"id":"clawlancer","aliases":["clawjobs","clawlancer.ai","clawjobs.org"],"type":"market","retiredAt":"2026-09-09","reason":"Previous legacy set retired by owner final brief","ownerApproved":true,"neverRestore":true}
+  ],
+  "tools": [],
+  "skills": [],
+  "providers": [
+    {"id":"browserbase","aliases":["browserbase.com"],"type":"provider","retiredAt":"2026-09-09","reason":"Owner removed paid browser; preserve current Chromium route","ownerApproved":true,"neverRestore":true}
+  ]
+}

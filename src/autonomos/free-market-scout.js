@@ -35,9 +35,9 @@ export class FreeMarketScout{
   }
   start(){if(this.timer)return;this.seedVerifiedMarkets();const every=Math.max(60*60_000,Number(this.env.AUTONOMOS_FREE_MARKET_SCOUT_MS||6*60*60_000));setTimeout(()=>this.scan().catch(e=>this.event('scout_error',{error:safe(e)})),45_000).unref?.();this.timer=setInterval(()=>this.scan().catch(e=>this.event('scout_error',{error:safe(e)})),every);this.timer.unref?.();this.event('market_scout_started',{intervalMs:every,paidSearch:false,verifiedLiveSeeds:VERIFIED_LIVE_MARKETS.length});}
   stop(){if(this.timer)clearInterval(this.timer);this.timer=null;}
-  seedVerifiedMarkets(){const at=new Date().toISOString();for(const seed of VERIFIED_LIVE_MARKETS){const prior=this.state.candidates[seed.id]||{};this.state.candidates[seed.id]={...prior,...seed,status:'verified_live_seed',workSignal:true,payoutSignal:true,registrationSignal:/oauth|github|account|register/i.test(seed.entryMode),humanGate:/kyc/i.test(seed.entryMode),firstSeenAt:prior.firstSeenAt||at,lastSeenAt:at,source:'verified_live_catalog'};}this.persist();}
+  seedVerifiedMarkets(){const at=new Date().toISOString();for(const seed of VERIFIED_LIVE_MARKETS){const prior=this.state.candidates[seed.id]||{};this.state.candidates[seed.id]={...prior,...seed,status:prior.status||'unverified_catalog_seed',workSignal:true,payoutSignal:true,verificationRequired:true,registrationSignal:/oauth|github|account|register/i.test(seed.entryMode),humanGate:/kyc/i.test(seed.entryMode),firstSeenAt:prior.firstSeenAt||at,lastSeenAt:at,source:'verified_live_catalog'};}this.persist();}
   async scan(){if(this.running)return;if(String(this.env.AUTONOMOS_FREE_MARKET_SCOUT_ENABLED||'true').toLowerCase()==='false')return;this.running=true;try{
-    this.seedVerifiedMarkets();const queries=parseQueries(this.env.AUTONOMOS_FREE_MARKET_SCOUT_QUERIES_JSON)||DEFAULT_QUERIES;let seen=VERIFIED_LIVE_MARKETS.length,verified=VERIFIED_LIVE_MARKETS.length;
+    this.seedVerifiedMarkets();const queries=parseQueries(this.env.AUTONOMOS_FREE_MARKET_SCOUT_QUERIES_JSON)||DEFAULT_QUERIES;let seen=VERIFIED_LIVE_MARKETS.length,verified=0;
     for(const query of queries.slice(0,8)){
       const rows=await githubRepoSearch(query,this.env).catch(()=>[]);
       for(const repo of rows.slice(0,12)){

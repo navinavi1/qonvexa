@@ -1,3 +1,4 @@
+import { hardenedPollTaskForce } from './revenue-lifecycle.js';
 import { minimumJobPayoutUsd } from './payout-floor.js';
 import { GlobalWorkHunter } from './global-work-hunter.js';
 import { freeWebSearch } from './free-web-tool.js';
@@ -102,7 +103,8 @@ export class RevenueGlobalWorkHunter extends GlobalWorkHunter{
     return{...broad,newLeads:Number(broad?.newLeads||0)+directNewLeads,directNewLeads,directQueryPool:DIRECT_ROUTE_QUERIES.length};
   }
 
-  async pollTaskForce(credential){
+  async pollTaskForce(credential){return hardenedPollTaskForce.call(this,credential,this.pollRevenueTaskForce);}
+  async pollRevenueTaskForce(credential){
     const headers={accept:'application/json','x-api-key':credential.apiKey,authorization:credential.apiKey,'user-agent':'AutonomOS-RevenueHunter/3.0'};
     const stats={open:0,applied:0,eligible:0,alreadyApplied:0,blockedCapability:0,belowFloor:0,retryDeferred:0,applyFailed:0,notAccepting:0};
     try{
@@ -126,7 +128,7 @@ export class RevenueGlobalWorkHunter extends GlobalWorkHunter{
         if(prior){
           const status=String(prior.status||'').toUpperCase();
           if(ACTIVE_APPLICATION_STATUSES.has(status)||TERMINAL_APPLICATION_STATUSES.has(status)){stats.alreadyApplied++;continue;}
-          if(status==='APPLY_FAILED'){
+          if(status==='APPLY_FAILED'){if(prior.failure?.retryable===false){stats.retryDeferred++;continue;}
             const due=Date.parse(String(prior.nextRetryAt||''))||((Date.parse(String(prior.at||prior.updatedAt||0))||Date.now())+retryMs);
             if(due>Date.now()){stats.retryDeferred++;continue;}
           }else{stats.alreadyApplied++;continue;}

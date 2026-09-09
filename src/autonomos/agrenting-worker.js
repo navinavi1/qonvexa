@@ -1,3 +1,5 @@
+import { DynamicMarketRegistry } from './dynamic-market-registry.js';
+import { ActionJournal } from './action-journal.js';
 import { recoverFreeCapability } from './free-tool-recovery.js';
 import { unifiedCapabilityContext, refreshCapabilities } from './capability-registry.js';
 import fs from 'node:fs';
@@ -25,21 +27,22 @@ export class AgrentingWorker{
     this.env=env;this.logger=logger;this.root=path.join(storageDir||env.STORAGE_DIR||'data','autonomos');fs.mkdirSync(this.root,{recursive:true});
     this.stateFile=path.join(this.root,'agrenting-worker.json');this.secretFile=path.join(this.root,'agrenting-credentials.private.json');
     this.state=this.read(this.stateFile,{version:1,hirings:{},events:[],registered:false});
-    this.store=new AutonomOSStore(this.root);this.llm=createLlmClient(env);this.timer=null;this.running=false;
+    this.actionJournal=new ActionJournal(this.root);this.store=new AutonomOSStore(this.root);this.llm=createLlmClient(env);this.timer=null;this.running=false;
   }
   start(){if(this.timer)return;const every=Math.max(60_000,Number(this.env.AUTONOMOS_AGRENTING_POLL_MS||3*60_000));setTimeout(()=>this.tick().catch(e=>this.event('tick_error',{error:safe(e)})),15_000).unref?.();this.timer=setInterval(()=>this.tick().catch(e=>this.event('tick_error',{error:safe(e)})),every);this.timer.unref?.();this.event('worker_started',{intervalMs:every,basePriceUsd:this.basePrice()});}
   stop(){if(this.timer)clearInterval(this.timer);this.timer=null;}
-  async tick(){if(this.running||!enabled(this.env.AUTONOMOS_AGRENTING_ENABLED,'true'))return;this.running=true;try{const credential=await this.ensureCredential();if(!credential?.apiKey)return;await this.ensureActive(credential);await this.reconcileSubmitted(credential);await this.pollPending(credential);}finally{this.running=false;this.persist();}}
+  async tick(){const config=this.currentConfig();if(!config.enabled||config.killSwitch)return;if(this.running||!enabled(this.env.AUTONOMOS_AGRENTING_ENABLED,'true'))return;this.running=true;try{const credential=await this.ensureCredential();if(!credential?.apiKey)return;await this.ensureActive(credential);await this.reconcileSubmitted(credential);await this.pollPending(credential);}finally{this.running=false;this.persist();}}
 
   async ensureCredential(){
     const saved=this.read(this.secretFile,{});if(saved?.agrenting?.apiKey)return saved.agrenting;
     if(!enabled(this.env.AUTONOMOS_AGRENTING_AUTO_REGISTER,'true'))return null;
+    const registration=this.actionJournal.begin('agrenting','AutonomOS','register');if(!registration.ok){this.event('registration_reconcile_required',{status:registration.status});return null;}
     const did=`did:autonomos:${hash(String(this.env.AUTONOMOS_OWNER_WALLET||this.env.AUTONOMOS_REGISTRATION_EMAIL||'qonvexa'))}`;
     const body={agent:{name:'AutonomOS',did,capabilities:SAFE_CAPABILITIES,category:'custom',pricing_model:'fixed',base_price:this.basePrice().toFixed(2)}};
     const r=await fetch(`${BASE}/api/v1/agents/register`,{method:'POST',headers:{'content-type':'application/json',accept:'application/json','user-agent':'AutonomOS-Agrenting/1.0'},body:JSON.stringify(body),signal:AbortSignal.timeout(15_000)});const data=await json(r);
     if(!r.ok){this.event('registration_failed',{status:r.status,error:publicError(data)});return null;}
     const row=data?.data||data;const apiKey=String(row?.api_key||row?.apiKey||'');const agent=row?.agent||{};const agentId=String(agent?.id||row?.agent_id||'');if(!apiKey||!agentId){this.event('registration_failed',{status:r.status,error:'registration_response_missing_api_key_or_agent_id'});return null;}
-    const credential={apiKey,agentId,did:String(agent?.did||did),registeredAt:new Date().toISOString()};this.writeSecret(this.secretFile,{...saved,agrenting:credential});
+    const credential={apiKey,agentId,did:String(agent?.did||did),registeredAt:new Date().toISOString()};this.writeSecret(this.secretFile,{...saved,agrenting:credential});this.actionJournal.finish(registration.id,'confirmed',{externalId:agentId});
     this.state.registered=true;this.state.agentId=agentId;this.state.did=credential.did;this.state.legalVersion=String(row?.legal?.terms?.version||row?.legal?.version||'');this.state.legalReviewNotice=String(row?.legal?.review_notice||row?.legal?.reviewNotice||'').slice(0,1000);this.persist();
     this.event('registered',{agentId,did:credential.did,basePriceUsd:this.basePrice(),legalVersion:this.state.legalVersion||'unknown'});return credential;
   }
@@ -59,7 +62,7 @@ export class AgrentingWorker{
 
   async pollPending(credential){
     const r=await fetch(`${BASE}/api/v1/hirings/pending`,{headers:{'x-api-key':credential.apiKey,accept:'application/json'},signal:AbortSignal.timeout(12_000)});const data=await json(r);if(!r.ok){this.event('pending_poll_failed',{status:r.status,error:publicError(data)});return;}
-    const rows=arrayFrom(data,['hirings','items','data']);this.event('pending_polled',{count:rows.length});
+    const rows=arrayFrom(data,['hirings','items','data']);new DynamicMarketRegistry(this.root).observe('agrenting',{name:'Agrenting',homepage:BASE,lastJobsCount:rows.length,evidence:{authentication:{verified:true,externalId:credential.agentId,verifiedAt:new Date().toISOString()},...(rows.length?{jobs:{verified:true,url:BASE+'/api/v1/hirings/pending',verifiedAt:new Date().toISOString()}}:{})},blocker:rows.length?'':'NO_ASSIGNED_HIRINGS'});this.event('pending_polled',{count:rows.length});
     for(const raw of rows.slice(0,10)){const h=normalizeHiring(raw);if(!h.id||!['in_progress','paid'].includes(h.status))continue;if(this.state.hirings[h.id]?.submittedAt)continue;await this.executeHiring(h,credential);}
   }
 
@@ -69,7 +72,7 @@ export class AgrentingWorker{
     await refreshCapabilities(this.env);let capability=classifyOpportunity(opportunity,this.capabilityContext());
     if(!capability.executable){for(const gap of capability.missingTools||[])await recoverFreeCapability(gap,this.env);capability=classifyOpportunity(opportunity,this.capabilityContext());}
     if(!capability.executable){this.state.hirings[h.id]={...h,status:'waiting_capability',missingTools:capability.missingTools||[],retryAt:new Date(Date.now()+60_000).toISOString(),updatedAt:new Date().toISOString()};this.persist();return;}
-    const config=normalizeConfig(this.store.readJson('config.json',{...DEFAULT_AUTONOMOS_CONFIG,enabled:true}));const treasury=computeEarnedSpendBudgetUsd(this.store.readNdjson('ledger.ndjson',-1),config);const maxJobSpend=Math.max(0.05,Number(this.env.AUTONOMOS_AGRENTING_MAX_JOB_SPEND_USD||2));const spendCap=config.survivalMode&&config.noAbandonAcceptedJobs?treasury:Math.min(treasury,maxJobSpend);
+    const config=normalizeConfig(this.store.readJson('config.json',{...DEFAULT_AUTONOMOS_CONFIG,enabled:true}));const treasury=computeEarnedSpendBudgetUsd(this.store.readNdjson('ledger.ndjson',-1),config);const maxJobSpend=Math.max(0.05,Number(this.env.AUTONOMOS_AGRENTING_MAX_JOB_SPEND_USD||2));const spendCap=Math.min(treasury,maxJobSpend,Math.max(0,h.price)*.35);
     if(spendCap<=0.000001&&!capability.mode?.includes('deterministic')){this.state.hirings[h.id]={...h,status:'waiting_treasury',updatedAt:new Date().toISOString()};this.persist();return;}
     const budget=createJobBudget(Math.max(0,spendCap),{env:this.env,onCost:amount=>this.recordCost(h.id,amount)});const llm=budget.llm(this.llm);const execConfig={...config,availableSpendUsd:spendCap,maxPaidProcurementUsd:0,allowExternalSpending:false};
     let deliverable=null,qa=null,briefing='';const repairs=Math.max(1,Math.min(4,Number(this.env.AUTONOMOS_AGRENTING_QA_REPAIRS||3)));
@@ -95,11 +98,12 @@ export class AgrentingWorker{
     if(status==='completed'&&!this.state.hirings[id].revenueRecordedAt){const price=Number(row?.price||this.state.hirings[id]?.price||0);const fee=Math.max(0,price*0.05);appendUniqueLedgerEntry(this.store,ledgerEntry({id:`agrenting_revenue_${id}`,type:'revenue',jobId:`agrenting_${id}`,externalId:id,source:'agrenting',grossUsd:price,amountUsd:price,feeUsd:fee,currency:'USD',rail:'agrenting_escrow',status:'settled',note:'Agrenting reports hiring completed; provider balance credited after platform fee'}));this.state.hirings[id].revenueRecordedAt=new Date().toISOString();this.state.hirings[id].settledNetUsd=Math.max(0,price-fee);this.event('revenue_settled',{id,grossUsd:price,feeUsd:fee,netUsd:Math.max(0,price-fee)});}this.persist();
   }
 
+  currentConfig(){return normalizeConfig(this.store.readJson('config.json',{...DEFAULT_AUTONOMOS_CONFIG,enabled:true}));}
   capabilityContext(){return unifiedCapabilityContext(this.env,{llm:this.llm});}
   basePrice(){return Math.max(10,Number(this.env.AUTONOMOS_AGRENTING_MIN_PRICE_USD||30));}
   recordCost(id,amount){const n=Number(amount||0);if(!(n>0))return;appendUniqueLedgerEntry(this.store,ledgerEntry({id:`agrenting_cost_${id}_${crypto.randomUUID()}`,type:'cost',jobId:`agrenting_${id}`,externalId:id,source:'agrenting',amountUsd:n,grossUsd:n,currency:'USD',status:'incurred',note:`Execution cost for Agrenting hiring ${id}`}));}
   event(type,detail={}){const row={at:new Date().toISOString(),type,...detail};this.state.events.unshift(row);if(this.state.events.length>300)this.state.events.length=300;this.persist();try{this.logger.info?.('[AgrentingWorker] '+JSON.stringify(row));}catch{}}
-  persist(){try{fs.writeFileSync(this.stateFile,JSON.stringify(this.state,null,2),{mode:0o600});}catch{}}
+  persist(){const tmp=this.stateFile+'.tmp';fs.writeFileSync(tmp,JSON.stringify(this.state,null,2),{mode:0o600});fs.renameSync(tmp,this.stateFile);}
   read(file,fallback){try{return JSON.parse(fs.readFileSync(file,'utf8'));}catch{return structuredClone(fallback);}}
   writeSecret(file,value){const tmp=`${file}.${process.pid}.${Date.now()}.tmp`;fs.writeFileSync(tmp,JSON.stringify(value,null,2),{mode:0o600});try{fs.chmodSync(tmp,0o600);}catch{}fs.renameSync(tmp,file);try{fs.chmodSync(file,0o600);}catch{}}
 }

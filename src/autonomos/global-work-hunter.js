@@ -1,3 +1,7 @@
+import { DynamicMarketRegistry } from './dynamic-market-registry.js';
+import { ActionJournal, classifyFailure } from './action-journal.js';
+import { hardenedPollTaskForce } from './revenue-lifecycle.js';
+import { pollTaskForceNotificationsRecovered } from './taskforce-notifications.js';
 import { minimumJobPayoutUsd } from './payout-floor.js';
 import { unifiedCapabilityContext, refreshCapabilities } from './capability-registry.js';
 import { isRetiredMarket } from './retired-markets.js';
@@ -91,6 +95,7 @@ export class GlobalWorkHunter {
     this.env=env;this.logger=logger;
     this.root=path.join(storageDir||env.STORAGE_DIR||'data','autonomos');
     fs.mkdirSync(this.root,{recursive:true});
+    this.actionJournal=new ActionJournal(this.root);
     this.stateFile=path.join(this.root,'global-work-hunter.json');
     this.feedFile=path.join(this.root,'global-work-feed.json');
     this.archiveFile=path.join(this.root,'global-work-archive.json');
@@ -169,17 +174,18 @@ export class GlobalWorkHunter {
   async runTaskForce(){
     const credential=await this.ensureTaskForceCredential();if(!credential?.apiKey)return{open:0,applied:0,reason:'registration_not_ready'};
     if(!credential.verified)await this.verifyTaskForceAgent(credential);
-    const result=await this.pollTaskForce(credential);await this.pollTaskForceNotifications(credential).catch(error=>this.event('taskforce_notifications_failed',{error:safeError(error)}));return result;
+    const result=await this.pollTaskForce(credential);const marketRegistry=new DynamicMarketRegistry(this.root);const oldMarket=marketRegistry.read().taskforce||{};marketRegistry.observe('taskforce',{name:'TaskForce',homepage:'https://www.task-force.app',lastJobsCount:result.open||0,evidence:{...oldMarket.evidence,...(result.open>0?{jobs:{verified:true,url:'https://www.task-force.app/api/agent/tasks',verifiedAt:new Date().toISOString()},authentication:{verified:true,externalId:String(credential.agentId||''),verifiedAt:new Date().toISOString()}}:{})},blocker:result.belowFloor===result.open&&result.open>0?'BELOW_MIN_JOB_VALUE':'awaiting_eligible_work'});await this.pollTaskForceNotifications(credential).catch(error=>this.event('taskforce_notifications_failed',{error:safeError(error)}));return result;
   }
 
   async ensureTaskForceCredential(){
     const secrets=this.read(this.secretFile,{});let credential=secrets.taskforce||null;if(credential?.apiKey)return credential;
+    const registration=this.actionJournal.begin('taskforce','AutonomOS','register');if(!registration.ok){this.event('taskforce_registration_reconcile_required',{status:registration.status});return null;}
     try{
       const body={name:String(this.env.AUTONOMOS_AGENT_NAME||'AutonomOS').slice(0,100),capabilities:CATEGORY_RULES.map(x=>x[0]).slice(0,40)};
       const r=await fetch('https://task-force.app/api/agent/register',{method:'POST',headers:{'content-type':'application/json',accept:'application/json','user-agent':'AutonomOS-GlobalHunter/2.0'},body:JSON.stringify(body),signal:AbortSignal.timeout(15000)});
       const data=await safeJson(r);if(!r.ok){this.event('taskforce_registration_failed',{status:r.status,error:publicError(data)});return null;}
       const apiKey=String(data?.apiKey||data?.api_key||''),agent=data?.agent||{};if(!apiKey){this.event('taskforce_registration_failed',{status:r.status,error:'missing_api_key'});return null;}
-      credential={apiKey,agentId:String(agent?.id||data?.agentId||''),walletAddress:String(agent?.walletAddress||data?.walletAddress||''),status:String(agent?.status||''),verified:false,createdAt:new Date().toISOString()};secrets.taskforce=credential;this.writeSecret(this.secretFile,secrets);this.event('taskforce_registered',{agentId:credential.agentId,walletAddress:credential.walletAddress,status:credential.status});return credential;
+      credential={apiKey,agentId:String(agent?.id||data?.agentId||''),walletAddress:String(agent?.walletAddress||data?.walletAddress||''),status:String(agent?.status||''),verified:false,createdAt:new Date().toISOString()};secrets.taskforce=credential;this.writeSecret(this.secretFile,secrets);this.actionJournal.finish(registration.id,credential.agentId?'confirmed':'uncertain',credential.agentId?{externalId:credential.agentId}:{reason:'registration_missing_agent_id'});this.event('taskforce_registered',{agentId:credential.agentId,walletAddress:credential.walletAddress,status:credential.status});return credential;
     }catch(error){this.event('taskforce_registration_failed',{error:safeError(error)});return null;}
   }
 
@@ -197,7 +203,9 @@ export class GlobalWorkHunter {
     }catch(error){this.event('taskforce_verification_failed',{error:safeError(error)});return false;}
   }
 
-  async pollTaskForce(credential){
+  async pollTaskForce(credential){return hardenedPollTaskForce.call(this,credential,this.pollTaskForceCore);}
+
+  async pollTaskForceCore(credential){
     const headers={accept:'application/json','x-api-key':credential.apiKey,authorization:credential.apiKey,'user-agent':'AutonomOS-GlobalHunter/2.0'};
     try{
       const r=await fetch('https://task-force.app/api/agent/tasks?status=ACTIVE&limit=100',{headers,signal:AbortSignal.timeout(15000)});const data=await safeJson(r);if(!r.ok){this.event('taskforce_tasks_failed',{status:r.status,error:publicError(data)});return{open:0,applied:0};}
@@ -207,25 +215,24 @@ export class GlobalWorkHunter {
     }catch(error){this.event('taskforce_tasks_failed',{error:safeError(error)});return{open:0,applied:0};}
   }
 
-  normalizeTaskForceTask(raw){const id=String(raw?.id||raw?.taskId||'').trim();if(!id)return null;const title=String(raw?.title||raw?.name||'TaskForce task').trim();const description=[raw?.description,raw?.requirements].filter(Boolean).join('\n\nRequirements:\n').slice(0,10000);const budget=Number(raw?.totalBudget??raw?.budget??raw?.amount??raw?.reward??0);return{source:'taskforce',externalId:id,title,description,category:String(raw?.category||'other').toLowerCase(),budgetUsd:budget,currency:'USDC',network:'solana',escrowed:true,status:String(raw?.status||'ACTIVE').toLowerCase(),url:`https://task-force.app/tasks/${id}`,skills:Array.isArray(raw?.skillsRequired)?raw.skillsRequired:[]};}
+  normalizeTaskForceTask(raw){if(raw?.isTest||raw?.test||raw?.demo||/\b(?:demo task|test listing|commissioning probe|action testing)\b/i.test(String(raw?.title||'')))return null;const id=String(raw?.id||raw?.taskId||'').trim();if(!id)return null;const title=String(raw?.title||raw?.name||'TaskForce task').trim();const description=[raw?.description,raw?.requirements].filter(Boolean).join('\n\nRequirements:\n').slice(0,10000);const budget=Number(raw?.totalBudget??raw?.budget??raw?.amount??raw?.reward??0);return{source:'taskforce',externalId:id,title,description,category:String(raw?.category||'other').toLowerCase(),budgetUsd:budget,currency:'USDC',network:'solana',escrowed:true,status:String(raw?.status||'ACTIVE').toLowerCase(),url:`https://task-force.app/tasks/${id}`,skills:Array.isArray(raw?.skillsRequired)?raw.skillsRequired:[]};}
 
   async applyTaskForce(task,capability,credential){
+    const intent=this.actionJournal.begin('taskforce',task.externalId,'apply');
+    if(!intent.ok)return{ok:intent.status==='confirmed',uncertain:intent.status!=='confirmed'};
+    this.state.taskforce.applications[task.externalId]={status:'application_uncertain',at:new Date().toISOString(),intentId:intent.id};this.persist();
     const message=`AutonomOS can complete this ${capability.skill||'digital'} task with tool-backed execution and verification. We will follow the stated requirements and submit evidence-backed work.`.slice(0,900);
-    try{const r=await fetch(`https://task-force.app/api/agent/tasks/${encodeURIComponent(task.externalId)}/apply`,{method:'POST',headers:{'content-type':'application/json',accept:'application/json','x-api-key':credential.apiKey,authorization:credential.apiKey,'user-agent':'AutonomOS-GlobalHunter/2.0'},body:JSON.stringify({message}),signal:AbortSignal.timeout(12000)});const data=await safeJson(r);if(!r.ok){this.state.taskforce.applications[task.externalId]={status:'apply_failed',at:new Date().toISOString(),error:`http_${r.status}:${publicError(data)}`.slice(0,240)};this.persist();this.event('taskforce_apply_failed',{taskId:task.externalId,status:r.status,error:publicError(data)});return{ok:false};}const app=data?.application||data?.data||data;this.state.taskforce.applications[task.externalId]={applicationId:String(app?.id||''),status:String(app?.status||'PENDING'),title:task.title,budgetUsd:task.budgetUsd,skill:capability.skill,appliedAt:new Date().toISOString()};this.persist();this.event('taskforce_applied',{taskId:task.externalId,applicationId:String(app?.id||''),title:task.title,budgetUsd:task.budgetUsd,skill:capability.skill});return{ok:true};}catch(error){this.event('taskforce_apply_failed',{taskId:task.externalId,error:safeError(error)});return{ok:false};}
+    try{const r=await fetch(`https://task-force.app/api/agent/tasks/${encodeURIComponent(task.externalId)}/apply`,{method:'POST',headers:{'content-type':'application/json',accept:'application/json','x-api-key':credential.apiKey,authorization:credential.apiKey,'user-agent':'AutonomOS-GlobalHunter/2.0'},body:JSON.stringify({message}),signal:AbortSignal.timeout(12000)});const data=await safeJson(r);if(!r.ok){this.state.taskforce.applications[task.externalId]={status:'apply_failed',at:new Date().toISOString(),error:`http_${r.status}:${publicError(data)}`.slice(0,240),failure:classifyFailure(r.status)};this.actionJournal.finish(intent.id,r.status>=500||r.status===408?'uncertain':'definite_failure',{httpStatus:r.status});if(r.status>=500||r.status===408)this.state.taskforce.applications[task.externalId].status='application_uncertain';this.persist();this.event('taskforce_apply_failed',{taskId:task.externalId,status:r.status,error:publicError(data)});return{ok:false};}const app=data?.application||data?.data||data;if(!app?.id){this.actionJournal.finish(intent.id,'uncertain',{httpStatus:r.status});return{ok:false,uncertain:true};}this.actionJournal.finish(intent.id,'confirmed',{externalId:String(app.id)});this.state.taskforce.applications[task.externalId]={applicationId:String(app?.id||''),status:String(app?.status||'PENDING'),title:task.title,budgetUsd:task.budgetUsd,skill:capability.skill,appliedAt:new Date().toISOString()};this.persist();this.event('taskforce_applied',{taskId:task.externalId,applicationId:String(app?.id||''),title:task.title,budgetUsd:task.budgetUsd,skill:capability.skill});return{ok:true};}catch(error){this.actionJournal.finish(intent.id,'uncertain');this.event('taskforce_apply_failed',{taskId:task.externalId,error:safeError(error)});return{ok:false};}
   }
 
-  async pollTaskForceNotifications(credential){
-    const headers={accept:'application/json','x-api-key':credential.apiKey,authorization:credential.apiKey,'user-agent':'AutonomOS-GlobalHunter/2.0'};const r=await fetch('https://task-force.app/api/agent/notifications?unreadOnly=true&limit=100',{headers,signal:AbortSignal.timeout(12000)});const data=await safeJson(r);if(!r.ok)return;const notifications=arrayFrom(data,['notifications','items','data']),ids=[];
-    for(const n of notifications){const id=String(n?.id||'');if(id)ids.push(id);const type=String(n?.type||''),taskId=String(n?.taskId||extractTaskId(n?.link)||'');if(taskId&&this.state.taskforce.applications[taskId]){if(type==='APPLICATION_ACCEPTED')this.state.taskforce.applications[taskId].status='ACCEPTED';if(type==='APPLICATION_REJECTED')this.state.taskforce.applications[taskId].status='REJECTED';if(type==='SUBMISSION_APPROVED')this.state.taskforce.applications[taskId].status='PAID_OR_APPROVED';if(type==='SUBMISSION_REJECTED')this.state.taskforce.applications[taskId].status='SUBMISSION_REJECTED';this.state.taskforce.applications[taskId].updatedAt=new Date().toISOString();}this.state.taskforce.events.unshift({at:new Date().toISOString(),id,type,taskId,message:String(n?.message||'').slice(0,400)});this.event('taskforce_notification',{type,taskId,message:String(n?.message||'').slice(0,180)});}
-    if(this.state.taskforce.events.length>300)this.state.taskforce.events.length=300;this.persist();if(ids.length)await fetch('https://task-force.app/api/agent/notifications/read',{method:'POST',headers:{...headers,'content-type':'application/json'},body:JSON.stringify({notificationIds:ids}),signal:AbortSignal.timeout(12000)}).catch(()=>{});
-  }
+  async pollTaskForceNotifications(credential){return pollTaskForceNotificationsRecovered.call(this,credential);}
 
   capabilityContext(){return unifiedCapabilityContext(this.env,{llm:this.llm});}
   saveTaskForceCredential(credential){const secrets=this.read(this.secretFile,{});secrets.taskforce=credential;this.writeSecret(this.secretFile,secrets);}
   archiveLead(id,reason,row={}){if(!id)return;this.state.ignored[id]={id,reason,source:row.source||'',title:String(row.title||'').slice(0,180),url:String(row.url||''),archivedAt:new Date().toISOString()};delete this.state.leads[id];if(Object.keys(this.state.ignored).length>10000){const oldest=Object.entries(this.state.ignored).sort((a,b)=>Date.parse(a[1].archivedAt||0)-Date.parse(b[1].archivedAt||0));for(const [key] of oldest.slice(0,1000))delete this.state.ignored[key];}}
   pruneLeads(){const cutoff=Date.now()-14*24*60*60_000;for(const [key,row] of Object.entries(this.state.leads)){if(Date.parse(String(row.lastSeenAt||row.firstSeenAt||0))<cutoff)this.archiveLead(key,'stale_14_days',row);}const rows=Object.entries(this.state.leads).sort((a,b)=>Date.parse(b[1].firstSeenAt||0)-Date.parse(a[1].firstSeenAt||0));for(const [key,row] of rows.slice(5000))this.archiveLead(key,'feed_capacity_archive',row);}
   event(type,detail={}){const row={at:new Date().toISOString(),type,...detail};this.state.events.unshift(row);if(this.state.events.length>500)this.state.events.length=500;this.persist();try{this.logger.info?.('[GlobalWorkHunter] '+JSON.stringify(row));}catch{}}
-  persist(){try{const feed=Object.values(this.state.leads).sort((a,b)=>Date.parse(b.firstSeenAt||b.lastSeenAt||0)-Date.parse(a.firstSeenAt||a.lastSeenAt||0));fs.writeFileSync(this.stateFile,JSON.stringify(this.state,null,2),{mode:0o600});fs.writeFileSync(this.feedFile,JSON.stringify({generatedAt:new Date().toISOString(),count:feed.length,items:feed},null,2),{mode:0o600});fs.writeFileSync(this.archiveFile,JSON.stringify({generatedAt:new Date().toISOString(),count:Object.keys(this.state.ignored).length,items:Object.values(this.state.ignored).sort((a,b)=>Date.parse(b.archivedAt||0)-Date.parse(a.archivedAt||0))},null,2),{mode:0o600});}catch{}}
+  persist(){try{const feed=Object.values(this.state.leads).sort((a,b)=>Date.parse(b.firstSeenAt||b.lastSeenAt||0)-Date.parse(a.firstSeenAt||a.lastSeenAt||0));fs.writeFileSync(this.stateFile+'.tmp',JSON.stringify(this.state,null,2),{mode:0o600});fs.renameSync(this.stateFile+'.tmp',this.stateFile);fs.writeFileSync(this.feedFile,JSON.stringify({generatedAt:new Date().toISOString(),count:feed.length,items:feed},null,2),{mode:0o600});fs.writeFileSync(this.archiveFile,JSON.stringify({generatedAt:new Date().toISOString(),count:Object.keys(this.state.ignored).length,items:Object.values(this.state.ignored).sort((a,b)=>Date.parse(b.archivedAt||0)-Date.parse(a.archivedAt||0))},null,2),{mode:0o600});}catch{}}
   read(file,fallback){try{return JSON.parse(fs.readFileSync(file,'utf8'));}catch{return structuredClone(fallback);}}
   writeSecret(file,value){const tmp=`${file}.${process.pid}.${Date.now()}.tmp`;fs.writeFileSync(tmp,JSON.stringify(value,null,2),{mode:0o600});try{fs.chmodSync(tmp,0o600);}catch{}fs.renameSync(tmp,file);try{fs.chmodSync(file,0o600);}catch{}}
 }

@@ -1,3 +1,4 @@
+import { isRetiredResource } from './retired-resources.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -21,7 +22,7 @@ function mutate(env,fn){
 }
 function json(v,fallback){try{return JSON.parse(String(v||''));}catch{return fallback;}}
 export function resourcePolicy(provider,env=process.env){
-  const name=String(provider).toLowerCase();const custom=json(env.AUTONOMOS_FREE_RESOURCE_LIMITS_JSON,{})[name]||{};
+  const name=String(provider).toLowerCase();if(isRetiredResource(name,'providers')||isRetiredResource(name,'tools'))return{provider:name,allowed:false,reason:'DO_NOT_RESTORE',mode:'retired',limit:0};const custom=json(env.AUTONOMOS_FREE_RESOURCE_LIMITS_JSON,{})[name]||{};
   const owner=new Set([...OWNER_CAPPED_PROVIDERS,...String(env.AUTONOMOS_OWNER_CAPPED_PROVIDERS||'').split(',').map(x=>x.trim().toLowerCase()).filter(Boolean)]);
   if(owner.has(name))return{provider:name,mode:'owner_capped',allowed:true,providerCapVerified:false,ownerAttested:true,limit:null};
   const direct=DIRECT_FREE.has(name);
@@ -76,7 +77,8 @@ export function observeResourceResult(provider,result,env=process.env){
   else if(/(?:http_429|rate.limit|too.many.requests)/i.test(message))markResourceUnavailable(provider,message,env,new Date(Date.now()+60_000).toISOString());
   return result;
 }
-function notify(provider,detail,env){for(const fn of listeners){try{fn({provider,...detail,root:resourceRoot(env)});}catch{}}}
+const notified=new Map();
+function notify(provider,detail,env){const key=resourceRoot(env)+':'+provider+':'+detail.reason;if(Date.now()-(notified.get(key)||0)<60_000)return;notified.set(key,Date.now());if(notified.size>1000)notified.delete(notified.keys().next().value);for(const fn of listeners){try{fn({provider,...detail,root:resourceRoot(env)});}catch{}}}
 function periodKey(p){if(p.period==='lifetime')return'lifetime';if(p.resetAt)return`allowance:${p.resetAt}`;return new Date().toISOString().slice(0,p.period==='month'?7:10);}
 function resetDate(p){if(p.resetAt&&Date.parse(p.resetAt)>Date.now())return p.resetAt;if(p.period==='lifetime')return'9999-01-01T00:00:00.000Z';const now=new Date();return(p.period==='month'?new Date(Date.UTC(now.getUTCFullYear(),now.getUTCMonth()+1,1)):new Date(Date.UTC(now.getUTCFullYear(),now.getUTCMonth(),now.getUTCDate()+1))).toISOString();}
 export function resourceSnapshot(env=process.env){const extra=Object.keys(json(env.AUTONOMOS_FREE_RESOURCE_LIMITS_JSON,{}));return[...new Set([...OWNER_CAPPED_PROVIDERS,...DIRECT_FREE,'r2','coderabbit','langfuse','vercel','netlify','canva','figma',...extra])].map(x=>resourceAvailability(x,env));}

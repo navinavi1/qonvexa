@@ -1,9 +1,6 @@
+import { businessSnapshot } from './business-snapshot.js';
+import path from 'node:path';
 import fs from 'node:fs';
-import { RevenueLeadActioner } from './revenue-lead-actioner.js';
-import { GmailJobMonitor } from './gmail-job-monitor.js';
-import { GlobalWorkHunter } from './global-work-hunter.js';
-import { TaskForceWorker } from './taskforce-worker.js';
-import { DailyMoneyReporter } from './daily-money-reporter.js';
 import { DEFAULT_AUTONOMOS_CONFIG, normalizeConfig } from './policy-engine.js';
 import { allocateRevenue } from './profit-engine.js';
 
@@ -27,13 +24,12 @@ async function safeJson(r){try{return await r.json();}catch{return{};}}
 // 1) Once an email lead has been accepted, the browserless application worker must never
 // overwrite it back to inspecting/applying. This was a real lifecycle race between the
 // application lane and Gmail acceptance lane.
-const originalRevenueShouldInspect=RevenueLeadActioner.prototype.shouldBrowserlessInspect;
-RevenueLeadActioner.prototype.shouldBrowserlessInspect=function lifecycleAwareShouldInspect(lead){
+export function lifecycleAwareShouldInspect(lead, original){
   const action=this.state?.actions?.[lead?.id]||{};
   const status=String(action.status||'');
   if(EMAIL_ACCEPTED_RETRY.has(status)||['executing_email','delivery_email_in_progress','submitted_email','paid'].includes(status))return false;
   if(status==='submission_uncertain'&&action.acceptedAt)return false;
-  return originalRevenueShouldInspect.call(this,lead);
+  return original.call(this,lead);
 };
 
 // 2) Accepted email work previously became terminal by accident: statuses such as
@@ -41,7 +37,7 @@ RevenueLeadActioner.prototype.shouldBrowserlessInspect=function lifecycleAwareSh
 // not included in GmailJobMonitor.tick(), so they were never retried. Recover stale
 // execution after restarts, and reconcile ambiguous delivery by checking the Gmail thread
 // before ever attempting another send.
-GmailJobMonitor.prototype.tick=async function hardenedGmailTick(){
+export async function hardenedGmailTick(){
   if(this.running||!this.actioner)return;
   const config=this.actioner.currentConfig?.();if(config&&(config.killSwitch||config.enabled===false))return;
   this.running=true;
@@ -85,9 +81,9 @@ async function reconcileEmailDelivery(id,action){
     const from=String(row?.from||'').toLowerCase(),at=Date.parse(String(row?.at||0)),text=String(row?.text||'');
     return own&&from.includes(own)&&/Completed by AutonomOS|Deliverable files:/i.test(text)&&(!Number.isFinite(since)||!Number.isFinite(at)||at>=since-10*60_000);
   });
-  if(sent){
+  if(sent&&sent.id){
     const already=String(this.actioner.state?.actions?.[id]?.status||'')==='submitted_email';
-    this.actioner.setAction(id,{status:'submitted_email',submittedAt:action?.submittedAt||new Date().toISOString(),reconciledFromGmail:true,nextCheckAt:new Date(Date.now()+30*60_000).toISOString()});
+    this.actioner.setAction(id,{status:'submitted_email',gmailDeliveryMessageId:String(sent.id),submittedAt:action?.submittedAt||new Date().toISOString(),reconciledFromGmail:true,nextCheckAt:new Date(Date.now()+30*60_000).toISOString()});
     if(!already)this.actioner.state.stats.submitted=Number(this.actioner.state.stats.submitted||0)+1;
     this.log('email_delivery_reconciled',{id});return;
   }
@@ -115,20 +111,21 @@ async function reconcileEmailDelivery(id,action){
 // including apply_failed, counted as "already applied". Remove only stale definite failures
 // so the normal idempotent application path can try again. Also recover acceptance from the
 // authoritative IN_PROGRESS/WORKING task lists when a notification was missed.
-const originalPollTaskForce=GlobalWorkHunter.prototype.pollTaskForce;
-GlobalWorkHunter.prototype.pollTaskForce=async function hardenedPollTaskForce(credential){
+export async function hardenedPollTaskForce(credential, original){
   const apps=this.state?.taskforce?.applications||{};let released=0;
   for(const [taskId,app] of Object.entries(apps)){
-    if(String(app?.status||'').toLowerCase()==='apply_failed'&&ageMs(app?.at||app?.updatedAt)>15*60_000){delete apps[taskId];released++;}
+    if(String(app?.status||'').toLowerCase()==='apply_failed'&&app?.failure?.retryable!==false&&ageMs(app?.at||app?.updatedAt)>15*60_000){delete apps[taskId];released++;}
   }
   if(released)this.event?.('taskforce_failed_applications_requeued',{released});
-  const result=await originalPollTaskForce.call(this,credential);
+  const result=await original.call(this,credential);
   try{
     const h=tfHeaders(credential?.apiKey);let recovered=0;
     for(const status of ['IN_PROGRESS','WORKING']){
       const r=await fetch(`https://www.task-force.app/api/agent/tasks?status=${status}&limit=100`,{headers:h,signal:AbortSignal.timeout(12000)});const data=await safeJson(r);if(!r.ok)continue;
       for(const raw of arrayFrom(data,['tasks','items','data'])){
         const taskId=String(raw?.id||raw?.taskId||'').trim();if(!taskId||!apps[taskId])continue;
+        const assignments=raw.applications||[];const mine=assignments.find(a=>String(a.agentId||a.agent_id||'')===String(credential.agentId||''));
+        if(!credential.agentId||!(String(raw.assignedAgentId||raw.agentId||'')===String(credential.agentId)||mine&&TF_ACCEPTED.has(String(mine.status||'').toUpperCase())))continue;
         const prior=String(apps[taskId].status||'').toUpperCase();
         if(!TF_ACCEPTED.has(prior)){apps[taskId].status=status;apps[taskId].updatedAt=new Date().toISOString();recovered++;}
       }
@@ -140,19 +137,18 @@ GlobalWorkHunter.prototype.pollTaskForce=async function hardenedPollTaskForce(cr
 
 // 4) Persist a verified deliverable before TaskForce submission. A definite 4xx submission
 // failure no longer forces the agents to spend money and time executing the whole job again.
-const originalTaskForceSubmit=TaskForceWorker.prototype.submit;
-TaskForceWorker.prototype.submit=async function hardenedTaskForceSubmit(taskId,deliverable,qa,credential,meta={}){
+export async function hardenedTaskForceSubmit(taskId,deliverable,qa,credential,meta={},original){
   const prior=this.state.tasks?.[taskId]||{};
   this.state.tasks[taskId]={...prior,deliverableSnapshot:{content:String(deliverable?.content||'').slice(0,20000),format:String(deliverable?.format||'text/markdown'),evidence:{toolCalls:Array.isArray(deliverable?.evidence?.toolCalls)?deliverable.evidence.toolCalls.slice(-40):[]}},qaSnapshot:{ok:Boolean(qa?.ok),score:Number(qa?.score||1),mode:String(qa?.mode||''),reasons:Array.isArray(qa?.reasons)?qa.reasons.slice(0,8):[]},submitMeta:{started:Number(meta?.started||Date.now()),repairCycles:Number(meta?.repairCycles||0),budgetSpentUsd:Number(meta?.budgetSpentUsd||0)},updatedAt:new Date().toISOString()};
   this.persist();
-  return originalTaskForceSubmit.call(this,taskId,deliverable,qa,credential,meta);
+  return original.call(this,taskId,deliverable,qa,credential,meta);
 };
 
 // 5) Replace the old TaskForce one-item queue behavior with a recoverable sequential queue.
 // It still executes sequentially (no treasury race), but can finish several already-accepted
 // jobs per tick and retries capability/QA/definite-submit failures with bounded backoff.
-TaskForceWorker.prototype.tick=async function hardenedTaskForceTick(){
-  if(this.running)return;this.running=true;
+export async function hardenedTaskForceTick(){
+  if(this.running)return;const config=this.currentConfig();if(!config.enabled||config.killSwitch)return;this.running=true;
   try{
     const credential=this.read(this.secretFile,{}).taskforce;
     if(!credential?.apiKey||!credential?.verified){if(ageMs(this._lastAuthWaitLog)>5*60_000){this._lastAuthWaitLog=new Date().toISOString();this.event('worker_waiting_auth',{hasApiKey:Boolean(credential?.apiKey),verified:Boolean(credential?.verified)});}return;}
@@ -163,7 +159,9 @@ TaskForceWorker.prototype.tick=async function hardenedTaskForceTick(){
     const maxSequential=Math.max(1,Math.min(5,Number(this.env.AUTONOMOS_TASKFORCE_ACCEPTED_PER_TICK||3)));let processed=0;
     for(const [taskId,app] of accepted){
       const row=this.state.tasks[taskId]||{},status=String(row.status||''),appStatus=String(app?.status||'').toUpperCase();
-      if(TF_FINAL.has(status)||status==='submission_uncertain')continue;
+      if(status==='submitting'){this.state.tasks[taskId]={...row,status:'submission_uncertain',submitError:'restart_after_delivery_intent'};this.persist();continue;}
+      if((TF_FINAL.has(status)&&appStatus!=='SUBMISSION_REJECTED')||status==='submission_uncertain')continue;
+      if(row.retryAt&&!due(row.retryAt))continue;
       if(status==='blocked_capability'&&ageMs(row.updatedAt)<15*60_000)continue;
       if(status==='repair_exhausted'&&ageMs(row.updatedAt)<20*60_000)continue;
       if(status==='submit_failed'&&ageMs(row.updatedAt)<10*60_000)continue;
@@ -184,7 +182,7 @@ TaskForceWorker.prototype.tick=async function hardenedTaskForceTick(){
 
 // 6) Money/dashboard truth: include TaskForce accepted/executing/submitted states instead of
 // looking only at the global email/browser actioner. Revenue remains ledger-authoritative.
-DailyMoneyReporter.prototype.refresh=function hardenedMoneyRefresh(){try{
+export function hardenedMoneyRefresh(){try{
   const now=new Date(),day=now.toISOString().slice(0,10),root=this.root;
   const ledger=readNdjson(`${root}/ledger.ndjson`),hunter=readJson(`${root}/global-work-hunter.json`,{}),actioner=readJson(`${root}/global-lead-actioner.json`,{}),registry=readJson(`${root}/job-registry.json`,{}),tf=readJson(`${root}/taskforce-worker.json`,{}),config=normalizeConfig(readJson(`${root}/config.json`,{...DEFAULT_AUTONOMOS_CONFIG,enabled:true}));
   const todays=ledger.filter(x=>String(x?.at||'').startsWith(day)&&!x?.testnet);let gross=0,cost=0,fees=0,owner=0,treasury=0;const bySource={};
@@ -200,6 +198,7 @@ DailyMoneyReporter.prototype.refresh=function hardenedMoneyRefresh(){try{
     registryOpen:Object.values(registry||{}).filter(r=>!['archived','graveyard','rejected','expired','cancelled','settled','paid'].includes(String(r?.status||''))).length
   };
   const report={generatedAt:now.toISOString(),date:day,split:{ownerPercent:Number(config.ownerRevenuePercent||50),agentTreasuryPercent:Number(config.agentTreasuryPercent||50)},counts,money:{grossRevenueUsd:round(gross),feesUsd:round(fees),toolAndInfraCostUsd:round(cost),netProfitUsd:round(gross-fees-cost),ownerShareUsd:round(owner),agentTreasuryShareUsd:round(treasury)},bySource:Object.fromEntries(Object.entries(bySource).map(([k,v])=>[k,{revenueUsd:round(v.revenueUsd),costUsd:round(v.costUsd),netUsd:round(v.netUsd)}]).sort((a,b)=>b[1].netUsd-a[1].netUsd)),guardrails:{earnedFundsOnly:Boolean(config.earnedFundsOnly),allowExternalSpending:Boolean(config.allowExternalSpending),autoReplication:Boolean(config.autoReplication),survivalMode:Boolean(config.survivalMode)}};
+  const truth=businessSnapshot(path.dirname(this.root),this.env);report.counts={...report.counts,found:truth.counts.discovered,applied:truth.counts.applications,accepted:truth.counts.accepted,working:truth.counts.executing,submitted:truth.counts.delivered,paid:truth.counts.paid};report.funnel=truth.counts;
   writeJson(this.file,report,0o600);writeJson(this.publicFile,report,0o644);
   const summary={type:this.lastDaily!==day?'daily_money_report':'money_report_updated',date:day,netProfitUsd:report.money.netProfitUsd,ownerShareUsd:report.money.ownerShareUsd,agentTreasuryShareUsd:report.money.agentTreasuryShareUsd,...counts};this.lastDaily=day;this.logger.info?.('[MoneyReport] '+JSON.stringify(summary));
 }catch(error){try{this.logger.warn?.('[MoneyReport] '+safe(error));}catch{}}};

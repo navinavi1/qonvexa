@@ -1,7 +1,7 @@
+import { stopAcceptedExecutions } from '../src/autonomos/job-executor.js';
+import { GithubJobMonitor } from '../src/autonomos/github-job-monitor.js';
 import { startUnifiedCapabilities, migrateUnifiedRelease } from '../src/autonomos/unified-runtime-bootstrap.js';
 import 'dotenv/config';
-import '../src/autonomos/taskforce-live-recovery-patch.js';
-import '../src/autonomos/revenue-lifecycle-hardening-patch.js';
 import { cleanLegacyState } from '../src/autonomos/legacy-state-cleaner.js';
 import { LeanInternetHunter } from '../src/autonomos/lean-internet-hunter.js';
 import { ProfitFirstGlobalWorkHunter } from '../src/autonomos/profit-first-global-work-hunter.js';
@@ -38,24 +38,24 @@ const skillAcquirer=enabled(process.env.AUTONOMOS_SKILL_ACQUISITION_MODE,'true')
 const moneyReporter=new DailyMoneyReporter({env:process.env,storageDir:process.env.STORAGE_DIR,logger:console});
 const fiatRoutePlanner=new FiatCryptoRoutePlanner({env:process.env,storageDir:process.env.STORAGE_DIR,logger:console});
 const outboundEmailRequested=enabled(process.env.AUTONOMOS_BROWSERLESS_ACTIONER_ENABLED,'true');
-let browserlessActioner=null,gmailJobMonitor=null,emailGateTimer=null,emailGateRunning=false;
+let browserlessActioner=new FreeRevenueLeadActioner({env:process.env,storageDir:process.env.STORAGE_DIR,logger:console}),gmailJobMonitor=null,emailGateTimer=null,emailGateRunning=false;browserlessActioner.start();
+const githubJobMonitor=new GithubJobMonitor(browserlessActioner);githubJobMonitor.start();
 const taskForceVerifier=new TaskForceVerifier({env:process.env,storageDir:process.env.STORAGE_DIR,logger:console});
 const taskForceWorker=new TaskForceWorker({env:process.env,storageDir:process.env.STORAGE_DIR,logger:console});
 const globalFeedPublisher=new GlobalFeedPublisher({env:process.env,storageDir:process.env.STORAGE_DIR,logger:console});
 
 async function ensureRevenueEmailLane(){
-  if(!outboundEmailRequested||browserlessActioner||emailGateRunning)return Boolean(browserlessActioner);emailGateRunning=true;
+  if(!outboundEmailRequested||gmailJobMonitor||emailGateRunning)return Boolean(gmailJobMonitor);emailGateRunning=true;
   try{const probe=await probeRuntimeEmailChannel({env:process.env,logger:console});if(!probe?.ready){console.info('[RevenueEmailGate] '+JSON.stringify({ready:false,reason:String(probe?.reason||'gmail_not_ready')}));return false;}
-    browserlessActioner=new FreeRevenueLeadActioner({env:process.env,storageDir:process.env.STORAGE_DIR,logger:console});browserlessActioner.start();
     if(enabled(process.env.AUTONOMOS_GMAIL_JOB_MONITOR_ENABLED,'true')){gmailJobMonitor=new GmailJobMonitor({actioner:browserlessActioner,env:process.env,logger:console});gmailJobMonitor.start();}
     if(emailGateTimer){clearInterval(emailGateTimer);emailGateTimer=null;}console.info('[RevenueEmailGate] '+JSON.stringify({ready:true,started:true,reason:'gmail_send_authorized',capabilityMode:'free-first'}));return true;
   }catch(error){console.error('[RevenueEmailGate] '+JSON.stringify({ready:false,error:String(error?.message||error).slice(0,180)}));return false;}finally{emailGateRunning=false;}
 }
 
 internetHunter?.start();globalHunter.start();agrentingWorker?.start();marketScout?.start();marketExpansion?.start();skillLibrary.start();skillAcquirer?.start();moneyReporter.start();fiatRoutePlanner.start();
-if(outboundEmailRequested){await ensureRevenueEmailLane();if(!browserlessActioner){const every=Math.max(30_000,Number(process.env.AUTONOMOS_EMAIL_REAUTH_POLL_MS||60_000));emailGateTimer=setInterval(()=>ensureRevenueEmailLane().catch(()=>{}),every);emailGateTimer.unref?.();}}
+if(outboundEmailRequested){await ensureRevenueEmailLane();if(!gmailJobMonitor){const every=Math.max(30_000,Number(process.env.AUTONOMOS_EMAIL_REAUTH_POLL_MS||60_000));emailGateTimer=setInterval(()=>ensureRevenueEmailLane().catch(()=>{}),every);emailGateTimer.unref?.();}}
 taskForceVerifier.start();if(enabled(process.env.AUTONOMOS_TASKFORCE_WORKER_ENABLED,'true'))taskForceWorker.start();globalFeedPublisher.start();
 
-const stop=()=>{stopUnifiedCapabilities();internetHunter?.stop();globalHunter.stop();agrentingWorker?.stop();marketScout?.stop();marketExpansion?.stop();skillLibrary.stop();skillAcquirer?.stop();moneyReporter.stop();fiatRoutePlanner.stop();browserlessActioner?.stop();gmailJobMonitor?.stop();taskForceVerifier.stop();taskForceWorker.stop();globalFeedPublisher.stop();if(emailGateTimer)clearInterval(emailGateTimer);emailGateTimer=null;};
+const stop=()=>{stopAcceptedExecutions();githubJobMonitor.stop();stopUnifiedCapabilities();internetHunter?.stop();globalHunter.stop();agrentingWorker?.stop();marketScout?.stop();marketExpansion?.stop();skillLibrary.stop();skillAcquirer?.stop();moneyReporter.stop();fiatRoutePlanner.stop();browserlessActioner?.stop();gmailJobMonitor?.stop();taskForceVerifier.stop();taskForceWorker.stop();globalFeedPublisher.stop();if(emailGateTimer)clearInterval(emailGateTimer);emailGateTimer=null;};
 process.on('SIGTERM',stop);process.on('SIGINT',stop);await import('../server.js');
 function enabled(value,fallback='false'){return !/^(0|false|no|off)$/i.test(String(value??fallback));}

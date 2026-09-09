@@ -3,7 +3,7 @@ import crypto from 'node:crypto';
 // Survival Swarm has no business-level worker cap. These are only process-safety defaults:
 // the runtime creates workers only when accepted work needs them and retires them afterwards.
 // Operators can raise/lower them without changing earning logic.
-const DEFAULT_MAX_TASK_AGENTS = 100000;
+const DEFAULT_MAX_TASK_AGENTS = 64;
 const DEFAULT_MAX_PER_JOB = 64;
 const DEFAULT_TTL_MS = 30 * 60_000;
 
@@ -18,7 +18,7 @@ export class TaskAgentRuntime {
     // maxAgents is a scheduler hint, not a business cap. A larger deployment-level workforce
     // setting always wins so the swarm can grow with available work.
     const deploymentCapacity=Math.max(1,Number(this.env.AUTONOMOS_MAX_TASK_AGENTS||DEFAULT_MAX_TASK_AGENTS));
-    const configuredGlobal=Math.max(deploymentCapacity,Number(maxAgents||0));
+    const configuredGlobal=Math.min(deploymentCapacity,Number(maxAgents||deploymentCapacity));
     const perJob=Math.max(1,Math.min(configuredGlobal,Number(this.env.AUTONOMOS_MAX_TASK_AGENTS_PER_JOB||DEFAULT_MAX_PER_JOB)));
     const activeGlobal=[...this.agents.values()].filter(x=>x.status==='active').length;
     const slots=Math.max(0,Math.min(perJob,configuredGlobal-activeGlobal));

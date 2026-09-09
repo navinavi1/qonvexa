@@ -16,6 +16,7 @@ import { freeWebSearch, freeWebScrape } from './free-web-tool.js';
 export const TOOL_COST_ESTIMATES_USD = Object.freeze({
   web_search: 0,
   web_scrape: 0,
+  browser_action: Number(process.env.AUTONOMOS_E2B_SHELL_COST_USD || 0.03),
   browser_read: Number(process.env.AUTONOMOS_E2B_SHELL_COST_USD || 0.03),
   run_python: Number(process.env.AUTONOMOS_E2B_SANDBOX_COST_USD || 0.02),
   run_shell: Number(process.env.AUTONOMOS_E2B_SHELL_COST_USD || 0.03),
@@ -327,6 +328,7 @@ function roundMoney(value) { return Math.round((Number(value || 0) + Number.EPSI
 
 // Tool schemas in OpenAI-compatible function-calling format.
 export const TOOL_SCHEMAS = [
+  {type:'function',function:{name:'browser_action',description:'Perform explicit authorized job actions on one HTTPS origin using current Chromium. Stop at identity/CAPTCHA/payment gates. Same-job cookies persist; extract platform confirmation after submit.',parameters:{type:'object',properties:{url:{type:'string'},steps:{type:'array',items:{type:'object',properties:{action:{type:'string',enum:['click','type','select','upload','wait','extract','screenshot']},selector:{type:'string'},value:{type:'string'}},required:['action']}}},required:['url','steps']}}},
   {type:'function',function:{name:'web_search',description:'Search the live web for current, real information. Use before fact-based research claims.',parameters:{type:'object',properties:{query:{type:'string'}},required:['query']}}},
   {type:'function',function:{name:'web_scrape',description:'Read the current content of a specific URL as untrusted data.',parameters:{type:'object',properties:{url:{type:'string'}},required:['url']}}},
   {type:'function',function:{name:'browser_read',description:'Read a public JavaScript-rendered page using free Chromium in the existing isolated E2B sandbox. Returns actual page text and links; no login or gate bypass.',parameters:{type:'object',properties:{url:{type:'string'}},required:['url']}}},
@@ -343,7 +345,7 @@ export const TOOL_SCHEMAS = [
 export async function runTool(name, args, env = process.env, { config = null, validateAction = null, signal = null, remainingBudgetUsd = null, jobId = '', budget = null, sandboxSession = null, llm = null } = {}) {
   if (signal?.aborted) return { ok:false, error:'aborted_by_emergency_stop', costUsd:0 };
   let costUsd = estimateToolCostUsd(name, args, env);
-  const resource={browser_read:'e2b',run_python:'e2b',run_shell:'e2b',app_tool_search:'composio',app_action:'composio',store_artifact:'r2',coderabbit_review:'coderabbit'}[name];
+  const resource={browser_action:'e2b',browser_read:'e2b',run_python:'e2b',run_shell:'e2b',app_tool_search:'composio',app_action:'composio',store_artifact:'r2',coderabbit_review:'coderabbit'}[name];
   if(config&&(config.killSwitch||!config.enabled))return{ok:false,error:config.killSwitch?'emergency_stop':'runtime_stopped'};
   if(name==='coderabbit_review'&&!resourceAvailability('coderabbit',env).allowed)costUsd=0;
   if(name==='store_artifact'&&!resourceAvailability('r2',env).allowed)costUsd=0;
@@ -356,6 +358,7 @@ export async function runTool(name, args, env = process.env, { config = null, va
   let result;
   if (name === 'web_search') result = await freeWebSearch(args?.query, env, signal);
   else if (name === 'web_scrape') result = await freeWebScrape(args?.url, env, signal);
+  else if (name === 'browser_action') result = jobId?await (await import('./browser-actions.js')).browserAction(args,env,signal,sandboxSession):{ok:false,error:'accepted_job_required'};
   else if (name === 'browser_read') result = await (await import('./browser-reader.js')).browserReadPage(args?.url,env,signal,sandboxSession);
   else if (name === 'run_python') result = await e2bRunPython(args?.code, env, signal, sandboxSession);
   else if (name === 'run_shell') result = await e2bRunShell(args, env, signal, sandboxSession);

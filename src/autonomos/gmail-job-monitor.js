@@ -1,4 +1,5 @@
-import { GmailMailbox, isClientReply } from './gmail-mailbox.js';
+import { hardenedGmailTick } from './revenue-lifecycle.js';
+import { GmailMailbox, isClientReply, gmailMessageIdentity } from './gmail-mailbox.js';
 import { recoverFreeCapability } from './free-tool-recovery.js';
 import { composioExecute } from './composio-tool.js';
 import { classifyOpportunity } from './capabilities.js';
@@ -17,13 +18,7 @@ export class GmailJobMonitor{
   start(){if(this.timer||!this.actioner)return;const every=Math.max(60_000,Number(this.env.AUTONOMOS_GMAIL_JOB_MONITOR_MS||5*60_000));setTimeout(()=>this.tick().catch(e=>this.log('gmail_monitor_error',{error:safe(e)})),20_000).unref?.();this.timer=setInterval(()=>this.tick().catch(e=>this.log('gmail_monitor_error',{error:safe(e)})),every);this.timer.unref?.();this.log('gmail_job_monitor_started',{intervalMs:every});}
   stop(){if(this.timer)clearInterval(this.timer);this.timer=null;}
 
-  async tick(){
-    if(this.running||!this.actioner)return;this.running=true;
-    try{
-      const rows=Object.entries(this.actioner.state?.actions||{}).filter(([,a])=>['applied_email','submitted_email','email_needs_info'].includes(String(a?.status||''))&&(!a?.nextCheckAt||Date.parse(a.nextCheckAt)<=Date.now())).slice(0,20);
-      for(const [id,action] of rows)await this.checkOne(id,action);
-    }finally{this.running=false;this.actioner.persist?.();}
-  }
+  async tick(){return hardenedGmailTick.call(this);}
 
   async checkOne(id,action){
     const title=String(action?.title||'').trim();if(!title)return;
@@ -42,6 +37,7 @@ export class GmailJobMonitor{
     const text=String(latest.text||'').slice(0,12000);
     this.actioner.setAction(id,{lastProcessedReplyId:latest.id||'',replyMessageRfcId:latest.rfcMessageId||'',replySubject:latest.subject||'',lastEmailCheckedAt:new Date().toISOString()});
     if(String(action.status)==='submitted_email'){
+      if(/\b(?:revision requested|please revise|please fix|changes required|request changes)\b/i.test(text)){this.actioner.setAction(id,{status:'accepted_email',clientReply:text,revision:Number(action.revision||0)+1,nextCheckAt:''});await this.executeAndDeliver(id,this.actioner.state.actions[id]);return;}
       if(PAYMENT_SIGNAL.test(text)){
         // Email is NOT settlement truth. Surface the signal, but do not book revenue until
         // wallet/marketplace reconciliation proves funds actually arrived.
@@ -73,7 +69,8 @@ export class GmailJobMonitor{
     if(!capability.executable){this.actioner.setAction(id,{status:'accepted_needs_capability',missingTools:capability.missingTools||[],skill:capability.skill,nextCheckAt:new Date(Date.now()+60*60_000).toISOString()});return;}
     const config=this.actioner.currentConfig();const ledger=this.actioner.store.readNdjson('ledger.ndjson',-1);const treasury=computeEarnedSpendBudgetUsd(ledger,config);
     if(treasury<=0.000001){this.actioner.setAction(id,{status:'accepted_waiting_treasury',nextCheckAt:new Date(Date.now()+30*60_000).toISOString()});return;}
-    const budget=createJobBudget(treasury,{env:this.env,onCost:amount=>this.actioner.recordCost(id,amount)});const llm=budget.llm(this.actioner.llm);const executionConfig={...config,availableSpendUsd:treasury,maxPaidProcurementUsd:Math.max(Number(config.maxPaidProcurementUsd||0),treasury)};
+    const spendLimit=Math.min(treasury,Number(action.payout?.amountUsd||opportunity.budgetUsd||0)*.35,Number(config.maxPaidProcurementUsd||3));if(!(spendLimit>0)){this.actioner.setAction(id,{status:'accepted_waiting_treasury',nextCheckAt:new Date(Date.now()+1800000).toISOString()});return;}
+    const budget=createJobBudget(spendLimit,{env:this.env,onCost:amount=>this.actioner.recordCost(id,amount)});const llm=budget.llm(this.actioner.llm);const executionConfig={...config,availableSpendUsd:spendLimit,maxPaidProcurementUsd:spendLimit};
     let deliverable=null,qa=null,briefing='';const maxRepairs=Math.max(1,Math.min(5,Number(this.env.AUTONOMOS_GLOBAL_QA_REPAIRS||3)));
     for(let attempt=1;attempt<=maxRepairs;attempt++){
       this.actioner.setAction(id,{status:'executing_email',attempt,skill:capability.skill,treasuryBudgetUsd:treasury,budgetRemainingUsd:budget.remaining});
@@ -90,7 +87,7 @@ export class GmailJobMonitor{
     const subject=`Re: Application: ${String(action.title||lead.title||'Paid digital project').replace(/\s+/g,' ').slice(0,120)} — AutonomOS`;
     this.actioner.setAction(id,{status:'delivery_email_in_progress',deliveryRecipient:recipient,qaScore:Number(qa.score||1),budgetSpentUsd:budget.spent});
     const sent=await this.sendEmail(recipient,action.replySubject||subject,body,action);
-    if(sent.ok){this.actioner.setAction(id,{status:'submitted_email',submittedAt:new Date().toISOString(),emailDeliveryLogId:String(sent.logId||''),nextCheckAt:new Date(Date.now()+30*60_000).toISOString()});this.actioner.state.stats.submitted=Number(this.actioner.state.stats.submitted||0)+1;this.log('email_work_submitted',{id,qaScore:Number(qa.score||1)});return;}
+    if(sent.ok&&gmailMessageIdentity(sent.data).gmailMessageId){this.actioner.setAction(id,{gmailDeliveryMessageId:gmailMessageIdentity(sent.data).gmailMessageId,status:'submitted_email',submittedAt:new Date().toISOString(),emailDeliveryLogId:String(sent.logId||''),nextCheckAt:new Date(Date.now()+30*60_000).toISOString()});this.actioner.state.stats.submitted=Number(this.actioner.state.stats.submitted||0)+1;this.log('email_work_submitted',{id,qaScore:Number(qa.score||1)});return;}
     // Do not auto-resend after an external send attempt with ambiguous result.
     this.actioner.setAction(id,{status:'submission_uncertain',reason:`email delivery outcome uncertain: ${String(sent.error||'unknown').slice(0,220)}`,nextCheckAt:new Date(Date.now()+60*60_000).toISOString()});
   }

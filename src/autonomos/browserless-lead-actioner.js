@@ -11,7 +11,7 @@ const TERMINAL_STATUSES=new Set([
 ]);
 const NATIVE_HOSTS=/(^|\.)(task-force\.app|agentlancer\.io|workprotocol\.ai|dealwork\.ai)$/i;
 const APPLY_CONTEXT=/\b(apply|application|proposal|freelanc(?:e|er)|project|job|hiring|hire|contract|contractor|send\s+(?:your\s+)?(?:cv|resume|portfolio)|submit\s+(?:your\s+)?(?:cv|resume|portfolio))\b/i;
-const BAD_EMAIL_LOCAL=/^(?:no-?reply(?:[+.-].*)?|donotreply|notifications?|candidatehelpdesk|reasonable-accommodations|.*helpdesk.*|.*accommodations.*|privacy|security|abuse|billing|invoice|legal|dpo|press|media|webmaster)$/i;
+const BAD_EMAIL_LOCAL=/^(?:no-?reply(?:[+.-].*)?|donotreply|notifications?|support|help|helpdesk|candidatehelpdesk|reasonable-accommodations|.*helpdesk.*|.*accommodations.*|privacy|security|abuse|billing|invoice|legal|dpo|press|media|webmaster)$/i;
 const EMAIL_RE=/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/ig;
 const HREF_RE=/<a\b[^>]*href\s*=\s*["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/ig;
 const MAX_PAGE_BYTES=2_000_000;
@@ -26,7 +26,7 @@ export class BrowserlessLeadActioner extends GlobalLeadActioner{
   }
 
   async tick(){
-    if(this.running)return;
+    if(this.running)return;const config=this.currentConfig();if(!config.enabled||config.killSwitch)return;
     if(!truthy(this.env.AUTONOMOS_BROWSERLESS_ACTIONER_ENABLED,'true'))return;
     this.running=true;
     try{

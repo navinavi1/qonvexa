@@ -129,7 +129,7 @@ await ok('multi-chain EVM treasury defaults include Base, Arbitrum and Polygon',
 
 await ok('earning connector list excludes zero-payout discovery-only Agentverse noise', () => {
   const statuses = connectorStatuses({}, { enabled:false, configured:false, mode:'disabled' }, {});
-  assert.equal(statuses.find(x=>x.id==='clawlancer').status, 'auto_bootstrap_available');
+  assert.equal(statuses.some(x=>x.id==='clawlancer'), false);
   assert.equal(statuses.some(x=>x.id==='agentverse'), false);
   assert.equal(statuses.some(x=>x.id==='unknown-retired-source'), false);
 });

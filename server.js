@@ -1,3 +1,4 @@
+import { businessSnapshot } from './src/autonomos/business-snapshot.js';
 import { serveLocalArtifact } from './src/autonomos/local-artifacts.js';
 import 'dotenv/config';
 import express from 'express';
@@ -8,9 +9,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { createAutonomOS } from './src/autonomos/runtime.js';
-import { hydrateWorkProtocolRegistration } from './src/autonomos/workprotocol-bootstrap.js';
 
-await hydrateWorkProtocolRegistration(process.env,{logger:console});
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -347,7 +346,7 @@ app.get('/api/admin/settings', requireAdmin, (_req, res) => {
 // AutonomOS owner control plane (same authenticated owner session as QONVEXA).
 // ─────────────────────────────────────────────────────────────────────────────
 app.get('/api/admin/autonomos', requireAdmin, async (_req, res) => {
-  res.json(await autonomos.snapshot());
+  res.json({...await autonomos.snapshot(),business:businessSnapshot(process.env.STORAGE_DIR,process.env)});
 });
 
 app.patch('/api/admin/autonomos/config', requireAdmin, requireSameSiteMutation, (req, res) => {
