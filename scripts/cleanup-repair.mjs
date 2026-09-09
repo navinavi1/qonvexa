@@ -55,12 +55,22 @@ s=s.replace(/\n\s*await test\('Superteam checks the current agent permission and
 s=s.replace(/\n\s*await test\('Old competitive intents respect disabled autopost and revalidate before recovery',[\s\S]*?\n\s*\}\);/m,'');
 fs.writeFileSync(p,s);
 
-// The clean UI consumes an already-clean published feed; it should not carry a second
-// hard-coded museum of retired marketplace names merely to filter them client-side.
 p='scripts/marketplace-ui-test.mjs';
 s=fs.readFileSync(p,'utf8');
 s=s.replace(/,\n\s*\{id:'legacy1',source:'t2000'[^\n]+\}/,'');
 s=s.replace(/\nassert\(!feed\.textContent\.includes\('Old T2000 noise'\),'obsolete source rows must be filtered from the live feed'\);/,'');
+fs.writeFileSync(p,s);
+
+// Platform assertions must describe the intentionally small current stack: no Stagehand,
+// no AWS secrets-manager adapter, no cloud-browser tool. Shell remains the free browser
+// fallback, and Dealwork is the generic marketplace-managed payout example.
+p='scripts/autonomos-platform-test.mjs';
+s=fs.readFileSync(p,'utf8');
+s=s.replace("const infra=infrastructureStatus({DATABASE_URL:'postgresql://x',REDIS_URL:'redis://x',NATS_URL:'nats://x',OPENAI_API_KEY:'x',AUTONOMOS_AWS_SECRET_ID:'secret/autonomos'});","const infra=infrastructureStatus({DATABASE_URL:'postgresql://x',REDIS_URL:'redis://x',OPENAI_API_KEY:'x'});");
+s=s.replace("assert.ok(infra.some(x=>x.id==='stagehand'&&!x.configured));","assert.equal(infra.some(x=>x.id==='stagehand'),false);");
+s=s.replace("assert.equal(infra.find(x=>x.id==='secrets_manager').configured,true);","assert.equal(infra.some(x=>x.id==='secrets_manager'),false);");
+s=s.replace("assert.equal(selectPayoutRoute({currency:'USDC',marketplace:'t2000',supportedMethods:['marketplace'],amountUsd:5},env).rail,'marketplace_managed','marketplace wallet must not be mislabeled as direct owner payout');","assert.equal(selectPayoutRoute({currency:'USDC',marketplace:'dealwork',supportedMethods:['marketplace'],amountUsd:5},env).rail,'marketplace_managed','marketplace balance must not be mislabeled as direct owner payout');");
+s=s.replace("assert.ok(TOOL_SCHEMAS.some(x=>x.function.name==='browser_task'));","assert.equal(TOOL_SCHEMAS.some(x=>x.function.name==='browser_task'),false);");
 fs.writeFileSync(p,s);
 
 console.log('[cleanup-repair] retired function tails/connectors removed and audits/regressions aligned to clean architecture');
