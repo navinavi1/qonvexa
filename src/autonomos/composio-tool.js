@@ -29,11 +29,16 @@ async function composioExecuteImpl({toolSlug,arguments:args={},connectedAccountI
     if(!isAllowed(slug,toolkit,env))return{ok:false,error:'composio_tool_blocked_by_financial_destructive_or_allowlist_policy'};
     const normalizedToolkit=normalizeApp(toolkit);
     if(['canva','figma'].includes(normalizedToolkit)&&/(?:GENERATE|AI_|MAGIC|PREMIUM|PURCHASE|SUBSCRIBE)/i.test(slug))return{ok:false,error:'paid_media_operation_requires_verified_free_allowance',replacementRequired:true,alternatives:['e2b_open_source_media']};
-    {const allowance=await reserveResource(normalizedToolkit,1,env);if(!allowance.ok)return{...allowance,alternatives:normalizedToolkit==='canva'||normalizedToolkit==='figma'?['e2b_open_source_media']:['existing_connected_apps','open_source_recipe']};}
+    {const allowance=await reserveResource(normalizedToolkit==='gmail'&&/(?:FETCH|GET|LIST|SEARCH)/.test(slug)?'gmail_read':normalizedToolkit,1,env);if(!allowance.ok)return{...allowance,alternatives:normalizedToolkit==='canva'||normalizedToolkit==='figma'?['e2b_open_source_media']:['existing_connected_apps','open_source_recipe']};}
     const version=validVersion(toolVersion)||validVersion(info.version)||await resolveCatalogVersion(slug,toolkit,key,signal);
     const accountMap=parseJson(env.AUTONOMOS_COMPOSIO_ACCOUNTS_JSON,{});
     let account=String(connectedAccountId||accountMap[toolkit]||accountMap[toolkit.toLowerCase()]||'');
     if(!account&&toolkit)account=await resolveConnectedAccountId(toolkit,key,signal);
+    if(slug==='GMAIL_SEND_EMAIL'&&args._autonomos_thread_id){
+      const mail=extractGmailSendFields(args);
+      if(!mail||!account||!/^[a-zA-Z0-9_-]{1,200}$/.test(String(args._autonomos_thread_id))||!/^<[^<>\r\n]{1,500}>$/.test(String(args._autonomos_in_reply_to||'')))return{ok:false,error:'gmail_reply_metadata_invalid'};
+      return gmailProxySend({key,account,mail:{...mail,threadId:args._autonomos_thread_id,inReplyTo:args._autonomos_in_reply_to},signal});
+    }
     const payload={arguments:args||{},...(version?{version}:{}),...(account?{connected_account_id:account}:{}),...(userId?{user_id:String(userId)}:{})};
     const response=await fetch(`https://backend.composio.dev/api/v3.1/tools/execute/${encodeURIComponent(slug)}`,{
       method:'POST',headers:{'content-type':'application/json','x-api-key':key},
@@ -127,7 +132,7 @@ async function gmailProxySend({key,account,mail,signal}){
   try{
     const response=await fetch('https://backend.composio.dev/api/v3.1/tools/execute/proxy',{
       method:'POST',headers:{'content-type':'application/json','x-api-key':key,accept:'application/json'},
-      body:JSON.stringify({connected_account_id:account,endpoint:'/gmail/v1/users/me/messages/send',method:'POST',body:{raw}}),
+      body:JSON.stringify({connected_account_id:account,endpoint:'/gmail/v1/users/me/messages/send',method:'POST',body:{raw,...(mail.threadId?{threadId:mail.threadId}:{})}}),
       signal:withTimeout(45000,signal)
     });
     const body=await response.json().catch(()=>({}));
@@ -149,11 +154,12 @@ async function gmailProxySend({key,account,mail,signal}){
   }catch(error){return{ok:false,error:signal?.aborted?'aborted_by_emergency_stop':String(error?.message||error).slice(0,300),detail:'',needsConnectedAccount:false};}
 }
 
-function buildRawGmailMessage({to,subject,body}){
+function buildRawGmailMessage({to,subject,body,inReplyTo}){
   const encodedSubject=/^[\x20-\x7E]*$/.test(subject)?subject:`=?UTF-8?B?${Buffer.from(subject,'utf8').toString('base64')}?=`;
   const message=[
     `To: ${to}`,
     `Subject: ${encodedSubject}`,
+    ...(inReplyTo?[`In-Reply-To: ${inReplyTo}`,`References: ${inReplyTo}`]:[]),
     'MIME-Version: 1.0',
     'Content-Type: text/plain; charset=UTF-8',
     'Content-Transfer-Encoding: 8bit',

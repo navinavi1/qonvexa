@@ -5,8 +5,8 @@ import crypto from 'node:crypto';
 // Provider billing caps and our usage caps are different facts. Never infer a free
 // plan, unused trial credits, or permission to buy from the presence of an API key.
 export const OWNER_CAPPED_PROVIDERS = Object.freeze(['openai','e2b','composio','trigger']);
-const DIRECT_FREE = new Set(['public_http','github','local_artifact','canva','figma','duckduckgo','gmail','google_drive','google_sheets','google_calendar','slack','notion']);
-const DEFAULT_LIMITS = {public_http:2000,github:4000,local_artifact:128*1024*1024,canva:50,figma:100,duckduckgo:2000,gmail:200,google_drive:1000,google_sheets:1000,google_calendar:500,slack:500,notion:500};
+const DIRECT_FREE = new Set(['public_http','github','local_artifact','canva','figma','duckduckgo','gmail','gmail_read','browser_read','google_drive','google_sheets','google_calendar','slack','notion']);
+const DEFAULT_LIMITS = {public_http:2000,github:4000,local_artifact:128*1024*1024,canva:50,figma:100,duckduckgo:2000,gmail:200,gmail_read:5000,browser_read:100,google_drive:1000,google_sheets:1000,google_calendar:500,slack:500,notion:500};
 const listeners = new Set();
 const volatile = new Map();
 

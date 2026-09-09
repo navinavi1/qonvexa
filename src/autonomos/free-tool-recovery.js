@@ -6,7 +6,7 @@ import { resourceAvailability, onResourceUnavailable, resourceRoot } from './res
 // Install only known open-source packages inside the existing isolated sandbox.
 // Discovered web pages never become shell instructions, credentials or billing consent.
 const RECIPES=Object.freeze({
-  browser:{command:"npm install --prefix /home/user --no-audit --no-fund playwright@1.55.0 && /home/user/node_modules/.bin/playwright install chromium && node - <<'JS'\nconst {chromium}=require('/home/user/node_modules/playwright');(async()=>{const b=await chromium.launch({headless:true,args:['--no-sandbox']});const p=await b.newPage();await p.setContent('<title>AutonomOS probe</title>');if(await p.title()!=='AutonomOS probe')throw Error('browser_probe_failed');await b.close();console.log('verified_browser');})();\nJS",proof:'verified_browser'},
+  browser:{command:'node /home/user/autonomos-browser.cjs --network',proof:'verified_browser'},
   design_media_tool:{command:"python -m pip install --disable-pip-version-check --index-url https://pypi.org/simple 'Pillow>=11.3,<12' 'imageio-ffmpeg>=0.6,<0.7' && python - <<'PY'\nfrom PIL import Image\nimport imageio_ffmpeg,subprocess,os\nos.makedirs('/home/user/bin',exist_ok=True)\np='/home/user/bin/ffmpeg'\nif not os.path.exists(p): os.symlink(imageio_ffmpeg.get_ffmpeg_exe(),p)\nImage.new('RGB',(2,2)).save('/tmp/autonomos-probe.png')\nsubprocess.run([imageio_ffmpeg.get_ffmpeg_exe(),'-version'],check=True,stdout=subprocess.DEVNULL)\nprint('verified_media')\nPY",proof:'verified_media'},
   document_generation:{command:"python -m pip install --disable-pip-version-check --index-url https://pypi.org/simple 'python-docx>=1.2,<2' 'python-pptx>=1.0,<2' 'openpyxl>=3.1,<4' 'pypdf>=6,<7' && python -c \"import docx,pptx,openpyxl,pypdf;print('verified_documents')\"",proof:'verified_documents'}
 });
@@ -21,12 +21,12 @@ export async function recoverFreeCapability(gap,env=process.env,{sandboxSession=
     if(key==='github_pr'||key==='sandbox_shell'){await refreshCapabilities(env);const c=unifiedCapabilityContext(env);return{ok:key==='github_pr'?c.hasGithubPrTool:c.hasShellTool,route:key==='github_pr'?'github_contents_pr':'e2b_shell'};}
     const recipe=RECIPES[key];if(!recipe)return discoverFreeReplacements(key,env,signal);
     if(!resourceAvailability('e2b',env).allowed)return{ok:false,error:'sandbox_resource_unavailable',gap:key,retryable:true};
-    const {e2bRunShell}=await import('./tools.js');const result=await e2bRunShell({command:recipe.command},{...env,AUTONOMOS_E2B_COMMAND_TIMEOUT_MS:'180000'},signal,sandboxSession);
+    const {e2bRunShell}=await import('./tools.js');const result=await e2bRunShell({command:recipe.command,...(key==='browser'?{files:[{path:'autonomos-browser.cjs',content:fs.readFileSync(new URL('./browser-runtime.cjs',import.meta.url),'utf8')}]}:{})},{...env,AUTONOMOS_E2B_COMMAND_TIMEOUT_MS:'180000'},signal,sandboxSession);
     const ok=result.ok&&String(result.stdout).includes(recipe.proof);const name=key==='browser'?'browser':key==='design_media_tool'?'media':'documents';
     // Every job gets a new sandbox: this proof establishes a reproducible recipe,
     // while prepareExecutionTools installs/verifies it in the job's actual sandbox.
     recordCapabilityProof(name,ok,{recipe:key,requiresPerSessionInstall:true},env);
-    return{ok,route:'open_source_in_existing_sandbox',recipe:key,proof:ok?recipe.proof:'',error:ok?'':result.error||result.stderr||'replacement_probe_failed'};
+    return{ok,route:'open_source_in_existing_sandbox',recipe:key,proof:ok?recipe.proof:'',details:ok?String(result.stdout).slice(-1200):'',error:ok?'':[result.error,result.stderr,result.stdout].filter(Boolean).join('\n').slice(-1800)||'replacement_probe_failed'};
   })();inFlight.set(id,task);try{return await task;}finally{inFlight.delete(id);}
 }
 export async function prepareExecutionTools(opportunity,capability,env,options={}){

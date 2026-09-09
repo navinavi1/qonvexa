@@ -1,3 +1,4 @@
+import { gmailMessageIdentity } from './gmail-mailbox.js';
 import { minimumJobPayoutUsd } from './payout-floor.js';
 import { SearchFirstLeadActioner } from './search-first-lead-actioner.js';
 import { composioExecute } from './composio-tool.js';
@@ -8,7 +9,7 @@ const COLLECTION_TITLE=/(?:^|\b)\d+\s+(?:places?|ways?|sites?|websites?|resource
 const GENERIC_COUNT_TITLE=/^\s*\d+\s+(?:remote\s+)?(?:jobs|vacancies|openings|freelance jobs)\b/i;
 const SPECIFIC_ROLE_OR_REQUEST=/\b(request for proposals|\brfp\b|hiring|seeking|looking for|wanted|needed|required|opening|vacancy|contractor|freelance\s+(?:developer|writer|translator|designer|researcher|tester|engineer|assistant|specialist|consultant)|developer|engineer|writer|translator|designer|researcher|tester|quality assurance|\bqa\b|analyst|assistant|specialist|consultant|manager|moderator|copywriter|editor|proofreader|data entry|automation|advertising|ads?|ppc|paid search|media buying|campaign|lead generation|sales ops|crm|email marketing|newsletter|content moderation|customer success|bookkeeping|market research|product research|recruiting sourcing|project management|operations|accessibility|localization|subtitles|data labeling|annotation|prompt engineering|ai evaluation|api integration|wordpress|shopify|webflow|podcast|audio editing|landing page|conversion rate optimization|cro)\b/i;
 const JOB_URL_HINT=/\/(?:job|project|gig|bounty|opportunity|opening|vacancy)(?:\/|\?|$)/i;
-const KNOWN_MARKETPLACE_HOST=/(^|\.)(freelancer\.com|guru\.com|workana\.com|contra\.com|peopleperhour\.com|truelancer\.com|upwork\.com|fiverr\.com)$/i;
+const KNOWN_MARKETPLACE_HOST=/(^|\.)(freelancer\.(?:com(?:\.[a-z]{2})?|[a-z]{2})|guru\.com|workana\.com|contra\.com|peopleperhour\.com|truelancer\.com|upwork\.com|fiverr\.com)$/i;
 const MARKETPLACE_APPLICATION_LOCAL=/^(?:apply|applications?|jobs?|careers?|talent|projects?|freelance|freelancers|bount(?:y|ies)|hiring|proposals?)$/i;
 // Employment feeds often expose an annual salary that previously looked like a huge project budget.
 // AutonomOS is an autonomous services agency: salary/employee roles are leads to ignore, while explicit
@@ -50,8 +51,9 @@ export class RevenueLeadActioner extends SearchFirstLeadActioner{
     if(Number(payout?.amountUsd||0)<floor){if(id)this.setAction(id,{status:'payout_unverified',reason:`priced payout below verification floor (${Number(payout?.amountUsd||0)} < ${floor})`,nextRetryAt:new Date(Date.now()+12*60*60_000).toISOString()});this.event('lead_application_suppressed',{id,host,reason:'payout_not_priced_above_floor',amountUsd:Number(payout?.amountUsd||0),floor});return;}
 
     const routeEmail=String(route?.email||'').trim().toLowerCase();
+    if(this.state.mailboxBouncedRecipients?.[routeEmail]){this.setAction(id,{status:'no_direct_route',reason:'previous delivery to this recipient bounced',nextRetryAt:new Date(Date.now()+6*60*60_000).toISOString()});return;}
     const [local,domain]=routeEmail.split('@');
-    if(KNOWN_MARKETPLACE_HOST.test(String(host||''))&&domain&&domain===String(host||'').replace(/^www\./,'').toLowerCase()&&!MARKETPLACE_APPLICATION_LOCAL.test(String(local||''))){
+    if(KNOWN_MARKETPLACE_HOST.test(String(host||''))&&domain&&KNOWN_MARKETPLACE_HOST.test(domain)){
       if(id)this.setAction(id,{status:'native_marketplace_auth_required',reason:'marketplace listing requires authenticated/native application route; generic platform email is not a valid bid',nextRetryAt:new Date(Date.now()+6*60*60_000).toISOString(),applicationUrl:String(lead?.url||''),payout,skill:capability?.skill||''});
       this.event('lead_application_suppressed',{id,host,reason:'native_marketplace_auth_required'});return;
     }
@@ -62,7 +64,7 @@ export class RevenueLeadActioner extends SearchFirstLeadActioner{
     const prior=this.state.actions?.[id]||{};if(['email_send_in_progress','applied_email','application_uncertain'].includes(String(prior.status||'')))return;
     this.setAction(id,{status:'email_send_in_progress',recipient:route.email,applicationUrl:lead.url,proposal:String(proposal||'').slice(0,1800),payout,skill:capability.skill,emailStartedAt:new Date().toISOString(),nextRetryAt:''});
     const result=await composioExecute({toolSlug:'GMAIL_SEND_EMAIL',arguments:{recipient_email:String(route.email||''),subject:String(subject||'').slice(0,240),body:String(body||'').slice(0,7000)}},this.env);
-    if(result.ok){this.setAction(id,{status:'applied_email',appliedAt:new Date().toISOString(),emailLogId:String(result.logId||''),recipient:route.email,reason:'targeted application sent to explicit public application contact',nextCheckAt:new Date(Date.now()+30*60_000).toISOString()});this.state.stats.applied=Number(this.state.stats.applied||0)+1;this.event('lead_applied_email',{id,host,recipient:maskEmail(route.email),title:String(lead.title||'').slice(0,120),amountUsd:payout.amountUsd,currency:payout.currency,skill:capability.skill});return;}
+    if(result.ok){this.setAction(id,{status:'applied_email',appliedAt:new Date().toISOString(),emailLogId:String(result.logId||''),...gmailMessageIdentity(result.data),emailSubject:subject,recipient:route.email,reason:'targeted application sent to explicit public application contact',nextCheckAt:new Date(Date.now()+30*60_000).toISOString()});this.state.stats.applied=Number(this.state.stats.applied||0)+1;this.event('lead_applied_email',{id,host,recipient:maskEmail(route.email),title:String(lead.title||'').slice(0,120),amountUsd:payout.amountUsd,currency:payout.currency,skill:capability.skill});return;}
     if(result.needsConnectedAccount||/connected.?account|auth|unauthor|forbidden/i.test(`${result.error||''} ${result.detail||''}`)){this.setAction(id,{status:'email_channel_unavailable',reason:String(result.detail||result.error||'gmail_not_connected').slice(0,240),nextRetryAt:new Date(Date.now()+60*60_000).toISOString()});return;}
     this.setAction(id,{status:'application_uncertain',reason:`email send outcome uncertain: ${String(result.detail||result.error||'unknown').slice(0,220)}`,recipient:route.email,nextCheckAt:new Date(Date.now()+60*60_000).toISOString()});
   }

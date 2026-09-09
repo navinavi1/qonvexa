@@ -6,7 +6,7 @@ import { createLlmClient } from './llm.js';
 
 const HUMAN_GATE=/\b(captcha|kyc|government id|identity verification|selfie|phone verification|sms verification|2fa|mfa|human verification|verify your identity)\b/i;
 const HUMAN_IDENTITY=/\b(legal first name|legal last name|date of birth|social security|passport|driver'?s license|national id|personal tax id)\b/i;
-const TERMINAL=/\b(position filled|no longer accepting|applications? closed|job closed|job expired|listing expired|cancelled|canceled|completed)\b/i;
+const TERMINAL=/\b(position filled|no longer accepting|applications? closed|job closed|job expired|listing expired|(?:job|project|task|listing) (?:is |was |has been )?(?:cancelled|canceled|completed))\b/i;
 const AI_PROHIBITED=/\b(no ai|ai[- ]generated (?:content|work) (?:is )?not allowed|do not use ai|human[- ]written only|no chatgpt)\b/i;
 const EMPLOYMENT_ONLY=/\b(full[- ]time employee|part[- ]time employee|employment application|employee benefits|salary per year|on[- ]site required)\b/i;
 const PAID_SIGNAL=/\b(paid|budget|fixed[- ]price|hourly|compensation|reward|bounty|usdt|usdc|usd|eur|gbp|eth|sol|btc)\b/i;

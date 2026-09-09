@@ -10,7 +10,7 @@ import { allocateRevenue } from './profit-engine.js';
 const EMAIL_ACCEPTED_RETRY = new Set([
   'accepted_email','accepted_needs_capability','accepted_waiting_treasury','accepted_repair_exhausted'
 ]);
-const EMAIL_MONITOR = new Set(['applied_email','submitted_email','email_needs_info']);
+const EMAIL_MONITOR = new Set(['applied_email','submitted_email','email_needs_info','application_uncertain']);
 const TF_ACCEPTED = new Set(['ACCEPTED','IN_PROGRESS','WORKING','ASSIGNED','AWARDED','SUBMISSION_REJECTED']);
 const TF_FINAL = new Set(['submitted','completed','paid','rejected_after_repairs']);
 const PAYMENT_SIGNAL=/\b(?:payment sent|payment released|funds released|paid you|payment completed|transaction (?:hash|id)|usdc sent|usdt sent)\b/i;
@@ -42,8 +42,11 @@ RevenueLeadActioner.prototype.shouldBrowserlessInspect=function lifecycleAwareSh
 // execution after restarts, and reconcile ambiguous delivery by checking the Gmail thread
 // before ever attempting another send.
 GmailJobMonitor.prototype.tick=async function hardenedGmailTick(){
-  if(this.running||!this.actioner)return;this.running=true;
+  if(this.running||!this.actioner)return;
+  const config=this.actioner.currentConfig?.();if(config&&(config.killSwitch||config.enabled===false))return;
+  this.running=true;
   try{
+    await this.probeMailbox();
     const entries=Object.entries(this.actioner.state?.actions||{}).filter(([,a])=>{
       const s=String(a?.status||'');
       if(EMAIL_MONITOR.has(s)||EMAIL_ACCEPTED_RETRY.has(s)||s==='submission_uncertain')return due(a?.nextCheckAt);

@@ -10,7 +10,7 @@ import { validateAction } from './policy-engine.js';
 import { buildAcceptanceContract, validateAcceptanceContract, buildEvidencePack } from './acceptance-engine.js';
 
 const VERIFY_TOOLS_BY_SKILL = Object.freeze({
-  'web-research': new Set(['web_search','web_scrape','browser_task']),
+  'web-research': new Set(['web_search','web_scrape','browser_read']),
   'code-analysis': new Set(['run_python','run_shell']),
   'data-transform': new Set(['run_python','run_shell'])
 });
@@ -65,6 +65,7 @@ async function executeOpportunity(opportunity, capability, { llm, siteUrl='', en
 
   add('web_search');
   add('web_scrape');
+  if (actualCapabilities.hasBrowserTool) add('browser_read');
   if (actualCapabilities.hasShellTool) { add('run_python'); add('run_shell'); }
   if (actualCapabilities.hasAppTool) { add('app_tool_search'); add('app_action'); }
   if (actualCapabilities.hasArtifactTool) add('store_artifact');
@@ -93,7 +94,7 @@ async function executeOpportunity(opportunity, capability, { llm, siteUrl='', en
     acceptedSurvivalJob ? `This job is already accepted. No Abandon is active. Keep repairing, changing tools, or using specialist help until the acceptance contract is satisfied, while staying inside the remaining agent-treasury budget of $${availableBudget.toFixed(4)}.` : '',
     availableTools.length ? `Available real tools: ${toolNames}. Use the real tool when the task depends on current facts, code execution, a connected app, an interactive website, a generated file, code review, a PR, or deployment.` : '',
     availableTools.some(t=>t.function.name==='app_tool_search') ? 'For connected apps, use app_tool_search before app_action when you do not already know the exact current Composio tool slug. Do not guess slugs.' : '',
-    availableTools.some(t=>t.function.name==='run_shell') ? 'Shell and Python share the same filesystem for this execution; use /home/user and explicit working directories in commands. For coding work, actually install dependencies/run tests/builds in E2B. If the customer needs downloadable files, use collectPaths or store_artifact so the final answer can contain durable artifact URLs.' : '',
+    availableTools.some(t=>t.function.name==='run_shell') ? 'For browser work use const {launchBrowser}=require("/home/user/autonomos-browser.cjs"); const browser=await launchBrowser(); then Playwright pages, goto, locators, fill, click and screenshots; close the browser after use. Never claim browsing succeeded without actual page evidence. Shell and Python share the same filesystem for this execution; use /home/user and explicit working directories in commands. For coding work, actually install dependencies/run tests/builds in E2B. If the customer needs downloadable files, use collectPaths or store_artifact so the final answer can contain durable artifact URLs.' : '',
     availableTools.some(t=>t.function.name==='open_pull_request') ? 'For public GitHub repo changes, test first, then use open_pull_request. It only opens a PR and never merges. Never claim the change is live unless an explicit deployment tool succeeds.' : '',
     highValueCodeReview ? 'This is high-value coding work. After implementation/tests, run coderabbit_review on the changed code. It uses CodeRabbit when available, otherwise the independent reviewer on the existing LLM. A review reporting defects must be repaired; a provider outage must not remove QA.' : '',
     requiresVerification ? `Verification is mandatory for this skill: at least one of these tools must succeed before final answer: ${[...verificationTools].join(', ')}.` : '',

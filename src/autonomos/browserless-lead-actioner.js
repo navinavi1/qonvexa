@@ -1,3 +1,4 @@
+import { gmailMessageIdentity } from './gmail-mailbox.js';
 import { GlobalLeadActioner } from './global-lead-actioner.js';
 import { classifyOpportunity } from './capabilities.js';
 import { composioSearch, composioExecute } from './composio-tool.js';
@@ -10,7 +11,7 @@ const TERMINAL_STATUSES=new Set([
 ]);
 const NATIVE_HOSTS=/(^|\.)(task-force\.app|agentlancer\.io|workprotocol\.ai|dealwork\.ai)$/i;
 const APPLY_CONTEXT=/\b(apply|application|proposal|freelanc(?:e|er)|project|job|hiring|hire|contract|contractor|send\s+(?:your\s+)?(?:cv|resume|portfolio)|submit\s+(?:your\s+)?(?:cv|resume|portfolio))\b/i;
-const BAD_EMAIL_LOCAL=/^(?:no-?reply|donotreply|privacy|security|abuse|billing|invoice|legal|dpo|press|media|webmaster)$/i;
+const BAD_EMAIL_LOCAL=/^(?:no-?reply(?:[+.-].*)?|donotreply|notifications?|candidatehelpdesk|reasonable-accommodations|.*helpdesk.*|.*accommodations.*|privacy|security|abuse|billing|invoice|legal|dpo|press|media|webmaster)$/i;
 const EMAIL_RE=/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/ig;
 const HREF_RE=/<a\b[^>]*href\s*=\s*["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/ig;
 const MAX_PAGE_BYTES=2_000_000;
@@ -70,7 +71,7 @@ export class BrowserlessLeadActioner extends GlobalLeadActioner{
       if(disposition){this.archive(id,disposition.status,disposition.reason);return;}
 
       const capabilityText=`${String(lead.title||'')}\n${String(lead.snippet||'')}`.slice(0,6000);
-      const capability=classifyOpportunity(this.toOpportunity(lead,capabilityText),{...this.capabilityContext(),hasBrowserTool:false});
+      const capability=classifyOpportunity(this.toOpportunity(lead,capabilityText),this.capabilityContext());
       if(!capability.executable){
         this.setAction(id,{status:'needs_capability',missingTools:capability.missingTools||[],skill:capability.skill,nextRetryAt:new Date(Date.now()+6*60*60_000).toISOString()});
         this.event('browserless_lead_needs_capability',{id,host,skill:capability.skill,missingTools:capability.missingTools||[]});return;
@@ -125,7 +126,7 @@ export class BrowserlessLeadActioner extends GlobalLeadActioner{
     }
     const result=await composioExecute({toolSlug:tool.slug,arguments:args},this.env);
     if(result.ok){
-      this.setAction(id,{status:'applied_email',appliedAt:now(),emailLogId:String(result.logId||''),recipient:route.email,reason:'targeted application sent to explicit public application contact',nextCheckAt:new Date(Date.now()+30*60_000).toISOString()});
+      this.setAction(id,{status:'applied_email',appliedAt:now(),emailLogId:String(result.logId||''),...gmailMessageIdentity(result.data),emailSubject:subject,recipient:route.email,reason:'targeted application sent to explicit public application contact',nextCheckAt:new Date(Date.now()+30*60_000).toISOString()});
       this.state.stats.applied=Number(this.state.stats.applied||0)+1;
       this.event('lead_applied_email',{id,host,recipient:maskEmail(route.email),title:String(lead.title||'').slice(0,120),amountUsd:payout.amountUsd,currency:payout.currency,skill:capability.skill});return;
     }
@@ -160,8 +161,10 @@ export function discoverApplyLinks(html,baseUrl=''){
 
 function pushEmailCandidate(out,email,context,baseUrl){
   const normalized=String(email||'').trim().toLowerCase();if(!/^[^@\s]+@[^@\s]+\.[a-z]{2,}$/i.test(normalized))return;
-  const local=normalized.split('@')[0];if(BAD_EMAIL_LOCAL.test(local))return;
+  const local=normalized.split('@')[0];if(BAD_EMAIL_LOCAL.test(local)||/(?:^|[+._-])no-?reply(?:$|[+._-])/i.test(local))return;
   const ctx=stripHtml(context);if(!APPLY_CONTEXT.test(ctx))return;
+  if(/\.(?:png|jpg|svg|comwrote)$/i.test(normalized)||/^(?:your|you|name|username|email)@(?:email|example)\.com$/i.test(normalized))return;
+  if(/(?:for example|example email|sample email|placeholder|reasonable accommodations|candidate helpdesk)/i.test(ctx))return;
   let score=10;
   if(/apply|application|proposal/i.test(ctx))score+=8;
   if(/freelanc|project|contract|job|hiring/i.test(ctx))score+=5;

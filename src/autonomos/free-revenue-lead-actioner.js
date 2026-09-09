@@ -11,7 +11,6 @@ export class FreeRevenueLeadActioner extends RevenueLeadActioner{
     if(isRetiredMarket(lead))return false;
     const action=this.state?.actions?.[lead?.id];
     const source=normalizedSource(lead);
-    if(TRUSTED_PAID_TASK_SOURCES.has(source)&&String(action?.status||'')==='archived'&&/not a specific paid work listing|not_specific_work_listing/i.test(String(action?.reason||'')))return true;
     if(TRUSTED_PAID_TASK_SOURCES.has(source)&&String(action?.status||'')==='no_direct_route'){
       const next=Date.parse(String(action?.nextRetryAt||0));
       return !Number.isFinite(next)||next<=Date.now();
@@ -34,15 +33,6 @@ export class FreeRevenueLeadActioner extends RevenueLeadActioner{
   async sendApplicationEmailOnce(args){
     const lead=args?.lead||{};
     if(isRetiredMarket(lead))return {ok:false,reason:'marketplace_retired'};
-    const source=normalizedSource(lead);
-    if(TRUSTED_PAID_TASK_SOURCES.has(source)){
-      const enriched={
-        ...lead,
-        title:/\b(?:needed|required|wanted|bounty|project|task|contractor|freelance)\b/i.test(String(lead.title||''))?String(lead.title||''):`Freelance project needed: ${String(lead.title||'Paid digital task')}`,
-        snippet:`Paid freelance task/project. Apply or submit a proposal for the stated payout. ${String(lead.snippet||'')}`
-      };
-      return super.sendApplicationEmailOnce({...args,lead:enriched});
-    }
     return super.sendApplicationEmailOnce(args);
   }
 }

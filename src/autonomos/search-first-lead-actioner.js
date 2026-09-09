@@ -1,3 +1,4 @@
+import { minimumJobPayoutUsd } from './payout-floor.js';
 import { BrowserlessLeadActioner, discoverEmailRoutes, discoverApplyLinks } from './browserless-lead-actioner.js';
 import { classifyOpportunity } from './capabilities.js';
 import { freeWebSearch } from './free-web-tool.js';
@@ -13,7 +14,8 @@ const SEARCH_STOPWORDS=new Set(['the','and','for','with','from','this','that','y
 export class SearchFirstLeadActioner extends BrowserlessLeadActioner{
   shouldBrowserlessInspect(lead){
     const action=this.state?.actions?.[lead?.id];
-    if(String(action?.status||'')==='needs_capability'){
+    if(['needs_capability','capability_blocked'].includes(String(action?.status||''))){
+      if(classifyLeadCapability(lead,this.capabilityContext()).executable)return true;
       const next=Date.parse(String(action?.nextRetryAt||0));
       return !Number.isFinite(next)||next<=Date.now();
     }
@@ -41,7 +43,7 @@ export class SearchFirstLeadActioner extends BrowserlessLeadActioner{
         this.event('searchfirst_needs_capability',{id,host,skill:capability.skill,missingTools:capability.missingTools||[]});return;
       }
       const payout=this.resolvePayout(lead,evidenceText);
-      if(!payout.paid){this.setAction(id,{status:'payout_unverified',nextRetryAt:new Date(Date.now()+6*60*60_000).toISOString()});return;}
+      if(!payout.paid||Number(payout.amountUsd||0)<minimumJobPayoutUsd(this.env)){this.setAction(id,{status:'payout_unverified',nextRetryAt:new Date(Date.now()+6*60*60_000).toISOString()});return;}
 
       // GitHub bounty/issues should not be forced through an email-only route. When the
       // linked GitHub token can comment on an open public issue, post one transparent
@@ -79,7 +81,7 @@ export class SearchFirstLeadActioner extends BrowserlessLeadActioner{
           }
         }
       }
-      routes=rankRoutes(routes.filter(validRoute));
+      routes=rankRoutes(routes.filter(validRoute).filter(route=>!this.state.mailboxBouncedRecipients?.[String(route.email).toLowerCase()]));
       const route=routes[0];
       if(!route){
         const reason=page.ok?'no verified direct application route found':'aggregator/direct page blocked; free search found no verified application route';
@@ -101,12 +103,12 @@ export class SearchFirstLeadActioner extends BrowserlessLeadActioner{
 
 function classifyLeadCapability(lead,context){
   const rich=`${String(lead?.title||'')}\n${String(lead?.snippet||'')}`.slice(0,6000);
-  const first=classifyOpportunity(toCapabilityOpportunity(lead,rich),{...context,hasBrowserTool:false});
+  const first=classifyOpportunity(toCapabilityOpportunity(lead,rich),context);
   const missing=Array.isArray(first?.missingTools)?first.missingTools.map(String):[];
   if(first.executable||missing.length!==1||missing[0]!=='design_media_tool'||!TEXTUAL_SKILLS.has(String(first.skill||''))||looksLikeRealMediaLead(lead))return first;
   const cleanedTitle=String(lead?.title||'').replace(MEDIA_TERM,' ').replace(/\s+/g,' ').trim();
   const narrow=`${String(lead?.category||'')}\n${cleanedTitle}`.slice(0,1800);
-  return classifyOpportunity(toCapabilityOpportunity({...lead,title:cleanedTitle},narrow),{...context,hasBrowserTool:false});
+  return classifyOpportunity(toCapabilityOpportunity({...lead,title:cleanedTitle},narrow),context);
 }
 function toCapabilityOpportunity(lead,description){return{source:'global-web',externalId:String(lead?.id||''),title:String(lead?.title||'Paid digital work'),description,category:String(lead?.category||'general-digital'),budgetUsd:Number(lead?.amountUsd||0),currency:String(lead?.payoutCurrency||'USD'),network:lead?.cryptoPayout?'crypto':'fiat',escrowed:Boolean(lead?.payoutVerified),claimMode:'competitive_submission',status:'open',url:String(lead?.url||''),skills:[]};}
 function looksLikeRealMediaLead(lead){const category=String(lead?.category||'').toLowerCase();if(/^(?:graphic-design|ui-ux|video|audio|design)$/.test(category))return true;const title=String(lead?.title||'').toLowerCase();return /\b(?:design|create|make|edit|produce|render)\b.{0,35}\b(?:logo|illustration|brand identity|figma|canva|video|motion graphics|3d|cover art)\b|\b(?:logo|graphic|figma|video|motion|3d)\s+(?:designer|editor|artist|project|needed|wanted)\b/i.test(title);}

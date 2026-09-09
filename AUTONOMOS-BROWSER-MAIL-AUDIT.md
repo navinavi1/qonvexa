@@ -1,0 +1,19 @@
+# Browser and Gmail recovery — 2026-09-09
+
+Baseline: `ab198c5844802adafc8d5083179420928b1a33c6` in navinavi1/qonvexa.
+
+1. Browser recovery previously returned only `exit status 1`, obscuring the installation error. The replacement uses pinned Playwright Core 1.63.0 and Chromium 152.0.0, including native libraries and fonts, in the existing E2B sandbox. Package extraction preserves container ownership. A successful capability proof requires JavaScript, form filling, clicking, screenshot generation and a public HTTPS page read in E2B. Each job installs/verifies the same recipe in its own sandbox. Diagnostic stderr is retained on failure.
+2. Search-first and direct lead classification explicitly forced browser availability to false. Both now use the verified capability registry. Newly available capabilities unblock previously waiting leads. Agents have a `browser_read` tool for public JavaScript pages and a Playwright helper for authorized browser workflows. Browser recovery checks run at most five minutes apart; a still-valid browser proof prevents repeated probe installations.
+3. Gmail monitoring relied on a fuzzy tool catalog search, an exact subject query and incomplete message snippets. Monitoring now resolves the configured active Gmail account, reads full MIME threads through the existing Composio connection, saves message/thread IDs, and recovers historical threads from the actual sent application. Replies must match the client sender and thread. RFC reply headers and Gmail thread IDs are preserved when replying.
+4. Automated acknowledgements, quoted old messages, outgoing mail and unknown senders cannot trigger acceptance. Each incoming message is processed once. Reading has a separate daily quota from sending. Inbox/Sent readability and delivery failures are logged without disclosing message bodies.
+5. Live read-only Gmail inspection found failed delivery to malformed/example/platform addresses and automated responses from helpdesks. No accepted paid order was established in the inspected messages. Contact extraction rejects those invalid routes; platform contact addresses are not treated as native bids. Gmail-confirmed bounced contacts are excluded from subsequent applications. Accepted obligations are preserved.
+6. The free-source wrapper previously fabricated freelance intent around leads. That fabrication is removed. Generic mention of “completed projects” no longer closes an otherwise live listing. GitHub fallback searches open issues for work queries rather than presenting repository roots as jobs. The $5 minimum applies before GitHub applications as well as email applications.
+
+## Verification and limits
+
+- Regression coverage exercises MIME decoding, sender/thread binding, automatic/quoted reply exclusion, independent quotas, malformed read responses, reply threading, bounce handling, invalid contacts and listing closure.
+- A real local Chromium 152.0.7977.0 process passed JavaScript, fill, click and screenshot checks. Public HTTPS navigation is checked separately in the deployed E2B recipe; the local environment's external browser request returned ERR_EMPTY_RESPONSE.
+- Full `npm run verify` passed before packaging. Render will run the same build gate before deployment.
+- Browser software adds no subscription. E2B and Composio remain existing owner-capped services, not newly free compute or independently verified provider billing caps.
+- At the pre-change native-market snapshot: 151 opportunities, 0 claimed; 106 rejected below payout floor, 29 for market funding requirements, 12 expired/closed, 1 unpriced, 1 permanently deduplicated and 2 other. Browser/mail fixes do not create funded jobs or grant missing marketplace account access.
+- No diagnostic emails, client applications, payments or marketplace claims were sent by the audit. The existing authorized runtime continues its own workflow after deployment.

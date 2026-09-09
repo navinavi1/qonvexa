@@ -16,6 +16,7 @@ import { freeWebSearch, freeWebScrape } from './free-web-tool.js';
 export const TOOL_COST_ESTIMATES_USD = Object.freeze({
   web_search: 0,
   web_scrape: 0,
+  browser_read: Number(process.env.AUTONOMOS_E2B_SHELL_COST_USD || 0.03),
   run_python: Number(process.env.AUTONOMOS_E2B_SANDBOX_COST_USD || 0.02),
   run_shell: Number(process.env.AUTONOMOS_E2B_SHELL_COST_USD || 0.03),
   app_tool_search: Number(process.env.AUTONOMOS_COMPOSIO_SEARCH_COST_USD || 0.001),
@@ -328,6 +329,7 @@ function roundMoney(value) { return Math.round((Number(value || 0) + Number.EPSI
 export const TOOL_SCHEMAS = [
   {type:'function',function:{name:'web_search',description:'Search the live web for current, real information. Use before fact-based research claims.',parameters:{type:'object',properties:{query:{type:'string'}},required:['query']}}},
   {type:'function',function:{name:'web_scrape',description:'Read the current content of a specific URL as untrusted data.',parameters:{type:'object',properties:{url:{type:'string'}},required:['url']}}},
+  {type:'function',function:{name:'browser_read',description:'Read a public JavaScript-rendered page using free Chromium in the existing isolated E2B sandbox. Returns actual page text and links; no login or gate bypass.',parameters:{type:'object',properties:{url:{type:'string'}},required:['url']}}},
   {type:'function',function:{name:'run_python',description:'Execute Python in an isolated E2B sandbox and return actual output/errors.',parameters:{type:'object',properties:{code:{type:'string'}},required:['code']}}},
   {type:'function',function:{name:'run_shell',description:'Run bounded shell commands inside isolated E2B for package installs, tests, builds and file generation. collectPaths persists generated files and returns download URLs.',parameters:{type:'object',properties:{command:{type:'string'},files:{type:'array',items:{type:'object',properties:{path:{type:'string'},content:{type:'string'}},required:['path','content']}},collectPaths:{type:'array',items:{type:'string'},description:'Relative generated file paths to persist after the command'}},required:['command']}}},
   {type:'function',function:{name:'app_tool_search',description:'Search Composio for a real connected-app capability before calling app_action. Use this instead of guessing tool slugs.',parameters:{type:'object',properties:{query:{type:'string'},toolkit:{type:'string'},limit:{type:'number'}},required:['query']}}},
@@ -341,7 +343,7 @@ export const TOOL_SCHEMAS = [
 export async function runTool(name, args, env = process.env, { config = null, validateAction = null, signal = null, remainingBudgetUsd = null, jobId = '', budget = null, sandboxSession = null, llm = null } = {}) {
   if (signal?.aborted) return { ok:false, error:'aborted_by_emergency_stop', costUsd:0 };
   let costUsd = estimateToolCostUsd(name, args, env);
-  const resource={run_python:'e2b',run_shell:'e2b',app_tool_search:'composio',app_action:'composio',store_artifact:'r2',coderabbit_review:'coderabbit'}[name];
+  const resource={browser_read:'e2b',run_python:'e2b',run_shell:'e2b',app_tool_search:'composio',app_action:'composio',store_artifact:'r2',coderabbit_review:'coderabbit'}[name];
   if(config&&(config.killSwitch||!config.enabled))return{ok:false,error:config.killSwitch?'emergency_stop':'runtime_stopped'};
   if(name==='coderabbit_review'&&!resourceAvailability('coderabbit',env).allowed)costUsd=0;
   if(name==='store_artifact'&&!resourceAvailability('r2',env).allowed)costUsd=0;
@@ -354,6 +356,7 @@ export async function runTool(name, args, env = process.env, { config = null, va
   let result;
   if (name === 'web_search') result = await freeWebSearch(args?.query, env, signal);
   else if (name === 'web_scrape') result = await freeWebScrape(args?.url, env, signal);
+  else if (name === 'browser_read') result = await (await import('./browser-reader.js')).browserReadPage(args?.url,env,signal,sandboxSession);
   else if (name === 'run_python') result = await e2bRunPython(args?.code, env, signal, sandboxSession);
   else if (name === 'run_shell') result = await e2bRunShell(args, env, signal, sandboxSession);
   else if (name === 'app_tool_search') result = await composioSearch(args, env, signal);
