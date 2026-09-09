@@ -9,8 +9,4 @@ s=read('public/admin.html');
 s=s.replace(/^.*(?:Superteam min|t2000 min|t2000 priority|t2000 premium).*\n/gmi,'');
 write('public/admin.html',s);
 
-s=read('public/admin.js');
-s=s.replace(/^.*t2000.*\n/gmi,'');
-write('public/admin.js',s);
-
-console.log('[cleanup-postfix] remaining paid-search/browser and T2000 dashboard references removed');
+console.log('[cleanup-postfix] remaining paid-search/browser and obsolete dashboard controls removed');
