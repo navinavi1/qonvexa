@@ -18,11 +18,19 @@ jobs:
           node-version: '24.14.1'
           cache: npm
       - name: Apply the complete cleanup in one workspace pass
-        run: node scripts/mega-clean-all-at-once.mjs
+        run: |
+          node scripts/mega-clean-all-at-once.mjs
+          node scripts/mega-clean-residue-pass.mjs
       - name: Regenerate lockfile once
         run: npm install --package-lock-only --ignore-scripts
       - name: Install cleaned dependency graph
         run: npm ci --include=dev
+      - name: Verify production startup graph before full suite
+        run: node scripts/startup-module-graph-test.mjs
+      - name: Run full repository verification
+        run: npm run verify
+      - name: Production dependency audit
+        run: npm audit --omit=dev --audit-level=high
       - name: Prove retired code is physically absent
         shell: bash
         run: |
@@ -30,7 +38,7 @@ jobs:
           PATTERN='t2000|superteam|tavily|firecrawl|browserbase|stagehand|temporal|opensearch|auth0|litellm|secrets_manager|aws_secret|nats_url|clawjobs|moltjobs'
           TARGETS=(src scripts server.js public package.json .env.example .env.production.example render.yaml README.md DEPLOY.md)
           set +e
-          MATCHES=$(grep -RInE --exclude='mega-clean-all-at-once.mjs' "$PATTERN" "${TARGETS[@]}" 2>/dev/null)
+          MATCHES=$(grep -RInE --exclude='mega-clean-*.mjs' "$PATTERN" "${TARGETS[@]}" 2>/dev/null)
           CODE=$?
           set -e
           if [ "$CODE" -eq 0 ]; then
@@ -40,16 +48,10 @@ jobs:
           fi
           [ "$CODE" -eq 1 ] || exit "$CODE"
           echo 'Retired-code residue scan: PASS'
-      - name: Verify production startup graph before full suite
-        run: node scripts/startup-module-graph-test.mjs
-      - name: Run full repository verification
-        run: npm run verify
-      - name: Production dependency audit
-        run: npm audit --omit=dev --audit-level=high
       - name: Commit the single cleaned staging tree
         shell: bash
         run: |
-          rm -f scripts/mega-clean-all-at-once.mjs .github/workflows/staging-mega-clean.yml
+          rm -f scripts/mega-clean-all-at-once.mjs scripts/mega-clean-residue-pass.mjs .github/workflows/staging-mega-clean.yml
           git config user.name 'AutonomOS Cleanup'
           git config user.email 'actions@users.noreply.github.com'
           git add -A
