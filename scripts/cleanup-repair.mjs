@@ -73,4 +73,23 @@ s=s.replace("assert.equal(selectPayoutRoute({currency:'USDC',marketplace:'t2000'
 s=s.replace("assert.ok(TOOL_SCHEMAS.some(x=>x.function.name==='browser_task'));","assert.equal(TOOL_SCHEMAS.some(x=>x.function.name==='browser_task'),false);");
 fs.writeFileSync(p,s);
 
+// Workforce coverage must not require deleted marketplace connectors. Keep the generic
+// MCP, economics, settlement, orchestration and workforce invariants, but use only active
+// source labels and remove the retired Superteam submission-payload scenario.
+p='scripts/autonomos-workforce-test.mjs';
+s=fs.readFileSync(p,'utf8');
+s=s.replace("import { deliverMarketplaceJob } from '../src/autonomos/connectors/index.js';\n",'');
+s=s.replace(/\/\/ The MCP 2025-06-18 spec requires the MCP-Protocol-Version header on every HTTP[\s\S]*?assert\.equal\(new McpHttpClient\(\{url:'https:\/\/mcp\.t2000\.ai\/mcp'\}\)\.headers\(\)\['mcp-protocol-version'\],'2025-06-18','every request must carry the negotiated protocol version header'\);/m,"// Every MCP request must carry the negotiated protocol version header.\nassert.equal(new McpHttpClient({url:'https://mcp.example.test/mcp'}).headers()['mcp-protocol-version'],'2025-06-18','every request must carry the negotiated protocol version header');");
+s=s.replace(/\/\/ Same class of bug as the learning fix in agency-intelligence\.js,[\s\S]*?\n\}\n\n\/\/ Per superteam\.fun\/earn\/agents,[\s\S]*?\n\}\n\n(?=\/\/ Each candidate's cost)/m,`// Submitted-but-unsettled work must remain pending in outcome history.\n{\n  const rows=[\n    {source:'dealwork',id:'a',status:'settled'},\n    {source:'dealwork',id:'b',status:'delivered'},\n    {source:'dealwork',id:'c',status:'delivered'},\n  ];\n  const result=estimateOutcomeProbability({source:'dealwork',budgetUsd:500},{executable:true,missingTools:[]},rows);\n  assert.equal(result.history.samples,1,'only the confirmed settlement counts as a sample');\n  assert.equal(result.history.pending,2,'unconfirmed deliveries must be tracked separately, not folded into successes');\n}\n\n`);
+s=s.replace(/source:'t2000'/g,"source:'workprotocol'");
+s=s.replace(/source:'superteam'/g,"source:'dealwork'");
+s=s.replace(/\['t2000'/g,"['workprotocol'");
+s=s.replace(/source:\s*'t2000'/g,"source:'workprotocol'");
+s=s.replace(/source:\s*'superteam'/g,"source:'dealwork'");
+s=s.replace(/ledger:\[\{type:'revenue',source:'t2000'/g,"ledger:[{type:'revenue',source:'workprotocol'");
+s=s.replace(/before first crypto payment commissioning must run one job at a time/g,'before first confirmed payment commissioning must run one job at a time');
+s=s.replace(/higher-value crypto candidate/g,'higher-value active-rail candidate');
+s=s.replace(/after a real crypto settlement normal concurrency may resume/g,'after a real settlement normal concurrency may resume');
+fs.writeFileSync(p,s);
+
 console.log('[cleanup-repair] retired function tails/connectors removed and audits/regressions aligned to clean architecture');
