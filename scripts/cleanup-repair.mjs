@@ -47,14 +47,20 @@ s=s.replace('import { firecrawlSearch } from "../src/autonomos/tools.js";','impo
 s=s.replace(/const originalFetch = globalThis\.fetch;[\s\S]*?console\.log\("PASS Firecrawl v2 web envelope and schema drift"\);/m,`const originalFetch = globalThis.fetch;\ntry {\n  globalThis.fetch = async () => new Response('<a class="result__a" href="https://example.org">Research</a>', {status:200,headers:{'content-type':'text/html'}});\n  const r = await freeWebSearch('query', { AUTONOMOS_FREE_SEARCH_MIN_GAP_MS:'0' });\n  assert(r.ok);\n  assert.equal(r.provider,'free_public_web');\n  assert.equal(r.results[0].url,'https://example.org/');\n  globalThis.fetch = async () => new Response('rate limited',{status:429});\n  assert.equal((await freeWebSearch('query-2',{AUTONOMOS_FREE_SEARCH_MIN_GAP_MS:'0'})).ok,false);\n} finally {\n  globalThis.fetch = originalFetch;\n}\nconsole.log('PASS free public web search envelope and HTTP failure handling');`);
 fs.writeFileSync(p,s);
 
-// Remove both Superteam-only execution/recovery scenarios. Generic queue, recovery,
-// checkpoint, budget and concurrency tests remain and still protect the active rails.
 p='scripts/execution-queue-test.mjs';
 s=fs.readFileSync(p,'utf8');
 s=s.replace("import {verifySuperteamEligibility,claimMarketplaceJob} from '../src/autonomos/connectors/index.js';\n",'');
 s=s.replace("import {classifyFailure} from '../src/autonomos/job-registry.js';\n",'');
 s=s.replace(/\n\s*await test\('Superteam checks the current agent permission and deadline before claiming',[\s\S]*?\n\s*\}\);/m,'');
 s=s.replace(/\n\s*await test\('Old competitive intents respect disabled autopost and revalidate before recovery',[\s\S]*?\n\s*\}\);/m,'');
+fs.writeFileSync(p,s);
+
+// The clean UI consumes an already-clean published feed; it should not carry a second
+// hard-coded museum of retired marketplace names merely to filter them client-side.
+p='scripts/marketplace-ui-test.mjs';
+s=fs.readFileSync(p,'utf8');
+s=s.replace(/,\n\s*\{id:'legacy1',source:'t2000'[^\n]+\}/,'');
+s=s.replace(/\nassert\(!feed\.textContent\.includes\('Old T2000 noise'\),'obsolete source rows must be filtered from the live feed'\);/,'');
 fs.writeFileSync(p,s);
 
 console.log('[cleanup-repair] retired function tails/connectors removed and audits/regressions aligned to clean architecture');
