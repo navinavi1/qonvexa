@@ -183,7 +183,14 @@ export async function hardenedTaskForceTick(){
       }
       if(processed>=maxSequential)break;
     }
-    await Promise.allSettled(queued.map(run=>run()));
+    // Sequential, as the comment above this function has always claimed. Promise.allSettled
+    // started up to AUTONOMOS_TASKFORCE_ACCEPTED_PER_TICK jobs at once, each having sized its
+    // spend limit from the same ledger snapshot; createJobBudget.charge() then re-checked
+    // under a lock and threw shared_treasury_spend_limit, killing jobs mid-execution after
+    // they had already booked cost rows — which drains the very pool they were competing for.
+    for(const run of queued){
+      try{await run();}catch(error){this.event('queued_task_failed',{error:safe(error)});}
+    }
     const pending=Object.values(apps).filter(a=>String(a?.status||'').toUpperCase()==='PENDING').length;
     if(accepted.length||pending)this.event('worker_queue_diagnostics',{accepted:accepted.length,pending,processed,localTasks:Object.keys(this.state.tasks||{}).length});
   }finally{this.running=false;}

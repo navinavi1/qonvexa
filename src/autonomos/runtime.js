@@ -426,6 +426,26 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
       return {ok:true,archived,inFlightRetired,financialHistoryPreserved:true};
     },
 
+    // Record working capital the owner actually provided. Without this the agents deadlock
+    // on a cold start: the spend pool is a one-time seed, every attempt appends a cost row,
+    // and a job has to run to earn the revenue that would refill it. This creates no money —
+    // it is an auditable ledger row for funding the owner already paid for (API credits),
+    // and it counts in full toward the agent treasury rather than being split 50/50.
+    fundAgentTreasury({amountUsd=0,note=''}={}){
+      const amount=Number(amountUsd);
+      if(!Number.isFinite(amount)||amount<=0)return{ok:false,reason:'amount_must_be_positive'};
+      if(amount>100000)return{ok:false,reason:'amount_above_sane_limit'};
+      const entry=ledgerEntry({
+        id:`fund_${Date.now().toString(36)}_${crypto.randomBytes(3).toString('hex')}`,
+        type:'owner_funding',source:'owner',amountUsd:amount,grossUsd:amount,
+        status:'recorded',note:String(note||'owner working capital').slice(0,200)
+      });
+      appendUniqueLedgerEntry(store,entry);
+      const available=computeEarnedSpendBudgetUsd(store.readNdjson('ledger.ndjson',-1),config);
+      event('agent_treasury_funded',{amountUsd:amount,availableUsd:available});
+      return{ok:true,amountUsd:amount,availableUsd:available};
+    },
+
     retryTransientFailures(){
       for(const key of Object.keys(claimAttempts))if(jobRegistry.get(key)?.failureOwner==='transient')delete claimAttempts[key];
       store.writeJson('claim-attempts.json',claimAttempts);

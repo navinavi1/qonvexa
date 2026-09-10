@@ -413,6 +413,19 @@ app.post('/api/admin/autonomos/treasury/refresh', requireAdmin, requireSameSiteM
   res.json(await autonomos.refreshTreasury());
 });
 
+// Records working capital the owner provided, so the agents' spend pool can be refilled
+// without waiting for revenue they cannot earn while the pool is empty. Owner-only, and
+// written to ledger.ndjson like every other movement.
+app.post('/api/admin/autonomos/treasury/fund', requireAdmin, requireSameSiteMutation, (req, res) => {
+  const result = autonomos.fundAgentTreasury({
+    amountUsd: Number(req.body?.amountUsd),
+    note: clean(req.body?.note || '', 200)
+  });
+  if (!result.ok) return res.status(400).json(result);
+  logAdminEvent('autonomos_treasury_funded', { amountUsd: result.amountUsd });
+  res.json(result);
+});
+
 app.get('/api/admin/autonomos/product-preview/:productId', requireAdmin,
   rateLimit({ windowMs: 5 * 60 * 1000, max: 20 }),
   async (req, res) => {

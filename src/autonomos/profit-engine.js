@@ -68,6 +68,16 @@ export function allocateRevenue(amountUsd, config = {}) {
   return {ownerUsd:reserveUsd,treasuryUsd:round(growthUsd+experimentUsd),reserveUsd,growthUsd,experimentUsd,mode:'legacy_allocation'};
 }
 
+// The agents' working float. Without this being fundable the system deadlocks on a cold
+// start: the pool is the one-time seedSpendBudgetUsd, every attempt (successful or not)
+// appends a cost row, and once the pool reaches zero no job can execute — but a job has to
+// execute to earn the revenue that would refill it. Revenue still only ever contributes the
+// agent half; the owner's half is never spendable here.
+//
+// 'owner_funding' rows are the way out that invents no money: the owner records working
+// capital they actually provided (the API subscriptions the agents draw on), it counts in
+// full rather than being split 50/50, and it stays auditable in ledger.ndjson like every
+// other movement.
 export function computeEarnedSpendBudgetUsd(ledger = [], config = {}) {
   let earnedPool = Math.max(0, finite(config.seedSpendBudgetUsd, 0));
   let spent = 0;
@@ -75,7 +85,11 @@ export function computeEarnedSpendBudgetUsd(ledger = [], config = {}) {
     if (row.type === 'revenue' && !row.testnet) {
       const allocation = row.allocation || allocateRevenue(Number(row.amountUsd || 0), config);
       earnedPool += Number(allocation.treasuryUsd ?? (Number(allocation.growthUsd||0)+Number(allocation.experimentUsd||0)));
-    } else if (row.type === 'cost') spent += Number(row.amountUsd || 0);
+    } else if (row.type === 'owner_funding' && !row.testnet) {
+      // finite() rather than Number(): a malformed amount would otherwise turn the whole
+      // pool into NaN, and every downstream `treasury > 0` gate silently reads false.
+      earnedPool += Math.max(0, finite(row.amountUsd, 0));
+    } else if (row.type === 'cost') spent += Math.max(0, finite(row.amountUsd, 0));
   }
   return round(Math.max(0, earnedPool - spent));
 }
