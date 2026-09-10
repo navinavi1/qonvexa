@@ -925,6 +925,28 @@ async function fulfillPaidSession(session, eventId) {
   );
   logAdminEvent('paid_order_received', { entityId:order.sessionId, email:order.customerEmail, websiteUrl:order.websiteUrl, amountTotal:order.amountTotal, currency:order.currency });
 
+  // Card revenue only ever reached orders.ndjson, so it was invisible to the 50/50 split,
+  // to the agents' spend pool and to every money figure the dashboard reports. Checkout
+  // sessions are created in USD; anything else is recorded as an order but not as USD
+  // revenue, because converting it would mean inventing a rate.
+  if (String(order.currency || '').toLowerCase() === 'usd') {
+    try {
+      autonomos.recordExternalRevenue({
+        id: `stripe_${order.sessionId}`,
+        source: 'stripe',
+        externalId: order.sessionId,
+        amountUsd: Number(order.amountTotal || 0) / 100,
+        currency: 'USD',
+        rail: 'card',
+        note: 'Stripe checkout'
+      });
+    } catch (error) {
+      console.error('Ledger revenue record failed:', error?.message || error);
+    }
+  } else {
+    logAdminEvent('paid_order_currency_unconverted', { entityId:order.sessionId, currency:order.currency });
+  }
+
   // Mark fulfilled atomically enough for a single-instance MVP.
   fulfilled[sessionId] = { fulfilledAt: order.receivedAt, eventId: order.eventId };
   const tmp = `${fulfilledFile}.tmp`;

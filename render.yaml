@@ -74,6 +74,17 @@ services:
         sync: false
       - key: AUTONOMOS_OWNER_WALLET
         value: "0x1f674bf085f6fed36fa198287d51edf0fe0bb9e2"
+      # TaskForce settles USDC on Solana. While this is unset the payout router answers
+      # no_compatible_wallet_for_currency_or_network and those jobs are refused before
+      # they are ever claimed.
+      - key: AUTONOMOS_PHANTOM_WALLET
+        sync: false
+      - key: AUTONOMOS_BITCOIN_WALLET
+        sync: false
+      # The agents' working float. Executors stop when the pool reaches zero and, with no
+      # revenue yet, this is the only thing that lets them run at all.
+      - key: AUTONOMOS_SEED_SPEND_BUDGET_USD
+        value: "3"
       - key: AUTONOMOS_ENABLED
         value: "true"
       - key: AUTONOMOS_BASE_RPC_URL

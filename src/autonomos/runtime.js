@@ -446,6 +446,27 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
       return{ok:true,amountUsd:amount,availableUsd:available};
     },
 
+    // Revenue that arrived through a rail the runtime does not poll itself — today the
+    // Stripe card checkout. That money used to land only in orders.ndjson, so it was absent
+    // from the 50/50 split, from the agents' spend pool and from every money figure on the
+    // dashboard. The ledger id is deterministic, so a replayed webhook cannot double-count.
+    recordExternalRevenue({id='',source='',externalId='',amountUsd=0,currency='USD',rail='',note='',status='settled'}={}){
+      const amount=Number(amountUsd);
+      if(!Number.isFinite(amount)||amount<=0)return{ok:false,reason:'amount_must_be_positive'};
+      const entry=ledgerEntry({
+        id:String(id||`${source||'external'}_${externalId||Date.now().toString(36)}`).slice(0,120),
+        type:'revenue',source:String(source||'external'),externalId:String(externalId||''),externalTransactionId:String(externalId||''),
+        grossUsd:amount,amountUsd:amount,currency,rail,status,
+        allocation:allocateRevenue(amount,config),note:String(note||'').slice(0,200)
+      });
+      const appended=appendUniqueLedgerEntry(store,entry);
+      if(appended){
+        setAgentMetric('treasury-cfo',{tasks:1,revenue:amount});
+        event('external_revenue_recorded',{source:entry.source,externalId:entry.externalId,amountUsd:amount});
+      }
+      return{ok:true,appended,amountUsd:amount,allocation:entry.allocation};
+    },
+
     retryTransientFailures(){
       for(const key of Object.keys(claimAttempts))if(jobRegistry.get(key)?.failureOwner==='transient')delete claimAttempts[key];
       store.writeJson('claim-attempts.json',claimAttempts);

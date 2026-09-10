@@ -12,7 +12,11 @@ export function paymentDestinations(env=process.env){
   const now=Date.now();const maxAgeDays=Math.max(1,Number(env.AUTONOMOS_PAYOUT_VERIFICATION_MAX_AGE_DAYS||180));
   const intermediaries=parseJson(env.AUTONOMOS_VERIFIED_PAYOUT_INTERMEDIARIES_JSON,[]);
   const wallets={
-    evm:{id:'rabby',configured:isEvmAddress(evm),wallet:evm,networks:arrayJson(env.AUTONOMOS_EVM_PAYOUT_NETWORKS_JSON,['base','ethereum','arbitrum','polygon']).map(norm),currencies:['USDC','USDT','DAI','ETH']},
+    // AUTONOMOS_PAYOUT_NETWORKS_JSON is the name documented in .env.example and set in
+    // render.yaml; only AUTONOMOS_EVM_PAYOUT_NETWORKS_JSON was ever read, so an owner who
+    // restricted payouts to one network got the four-network default instead. Both names
+    // are accepted now, the EVM-specific one first so existing setups do not change.
+    evm:{id:'rabby',configured:isEvmAddress(evm),wallet:evm,networks:arrayJson(env.AUTONOMOS_EVM_PAYOUT_NETWORKS_JSON??env.AUTONOMOS_PAYOUT_NETWORKS_JSON,['base','ethereum','arbitrum','polygon']).map(norm),currencies:['USDC','USDT','DAI','ETH']},
     solana:{id:'phantom',configured:isSolanaAddress(solana),wallet:solana,networks:['solana'],currencies:['USDC','USDT','SOL']},
     bitcoin:{id:'bitcoin',configured:isBitcoinAddress(bitcoin),wallet:bitcoin,networks:['bitcoin'],currencies:['BTC']}
   };
