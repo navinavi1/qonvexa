@@ -4,6 +4,7 @@ import path from 'node:path';
 import { canonicalOpportunity, eligibility } from './canonical-opportunity.js';
 import { isRetiredMarket } from './retired-markets.js';
 import { retiredResources } from './retired-resources.js';
+import { readNdjsonCached } from './ndjson-cache.js';
 export function businessSnapshot(storageDir,env=process.env){
  const root=path.join(storageDir||env.STORAGE_DIR||'data','autonomos');
  const read=(name,f={})=>{try{return JSON.parse(fs.readFileSync(path.join(root,name),'utf8'));}catch{return f;}};
@@ -38,7 +39,7 @@ export function businessSnapshot(storageDir,env=process.env){
   if(a.clientAcceptedAt||a.revenueRecordedAt)counts.clientAccepted++;
   if(a.delivered&&!a.paidAt&&!a.revenueRecordedAt){counts.payoutPending++;pendingPayoutUsd+=Math.max(0,Number(op.payoutUsd||0)-Number(a.receivedUsd||0));}
  }
- let ledger=[];try{ledger=fs.readFileSync(path.join(root,'ledger.ndjson'),'utf8').split('\n').filter(Boolean).flatMap(line=>{try{return[JSON.parse(line)];}catch{return[];}});}catch{}
+ const ledger=readNdjsonCached(path.join(root,'ledger.ndjson'));
  const seen=new Set(),revenues=ledger.filter(x=>x.type==='revenue'&&!x.testnet&&['settled','paid','confirmed','released'].includes(x.status)&&Number(x.amountUsd)>0).filter(x=>{const id=receiptIdentity(x)||x.id;if(!id||seen.has(id))return false;seen.add(id);return true;});
  const totals=new Map();for(const r of revenues){const id=r.jobId||r.externalId;if(id)totals.set(id,(totals.get(id)||0)+Number(r.amountUsd));}
  const expected=new Map([...jobs.values()].map(({op,a})=>[a.ledgerJobId,op.payoutUsd]));

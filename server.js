@@ -37,6 +37,11 @@ const adminPassword = String(process.env.ADMIN_PASSWORD || '');
 const adminSessionSecret = String(process.env.ADMIN_SESSION_SECRET || '');
 const adminSessionTtlMs = 12 * 60 * 60 * 1000;
 const adminSessions = new Map();
+// Sessions used to live only in this Map, so every redeploy or restart signed the owner
+// out — and because the dashboard polls, that happened within seconds and took any
+// half-filled form with it. Only the HMAC of each token is stored, never the token
+// itself, so this file cannot be replayed as a credential.
+const adminSessionFile = path.join(storageDir, 'admin-sessions.json');
 
 const stripe = process.env.STRIPE_SECRET_KEY
   ? new Stripe(process.env.STRIPE_SECRET_KEY)
@@ -45,6 +50,7 @@ const stripe = process.env.STRIPE_SECRET_KEY
 validateProductionConfig();
 verifyPublicAssets();
 fs.mkdirSync(storageDir, { recursive: true });
+loadAdminSessions();
 
 // AutonomOS is embedded into the existing QONVEXA service. It stores only
 // public wallet information and operational state; private keys are never
@@ -212,7 +218,7 @@ app.post('/api/admin/login',
 
 app.post('/api/admin/logout', requireSameSiteMutation, (req, res) => {
   const session = getAdminSession(req);
-  if (session) adminSessions.delete(session.key);
+  if (session) { adminSessions.delete(session.key); persistAdminSessions(); }
   res.setHeader('Set-Cookie',
     `qonvexa_admin=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0${isProduction ? '; Secure' : ''}`
   );
@@ -1035,9 +1041,11 @@ function requireSameSiteMutation(req, res, next) {
 
 setInterval(() => {
   const now = Date.now();
+  let removed = 0;
   for (const [key, session] of adminSessions) {
-    if (now >= session.expiresAt) adminSessions.delete(key);
+    if (now >= session.expiresAt) { adminSessions.delete(key); removed++; }
   }
+  if (removed) persistAdminSessions();
 }, 30 * 60 * 1000).unref();
 
 function parseCookies(header = '') {
@@ -1052,6 +1060,25 @@ function parseCookies(header = '') {
   return result;
 }
 
+function loadAdminSessions() {
+  let stored = {};
+  try { stored = JSON.parse(fs.readFileSync(adminSessionFile, 'utf8')); } catch { return; }
+  const now = Date.now();
+  for (const [key, session] of Object.entries(stored || {})) {
+    if (Number(session?.expiresAt || 0) > now) adminSessions.set(key, { createdAt: Number(session.createdAt || now), expiresAt: Number(session.expiresAt) });
+  }
+}
+
+function persistAdminSessions() {
+  try {
+    const tmp = `${adminSessionFile}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify(Object.fromEntries(adminSessions)), { mode: 0o600 });
+    fs.renameSync(tmp, adminSessionFile);
+  } catch (error) {
+    console.error('Admin session persistence failed:', error?.message || error);
+  }
+}
+
 function adminSessionKey(token) {
   return crypto.createHmac('sha256', adminSessionSecret || 'development-admin-secret')
     .update(String(token || ''))
@@ -1061,6 +1088,7 @@ function adminSessionKey(token) {
 function createAdminSession() {
   const token = crypto.randomBytes(32).toString('hex');
   adminSessions.set(adminSessionKey(token), { createdAt: Date.now(), expiresAt: Date.now() + adminSessionTtlMs });
+  persistAdminSessions();
   return token;
 }
 
@@ -1072,6 +1100,7 @@ function getAdminSession(req) {
   if (!session) return null;
   if (Date.now() >= session.expiresAt) {
     adminSessions.delete(key);
+    persistAdminSessions();
     return null;
   }
   return { token, key, ...session };
@@ -1442,6 +1471,21 @@ function escapeHtml(value) {
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
   }[ch]));
 }
+
+// Nothing anywhere handled these. Around fifteen background workers fire timers whose
+// handlers end in a catch that only records an event, so a rejection escaping one of them
+// took the whole process down with no line in the log naming the lane that did it — the
+// service just restarted and every in-memory counter reset to zero. An unhandled rejection
+// is a bug to fix, not a reason to kill a process that is mid-job, so it is logged loudly
+// and serving continues. An uncaught exception leaves the process in an unknown state, so
+// that one is logged and then allowed to exit for the platform to restart it cleanly.
+process.on('unhandledRejection', (reason) => {
+  console.error('[unhandledRejection]', reason instanceof Error ? (reason.stack || reason.message) : String(reason));
+});
+process.on('uncaughtException', (error) => {
+  console.error('[uncaughtException]', error?.stack || error?.message || String(error));
+  setTimeout(() => process.exit(1), 250).unref();
+});
 
 app.listen(port, '0.0.0.0', () => {
   console.log(`QONVEXA + AutonomOS running at ${siteUrl}`);
