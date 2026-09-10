@@ -12,6 +12,7 @@ import { freeWebSearch } from './free-web-tool.js';
 import { createLlmClient } from './llm.js';
 import { classifyOpportunity } from './capabilities.js';
 import { taskForceHeaders } from './taskforce-auth.js';
+import { MarketplaceHttp } from './marketplace-http.js';
 
 // Broad, rotating worldwide discovery. These intentionally cover normal freelance work as
 // well as agent-native markets; crypto words are NOT required for discovery because payout
@@ -206,10 +207,27 @@ export class GlobalWorkHunter {
 
   async pollTaskForce(credential){return hardenedPollTaskForce.call(this,credential,this.pollTaskForceCore);}
 
+  // Discovery runs on a timer, so this is the call most likely to be rate limited or to keep
+  // hammering a marketplace that has already rejected our credentials. It goes through
+  // MarketplaceHttp, which honours a 429's retry-after, backs off after repeated failures
+  // and parks for five minutes on 401/403 instead of retrying every cycle. That module was
+  // in the repository, complete and imported by nothing.
+  taskForceTransport(credential){
+    this.state.taskforceTransport=this.state.taskforceTransport||{};
+    return new MarketplaceHttp({
+      origin:'https://task-force.app',
+      apiKey:String(credential?.apiKey||''),
+      state:this.state.taskforceTransport,
+      persist:()=>this.persist(),
+      fetchImpl:(url,init={})=>fetch(url,{...init,headers:{...init.headers,...taskForceHeaders(credential?.apiKey,'AutonomOS-GlobalHunter/2.0')}})
+    });
+  }
+
   async pollTaskForceCore(credential){
-    const headers=taskForceHeaders(credential.apiKey,'AutonomOS-GlobalHunter/2.0');
     try{
-      const r=await fetch('https://task-force.app/api/agent/tasks?status=ACTIVE&limit=100',{headers,signal:AbortSignal.timeout(15000)});const data=await safeJson(r);if(!r.ok){this.event('taskforce_tasks_failed',{status:r.status,error:publicError(data)});return{open:0,applied:0};}
+      const response=await this.taskForceTransport(credential).request('/api/agent/tasks?status=ACTIVE&limit=100');
+      if(!response.ok){this.event('taskforce_tasks_failed',{status:response.status||0,error:String(response.reason||'request_failed'),retryAt:response.retryAt||null});return{open:0,applied:0};}
+      const data=response.data;
       const rows=arrayFrom(data,['tasks','items','data']);let open=0,applied=0;const maxApply=Math.max(1,Math.min(50,Number(this.env.AUTONOMOS_TASKFORCE_MAX_APPLY_PER_CYCLE||12)));
       for(const raw of rows){const task=this.normalizeTaskForceTask(raw);if(!task)continue;open++;const capability=classifyOpportunity(task,this.capabilityContext());const key=task.externalId;this.state.taskforce.tasks[key]={...task,capability:{skill:capability.skill,executable:capability.executable,missingTools:capability.missingTools||[]},observedAt:new Date().toISOString()};if(applied>=maxApply||!credential.verified||!capability.executable||Number(task.budgetUsd||0)<minimumJobPayoutUsd(this.env))continue;if(this.state.taskforce.applications[key])continue;const result=await this.applyTaskForce(task,capability,credential);if(result.ok)applied++;}
       this.persist();this.event('taskforce_heartbeat',{connected:true,verified:Boolean(credential.verified),openTasks:open,applied});return{open,applied};

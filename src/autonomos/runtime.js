@@ -590,7 +590,6 @@ async refreshTreasury(){
       let candidates=selectBudgetAwareCandidates(normalized.filter(isAutoClaimCandidate)
         .sort((a,b)=>(Number(b.intelligence?.score||0)-Number(a.intelligence?.score||0)) || (scoreCandidate(b)-scoreCandidate(a))),cycleConfig,cycleConfig.availableSpendUsd,detail=>event('candidate_skipped_cycle_budget',detail));
       candidates=applyCommissioningCandidateGate(candidates,config,{ledger:cycleLedger,activeCount:activeJobs.size});
-      const commissioningProved=cycleLedger.some(row=>row?.type==='revenue'&&Number(row?.amountUsd||row?.grossUsd||0)>0&&!isRetiredMarket(row));
 
       const processed=await mapLimit(config.enabled?candidates:[],Number(config.maxConcurrentJobs||4),async opportunity=>{
         const leaseId=crypto.randomUUID();

@@ -20,6 +20,17 @@ export function paymentDestinations(env=process.env){
     solana:{id:'phantom',configured:isSolanaAddress(solana),wallet:solana,networks:['solana'],currencies:['USDC','USDT','SOL']},
     bitcoin:{id:'bitcoin',configured:isBitcoinAddress(bitcoin),wallet:bitcoin,networks:['bitcoin'],currencies:['BTC']}
   };
+  // AUTONOMOS_PAYOUT_CRYPTO_JSON is documented in .env.example and set in render.yaml but
+  // was read by no code, so an owner who limited payouts to USDC/USDT still had DAI, ETH
+  // and SOL offered as acceptable settlement currencies. An empty or absent list keeps the
+  // per-wallet defaults.
+  const allowedCurrencies=arrayJson(env.AUTONOMOS_PAYOUT_CRYPTO_JSON,[]).map(x=>String(x).toUpperCase()).filter(Boolean);
+  if(allowedCurrencies.length){
+    for(const wallet of Object.values(wallets)){
+      const kept=wallet.currencies.filter(code=>allowedCurrencies.includes(String(code).toUpperCase()));
+      if(kept.length)wallet.currencies=kept;
+    }
+  }
   return{
     // Legacy fields retained so old UI/tests still have one primary crypto destination.
     crypto:{configured:Object.values(wallets).some(x=>x.configured),wallet:wallets.evm.configured?evm:wallets.solana.configured?solana:bitcoin,networks:[...new Set(Object.values(wallets).filter(x=>x.configured).flatMap(x=>x.networks))],currencies:[...new Set(Object.values(wallets).filter(x=>x.configured).flatMap(x=>x.currencies))],wallets},
