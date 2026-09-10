@@ -399,12 +399,17 @@ el('#autonomos-archive-legacy')?.addEventListener('click',async()=>{
   }catch(err){ if(status)status.textContent=err.message; }
 });
 // Records working capital the owner provided, so the agents' spend pool can leave zero.
-el('#autonomos-fund-treasury')?.addEventListener('click',async()=>{
+el('#autonomos-fund-treasury')?.addEventListener('click',async(event)=>{
+  // Each call records a separate funding row on purpose — an owner can top up twice — so a
+  // double click would book the amount twice. Hold the button for the round trip.
+  const button=event.currentTarget;
+  if(button.disabled)return;
   const raw=prompt('Record working capital for the agent treasury, in USD.\nThis writes an auditable owner_funding row; it does not move money.');
   if(raw===null)return;
   const amountUsd=Number(raw);
   const status=el('#refresh-status');
   if(!Number.isFinite(amountUsd)||amountUsd<=0){ if(status)status.textContent='Enter a positive amount in USD.'; return; }
+  button.disabled=true;
   if(status)status.textContent='Recording…';
   try{
     const result=await api('/api/admin/autonomos/treasury/fund',{method:'POST',body:JSON.stringify({amountUsd,note:'Recorded from admin dashboard'})});
@@ -413,6 +418,7 @@ el('#autonomos-fund-treasury')?.addEventListener('click',async()=>{
     await loadDashboard();
     if(status)status.textContent=`Agent spend pool is now $${Number(result.availableUsd||0).toFixed(2)}.`;
   }catch(err){ if(status)status.textContent=err.message; }
+  finally{ button.disabled=false; }
 });
 els('.autonomos-queue-tab').forEach(button=>button.addEventListener('click',()=>{autonomosJobTab=button.dataset.jobTab||'ready';els('.autonomos-queue-tab').forEach(x=>x.classList.toggle('active',x===button));if(autonomosData)renderAutonomosJobQueue(autonomosData)}));
 el('#autonomos-job-search')?.addEventListener('input',()=>{if(autonomosData)renderAutonomosJobQueue(autonomosData)});
