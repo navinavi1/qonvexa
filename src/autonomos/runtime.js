@@ -643,12 +643,22 @@ async refreshTreasury(){
     if(/not_found|not_available/.test(text))return false;
     return true; // unknown shape — default to retrying a few times rather than losing the job
   }
+  // The trailing `return false` made both guards above it dead code: every signal was
+  // rejected, so normalized was always empty, explainCandidacy() always answered
+  // source_not_in_auto_claim_allowlist, and the market funnel was structurally zero no
+  // matter what discovery found. This restores the filter the guards describe.
+  //
+  // It is not the safety boundary: explainCandidacy() still requires the marketplace
+  // lifecycle to be auto-ready, escrow when configured, a crypto payout route, an
+  // executable capability, positive economics and a payout above the floor, and rejects
+  // demo/test listings. Note that with connectors/index.js still stubbed, discovery yields
+  // no signals, so in practice this changes the funnel's honesty rather than its output.
   function isActionableEarningSignal(op={}){
     const source=String(op.source||'');
     const mode=String(op.claimMode||'');
     if(source==='x402-bazaar')return false; // buyer-side API discovery, not paid work for us
     if(['watchlist_only','competitive_manual','grant_proposal'].includes(mode))return false;
-    return false;
+    return true;
   }
   function isCryptoNativeEarning(op={}){
     const code=String(op.currency||'').toUpperCase();
