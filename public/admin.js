@@ -22,7 +22,7 @@ async function api(url, options = {}) {
   if (!response.ok) throw new Error(payload.error || `Request failed (${response.status})`);
   return payload;
 }
-function showDashboard(){ loginView.hidden=true; dashboardView.hidden=false; el('#admin-user').textContent=currentUser; }
+function showDashboard(){ loginView.hidden=true; dashboardView.hidden=false; el('#admin-user').textContent=currentUser; startAutoRefresh(); }
 function showLogin(){ dashboardView.hidden=true; loginView.hidden=false; }
 function switchView(name){
   els('.admin-tab').forEach(b=>b.classList.toggle('active',b.dataset.view===name));
@@ -45,12 +45,49 @@ el('#logout-btn')?.addEventListener('click',async()=>{try{await api('/api/admin/
 el('#refresh-btn')?.addEventListener('click',loadDashboard);
 el('#dialog-close')?.addEventListener('click',()=>editDialog.close());
 
+// A failed refresh used to be swallowed to the console: the panels kept rendering the
+// previous snapshot with no visible signal, which is indistinguishable from data that
+// never updates. Every load now reports when it last succeeded, or why it did not.
+let loadInFlight=false;
+let refreshTimer=null;
+function setRefreshStatus(text,isError){
+  const node=el('#refresh-status');
+  if(!node)return;
+  node.textContent=text;
+  node.classList.toggle('s-error',Boolean(isError));
+}
 async function loadDashboard(){
+  // Overlapping loads raced and whichever response landed last won, so the view could go
+  // backwards. A refresh while one is already running is simply skipped.
+  if(loadInFlight)return;
+  loadInFlight=true;
+  const button=el('#refresh-btn');
+  if(button)button.disabled=true;
   try{
     data=await api('/api/admin/dashboard');
-    try{autonomosData=await api('/api/admin/autonomos')}catch(err){console.error('AutonomOS dashboard:',err);autonomosData=null}
+    let autonomosError='';
+    try{autonomosData=await api('/api/admin/autonomos')}
+    catch(err){autonomosError=err.message;console.error('AutonomOS dashboard:',err);autonomosData=null}
     renderAll();
-  }catch(err){ if(String(err.message).includes('Unauthorized'))showLogin(); else console.error(err); }
+    setRefreshStatus(autonomosError
+      ?`Updated ${new Date().toLocaleTimeString()} · AutonomOS panel unavailable: ${autonomosError}`
+      :`Updated ${new Date().toLocaleTimeString()}`,Boolean(autonomosError));
+  }catch(err){
+    if(String(err.message).includes('Unauthorized')){showLogin();setRefreshStatus('Session expired. Sign in again.',true);}
+    else{console.error(err);setRefreshStatus(`Refresh failed at ${new Date().toLocaleTimeString()}: ${err.message}`,true);}
+  }finally{
+    loadInFlight=false;
+    if(button)button.disabled=false;
+  }
+}
+// Mission Control had no timer of its own: the only thing refreshing it was marketplaces.js
+// synthesising a click on the Refresh button every 10s. This owns its own cadence, pauses
+// while the tab is hidden, and refreshes once on return.
+function startAutoRefresh(){
+  if(refreshTimer)return;
+  const every=Math.max(5000,Number(window.QONVEXA_ADMIN_REFRESH_MS||20000));
+  refreshTimer=setInterval(()=>{if(!document.hidden&&!dashboardView.hidden)loadDashboard();},every);
+  document.addEventListener('visibilitychange',()=>{if(!document.hidden&&!dashboardView.hidden)loadDashboard();});
 }
 function renderAll(){
   el('#preview-count').textContent=data.counts.previews??0;
@@ -227,14 +264,38 @@ function renderAutonomOS(){
     }).join('')||emptyCard('No current earning opportunities observed yet this cycle');
   }
 
+  // runtime.incidents is sent on every snapshot (runtime.js buildIncidents) and had no
+  // renderer, so the "Needs attention" panel was permanently blank.
+  const incidents=el('#autonomos-incidents');
+  if(incidents){
+    const rows=Array.isArray(a.runtime?.incidents)?a.runtime.incidents:[];
+    incidents.innerHTML=rows.slice(0,20).map(x=>{
+      const severity=String(x.severity||'').toLowerCase();
+      const cls=severity==='critical'?'s-error':severity==='warning'?'s-warning':'s-ready';
+      return `<article class="autonomos-event"><div class="event-row"><b>${esc(pretty(x.code||x.title||'incident'))}</b><span class="status ${cls}">${esc(pretty(severity||'info'))}</span></div><p>${esc(x.detail||x.message||'')}</p>${x.action?`<p class="job-fail-reason">Next: ${esc(x.action)}</p>`:''}</article>`;
+    }).join('')||emptyCard('Nothing needs your attention.');
+  }
+
   const pendingClaims=el('#autonomos-pending-claims');
   if(pendingClaims){
-    const claims=a.runtime?.pendingHumanClaims||[];
+    // Sent at the top level of the snapshot (runtime.js), not inside `runtime`. Reading it
+  // from the wrong level meant money awaiting a manual claim was never shown.
+  const claims=a.pendingHumanClaims||a.runtime?.pendingHumanClaims||[];
     pendingClaims.innerHTML=claims.slice(0,20).map(c=>`<article class="autonomos-event"><div class="event-row"><b>${esc(c.title||c.listingId||'Pending payout claim')}</b><span class="status s-ready">Needs your claim</span></div><p>Submitted ${esc(formatDate(c.submittedAt))} · <a href="${esc(c.claimUrl)}" target="_blank" rel="noopener">${esc(c.claimUrl)}</a></p></article>`).join('')||emptyCard('No pending payout claims.');
   }
 
   const wallet=el('#autonomos-wallet');
-  if(wallet){ const assets=(a.treasury?.assets||[]).filter(x=>Number(x.balance||0)>0).slice(0,12).map(x=>`${x.network}: ${Number(x.balance||0).toFixed(6)} ${x.symbol}`).join(' · '); wallet.innerHTML=`<b>${esc(a.treasury?.ownerWallet||'Not configured')}</b><span>${a.treasury?.ok?`${esc(assets||'No non-zero EVM balances detected')} · checked ${esc(formatDate(a.treasury.checkedAt))}`:`Balance check: ${esc(a.treasury?.error||'not checked yet')}`}</span>`; }
+  if(wallet){
+    const assets=(a.treasury?.assets||[]).filter(x=>Number(x.balance||0)>0).slice(0,12).map(x=>`${x.network}: ${Number(x.balance||0).toFixed(6)} ${x.symbol}`).join(' · ');
+    // "No non-zero balances" and "the RPC did not answer" used to render identically, so a
+    // broken lookup looked exactly like an empty wallet.
+    const unavailable=Array.isArray(a.treasury?.unavailable)?a.treasury.unavailable:[];
+    const incomplete=a.treasury?.balancesComplete===false||unavailable.length>0;
+    const detail=!a.treasury?.ok
+      ?`Balance check: ${esc(a.treasury?.error||'not checked yet')}`
+      :`${esc(assets||(incomplete?'Balances unavailable':'No non-zero EVM balances detected'))} · checked ${esc(formatDate(a.treasury.checkedAt))}${incomplete?` · <i class="s-error">unavailable: ${esc(unavailable.map(x=>x.network||x.symbol||'chain').join(', '))}</i>`:''}`;
+    wallet.innerHTML=`<b>${esc(a.treasury?.ownerWallet||'Not configured')}</b><span>${detail}</span>`;
+  }
   const allocations=el('#autonomos-allocations');
   if(allocations){
     const al=a.treasury?.allocations||{};
@@ -309,6 +370,47 @@ el('#autonomos-live-self-test')?.addEventListener('click',async()=>{
   try{const result=await api('/api/admin/autonomos/live-self-test',{method:'POST',body:'{}'});alert(`Live self-test: ${result.autonomousReady?'AUTONOMOUS RAIL READY':result.ok?'DISCOVERY ONLY / SETUP NEEDED':'ATTENTION'}\nSignals: ${Number(result.signals||0)}\nClaim-ready crypto sources: ${(result.claimReadySources||[]).join(', ')||'none'}\nCurrent Ready jobs: ${Number(result.currentReadyJobs||0)}\nNo claims were performed.`);await loadDashboard()}catch(err){if(badge)badge.textContent=err.message}
 });
 el('#autonomos-reconcile-payments')?.addEventListener('click',()=>autonomosCommand('/api/admin/autonomos/reconcile-payments','Reconciling payments…'));
+
+// These four had no listener at all. Emergency stop — the kill switch — did nothing when
+// pressed, and there was no way to clear it again from the interface once it was set.
+el('#autonomos-emergency')?.addEventListener('click',()=>{
+  if(!confirm('Emergency stop halts the runtime, aborts running jobs and blocks all spending. Continue?'))return;
+  autonomosCommand('/api/admin/autonomos/emergency-stop','Emergency stop…').catch(()=>{});
+});
+el('#autonomos-clear-emergency')?.addEventListener('click',()=>{
+  if(!confirm('Clear the emergency latch? The runtime stays paused until you press Start.'))return;
+  autonomosCommand('/api/admin/autonomos/clear-emergency','Clearing emergency latch…').catch(()=>{});
+});
+el('#autonomos-reset-claim-history')?.addEventListener('click',()=>{
+  if(!confirm('Clear transient claim retry timers? Permanent graveyard entries stay blocked.'))return;
+  autonomosCommand('/api/admin/autonomos/reset-claim-history','Clearing retry timers…').catch(()=>{});
+});
+el('#autonomos-archive-legacy')?.addEventListener('click',async()=>{
+  if(!confirm('Retire job rows from marketplaces you no longer work? Financial history is untouched.'))return;
+  const status=el('#autonomos-maintenance-status');
+  if(status)status.textContent='Archiving…';
+  try{
+    const result=await api('/api/admin/autonomos/archive-legacy-history',{method:'POST',body:'{}'});
+    if(status)status.textContent=`Archived ${Number(result.archived?.length||0)} registry rows and ${Number(result.inFlightRetired||0)} in-flight jobs. Ledger untouched.`;
+    await loadDashboard();
+  }catch(err){ if(status)status.textContent=err.message; }
+});
+// Records working capital the owner provided, so the agents' spend pool can leave zero.
+el('#autonomos-fund-treasury')?.addEventListener('click',async()=>{
+  const raw=prompt('Record working capital for the agent treasury, in USD.\nThis writes an auditable owner_funding row; it does not move money.');
+  if(raw===null)return;
+  const amountUsd=Number(raw);
+  const status=el('#refresh-status');
+  if(!Number.isFinite(amountUsd)||amountUsd<=0){ if(status)status.textContent='Enter a positive amount in USD.'; return; }
+  if(status)status.textContent='Recording…';
+  try{
+    const result=await api('/api/admin/autonomos/treasury/fund',{method:'POST',body:JSON.stringify({amountUsd,note:'Recorded from admin dashboard'})});
+    // After the refresh, not before: loadDashboard() rewrites this line with its own
+    // "Updated ..." stamp and the result would never be readable.
+    await loadDashboard();
+    if(status)status.textContent=`Agent spend pool is now $${Number(result.availableUsd||0).toFixed(2)}.`;
+  }catch(err){ if(status)status.textContent=err.message; }
+});
 els('.autonomos-queue-tab').forEach(button=>button.addEventListener('click',()=>{autonomosJobTab=button.dataset.jobTab||'ready';els('.autonomos-queue-tab').forEach(x=>x.classList.toggle('active',x===button));if(autonomosData)renderAutonomosJobQueue(autonomosData)}));
 el('#autonomos-job-search')?.addEventListener('input',()=>{if(autonomosData)renderAutonomosJobQueue(autonomosData)});
 document.addEventListener('click',e=>{const row=e.target.closest('.autonomos-job-row');if(row&&autonomosData)openAutonomosJobDetail(row.dataset.jobIdentity);});
@@ -318,7 +420,17 @@ el('#autonomos-config-form')?.addEventListener('submit',async e=>{
   e.preventDefault();const f=e.currentTarget;const status=el('#autonomos-config-status');status.textContent='Saving…';
   const raw=Object.fromEntries(new FormData(f).entries());
   const payload={...raw,autoReplication:f.elements.autoReplication.checked,autoClaimJobs:f.elements.autoClaimJobs.checked,autoCompetitiveSubmissions:f.elements.autoCompetitiveSubmissions.checked,commissioningMode:f.elements.commissioningMode.checked,cryptoOnlyEarnings:f.elements.cryptoOnlyEarnings.checked,requireEscrowForAutoClaim:f.elements.requireEscrowForAutoClaim.checked,rejectDemoAndTestJobs:f.elements.rejectDemoAndTestJobs.checked,zeroSpendMode:f.elements.zeroSpendMode.checked,earnedFundsOnly:f.elements.earnedFundsOnly.checked,allowExternalSpending:f.elements.allowExternalSpending.checked};
-  for(const key of ['heartbeatSeconds','fastClaimPollSeconds','minMarginPercent','reservePercent','growthPercent','experimentPercent','maxChildren','maxJobsPerCycle','minJobPayoutUsd','clawlancerMinJobPayoutUsd','dealworkMinJobPayoutUsd','maxApiCostPercentOfPayout','seedSpendBudgetUsd','maxPaidProcurementUsd','commissioningMinPayoutUsd'])payload[key]=Number(payload[key]);
+  // Only coerce fields the form actually submitted. experimentPercent,
+  // maxApiCostPercentOfPayout and commissioningMinPayoutUsd have no inputs, so
+  // Number(undefined) produced NaN, JSON.stringify turned it into null, and
+  // normalizeConfig read Number(null) as a valid 0 — every save quietly zeroed them.
+  // clawlancerMinJobPayoutUsd/dealworkMinJobPayoutUsd are not accepted by updateConfig
+  // at all and were silently discarded while the UI reported success.
+  for(const key of ['heartbeatSeconds','fastClaimPollSeconds','minMarginPercent','reservePercent','growthPercent','maxChildren','maxJobsPerCycle','minJobPayoutUsd','seedSpendBudgetUsd','maxPaidProcurementUsd']){
+    if(!(key in raw)||String(raw[key]).trim()==='')  { delete payload[key]; continue; }
+    const value=Number(raw[key]);
+    if(Number.isFinite(value))payload[key]=value; else delete payload[key];
+  }
   try{await api('/api/admin/autonomos/config',{method:'PATCH',body:JSON.stringify(payload)});status.textContent='Saved.';await loadDashboard()}catch(err){status.textContent=err.message}
 });
 

@@ -60,3 +60,14 @@
 
 .status.s-warning{color:#ffd166;border-color:#7a5a19;background:#241b08}.autonomos-maintenance{padding:16px;display:grid;gap:12px}
 .autonomos-job-toolbar{display:flex;justify-content:flex-end;margin:8px 0 12px}.autonomos-job-toolbar input{width:min(420px,100%);background:#09111f;border:1px solid #21314a;border-radius:10px;color:#eef5ff;padding:10px 12px}.autonomos-job-row{cursor:pointer}.autonomos-job-row:hover{background:rgba(90,150,255,.06)}.autonomos-job-dialog{width:min(900px,92vw)}.autonomos-job-detail{display:grid;gap:16px}.autonomos-job-detail-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}.autonomos-job-detail-grid article{border:1px solid #21314a;border-radius:10px;padding:10px;display:grid;gap:4px}.autonomos-job-detail-grid small{color:#7f93ad}.autonomos-job-detail-grid b{overflow-wrap:anywhere}@media(max-width:760px){.autonomos-job-detail-grid{grid-template-columns:1fr}}
+
+/* These classes were emitted by admin.js for failures, blocked candidates and optional
+   connectors but had no rules, so an error rendered in the same neutral grey as a success. */
+.status.s-error,i.s-error{color:#c0392b}
+.status.s-awaiting_payment{color:#8a5a12}
+.connector-optional{color:#5b6472}
+.admin-status.s-error{color:#c0392b}
+.autonomos-metric-row{display:flex;flex-wrap:wrap;gap:.75rem;margin:.75rem 0}
+.autonomos-metric{display:flex;flex-direction:column;gap:.15rem;padding:.5rem .75rem;border:1px solid rgba(120,140,255,.22);border-radius:10px;min-width:7.5rem}
+.autonomos-metric i{font-style:normal;font-size:.72rem;letter-spacing:.06em;text-transform:uppercase;opacity:.7}
+.autonomos-metric b{font-size:1.05rem;font-variant-numeric:tabular-nums}
