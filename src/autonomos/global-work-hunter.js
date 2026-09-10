@@ -130,8 +130,15 @@ export class GlobalWorkHunter {
     if(this.running)return{ok:false,reason:'cycle_already_running'};
     if(String(this.env.AUTONOMOS_GLOBAL_HUNTER_ENABLED||'true').toLowerCase()==='false')return{ok:false,reason:'disabled'};
     const config=this.currentConfig();
-    if(config.killSwitch)return{ok:false,reason:'emergency_stopped'};
-    if(!config.enabled)return{ok:false,reason:'runtime_paused'};
+    // Record the pause once per state change rather than on every tick: a lane that simply
+    // stops scanning with nothing in the timeline is indistinguishable from a lane that
+    // broke, which is the confusion this whole pass exists to remove.
+    const halted=config.killSwitch?'emergency_stopped':!config.enabled?'runtime_paused':'';
+    if(halted!==(this._haltedReason||'')){
+      this._haltedReason=halted;
+      this.event(halted?'hunter_halted_by_owner':'hunter_resumed',{reason:halted||'owner_started'});
+    }
+    if(halted)return{ok:false,reason:halted};
     this.running=true;const started=Date.now();
     try{
       const search=await this.searchWorldwide();

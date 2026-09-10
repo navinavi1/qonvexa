@@ -1,0 +1,48 @@
+{
+  "generatedAt": "2026-09-10T10:12:13.089Z",
+  "date": "2026-09-10",
+  "split": {
+    "ownerPercent": 50,
+    "agentTreasuryPercent": 50
+  },
+  "counts": {
+    "found": 0,
+    "applied": 0,
+    "accepted": 0,
+    "working": 0,
+    "submitted": 0,
+    "paid": 0,
+    "registryOpen": 0
+  },
+  "money": {
+    "grossRevenueUsd": 0,
+    "feesUsd": 0,
+    "toolAndInfraCostUsd": 0,
+    "netProfitUsd": 0,
+    "ownerShareUsd": 0,
+    "agentTreasuryShareUsd": 0,
+    "costsAreEstimates": true
+  },
+  "bySource": {},
+  "guardrails": {
+    "earnedFundsOnly": true,
+    "allowExternalSpending": false,
+    "autoReplication": true,
+    "survivalMode": true
+  },
+  "funnel": {
+    "discovered": 0,
+    "routable": 0,
+    "eligible": 0,
+    "applications": 0,
+    "claimed": 0,
+    "accepted": 0,
+    "executing": 0,
+    "qa": 0,
+    "delivered": 0,
+    "revisions": 0,
+    "clientAccepted": 0,
+    "payoutPending": 0,
+    "paid": 0
+  }
+}
