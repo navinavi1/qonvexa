@@ -51,6 +51,22 @@ export function canTransition(from,to){
   return Array.isArray(allowed)&&allowed.includes(target);
 }
 
+// Which state a job should be *tracked* at once a status row has been journalled.
+// jobs.ndjson is append-only telemetry, so any status can land in it — including one the
+// machine does not recognize. Adopting such a status as the job's tracked state turns
+// telemetry into a gate: settlement reconciliation asks canTransition(tracked,'delivered')
+// and canTransition(tracked,'settled'), and canTransition() refuses every target from an
+// unrecognized source, so one stray row would permanently block recording that a job was
+// delivered and paid. Returning the previous state keeps those paths reachable; the
+// anomaly is still journalled and reported by the caller.
+export function nextTrackedJobStatus(previous,next){
+  const from=previous?String(previous):'';
+  const to=String(next||'');
+  if(!to||!JOB_STATES.includes(to))return from;
+  if(from&&!canTransition(from,to))return from;
+  return to;
+}
+
 export function transitionJob(job,to,detail={}){
   const from=String(job?.state||'discovered');
   const target=String(to||'');

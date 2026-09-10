@@ -38,7 +38,7 @@ import { estimateOutcomeProbability } from './outcome-model.js';
 import { ledgerEntry, appendUniqueLedgerEntry } from './financial-ledger.js';
 import { TaskAgentRuntime } from './task-agent-runtime.js';
 import { buildAcceptanceContract, validateAcceptanceContract, buildEvidencePack } from './acceptance-engine.js';
-import { buildLearningSnapshot, recommendActions, scoreOpportunity, createJobIdentity, canTransition } from './agency-intelligence.js';
+import { buildLearningSnapshot, recommendActions, scoreOpportunity, createJobIdentity, canTransition, nextTrackedJobStatus } from './agency-intelligence.js';
 import { JobRegistry, classifyFailure } from './job-registry.js';
 
 // Whether a processMarketplaceOpportunity() result should be reported as ok:true to a
@@ -215,20 +215,33 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
   // nothing in the running system ever called them.
   const lastJobStatus=new Map();
   for(const [id,row] of Object.entries(latestStatuses(store.readNdjson('jobs.ndjson',4000)))){
-    if(row?.status)lastJobStatus.set(id,String(row.status));
+    // Only states the machine actually knows are seeded. A legacy row carrying something
+    // else ('paid', 'discovered', a status from a retired lane) used to become the
+    // baseline, and since canTransition() rejects every target from an unrecognized
+    // source, that job could never be seen as delivered or settled again.
+    const seeded=nextTrackedJobStatus('',row?.status);
+    if(seeded)lastJobStatus.set(id,seeded);
   }
   function appendJobStatus(record){
     const id=String(record?.id||'');
     const nextStatus=String(record?.status||'');
     const previousStatus=id?lastJobStatus.get(id):undefined;
-    if(id&&previousStatus&&nextStatus&&!canTransition(previousStatus,nextStatus)){
+    const tracked=nextTrackedJobStatus(previousStatus,nextStatus);
+    const recognized=Boolean(nextStatus)&&tracked===nextStatus;
+    if(id&&previousStatus&&nextStatus&&!recognized){
       // Telemetry, exactly as the comment above states — never a gate. Throwing here
       // escaped processMarketplaceOpportunity() into the cycle handler, so a single
       // unrecognized transition aborted the whole heartbeat ('cycle_failed') and every
       // remaining job in that batch. The anomaly is recorded and the row still lands.
       event('job_state_transition_unexpected',{jobId:id,from:previousStatus,to:nextStatus});
     }
-    if(id&&nextStatus)lastJobStatus.set(id,nextStatus);
+    // The anomalous status is journalled but must NOT become the job's tracked state.
+    // Settlement reconciliation gates on lastJobStatus via canTransition(), so adopting
+    // an unrecognized status was a gate after all: one stray 'claiming' row on a settled
+    // job made both the 'delivered' and the 'settled' recovery rows unwritable, and money
+    // that had actually arrived stopped being recorded against the job. Keeping the last
+    // state the machine recognizes leaves those paths reachable.
+    if(id&&tracked)lastJobStatus.set(id,tracked);
     store.append('jobs.ndjson',record);
   }
   const handled = new Set(store.readJson('handled-opportunities.json', []));
