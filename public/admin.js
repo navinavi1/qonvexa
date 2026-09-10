@@ -27,7 +27,10 @@ function showLogin(){ dashboardView.hidden=true; loginView.hidden=false; }
 function switchView(name){
   els('.admin-tab').forEach(b=>b.classList.toggle('active',b.dataset.view===name));
   els('.admin-view').forEach(p=>p.classList.toggle('active',p.dataset.panel===name));
-  location.hash = name === 'overview' ? '' : name;
+  // Assigning the hash fires hashchange, whose handler calls switchView again. Harmless but
+  // real re-entry on every tab click; skip the write when the hash already says this view.
+  const next = name === 'overview' ? '' : name;
+  if ((location.hash.slice(1) || '') !== next) location.hash = next;
 }
 els('.admin-tab').forEach(b=>b.addEventListener('click',()=>switchView(b.dataset.view)));
 window.addEventListener('hashchange',()=>{const view=location.hash.slice(1)||'overview';if(els('.admin-tab').some(b=>b.dataset.view===view))switchView(view);});
@@ -185,7 +188,7 @@ function renderAutonomOS(){
   setText('#auto-net24',usd(a.metrics?.net24hUsd));
   setText('#auto-net7',usd(a.metrics?.net7dUsd));
   setText('#auto-net',usd(a.metrics?.netProfitUsd));
-  { const diag=el('#auto-net-diag'); if(diag){ const n=Number(a.metrics?.costEntriesCount||0); const last=a.metrics?.lastCostEntryAt; diag.textContent=n?`${n} cost entries · last ${formatDate(last)}`:'no cost entries recorded yet'; } }
+  { const diag=el('#auto-net-diag'); if(diag){ const n=Number(a.metrics?.costEntriesCount||0); const last=a.metrics?.lastCostEntryAt; diag.textContent=n?`${n} cost entries${formatDate(last)?` · last ${formatDate(last)}`:''}`:'no cost entries recorded yet'; } }
   const registry=a.runtime?.jobRegistry||a.jobRegistry||{};
   const registrySummary=registry.summary||{};
   setText('#auto-ready',String(registrySummary.ready??0));
@@ -413,7 +416,6 @@ el('#autonomos-fund-treasury')?.addEventListener('click',async()=>{
 });
 els('.autonomos-queue-tab').forEach(button=>button.addEventListener('click',()=>{autonomosJobTab=button.dataset.jobTab||'ready';els('.autonomos-queue-tab').forEach(x=>x.classList.toggle('active',x===button));if(autonomosData)renderAutonomosJobQueue(autonomosData)}));
 el('#autonomos-job-search')?.addEventListener('input',()=>{if(autonomosData)renderAutonomosJobQueue(autonomosData)});
-document.addEventListener('click',e=>{const row=e.target.closest('.autonomos-job-row');if(row&&autonomosData)openAutonomosJobDetail(row.dataset.jobIdentity);});
 el('#autonomos-job-dialog-close')?.addEventListener('click',()=>el('#autonomos-job-dialog')?.close());
 el('#autonomos-refresh-wallet')?.addEventListener('click',()=>autonomosCommand('/api/admin/autonomos/treasury/refresh','Checking wallet…'));
 el('#autonomos-config-form')?.addEventListener('submit',async e=>{
@@ -434,8 +436,16 @@ el('#autonomos-config-form')?.addEventListener('submit',async e=>{
   try{await api('/api/admin/autonomos/config',{method:'PATCH',body:JSON.stringify(payload)});status.textContent='Saved.';await loadDashboard()}catch(err){status.textContent=err.message}
 });
 
-els('.table-search,.status-filter').forEach(x=>x.addEventListener('input',()=>{renderLeads();renderOrders();renderClients()}));
+const RENDER_BY_TARGET={leads:renderLeads,orders:renderOrders,clients:renderClients};
+els('.table-search,.status-filter').forEach(x=>x.addEventListener('input',()=>{
+  // Typing in the leads box used to rebuild orders and clients too, discarding their
+  // scroll position and any hover state on every keystroke.
+  const render=RENDER_BY_TARGET[x.dataset.target];
+  if(render)render(); else {renderLeads();renderOrders();renderClients();}
+}));
 document.addEventListener('click',e=>{
+  const row=e.target.closest('.autonomos-job-row');
+  if(row&&autonomosData){openAutonomosJobDetail(row.dataset.jobIdentity);return;}
   const btn=e.target.closest('[data-edit]');
   if(!btn)return;
   const type=btn.dataset.edit,id=btn.dataset.id;
@@ -485,7 +495,19 @@ el('#settings-form')?.addEventListener('submit',async e=>{
 });
 
 function valueFor(target,selector){return document.querySelector(`${selector}[data-target="${target}"]`)?.value.trim().toLowerCase()||''}
-function matches(item,q){return !q||JSON.stringify(item).toLowerCase().includes(q)}
+function matches(item,q){
+  if(!q)return true;
+  const haystack=[];
+  const walk=(value,depth)=>{
+    if(value===null||value===undefined||depth>2)return;
+    if(Array.isArray(value)){for(const entry of value)walk(entry,depth+1);return;}
+    if(typeof value==='object'){for(const entry of Object.values(value))walk(entry,depth+1);return;}
+    if(typeof value==='function')return;
+    haystack.push(String(value));
+  };
+  walk(item,0);
+  return haystack.join(' ').toLowerCase().includes(q);
+}
 function pretty(v=''){return String(v).replaceAll('_',' ').replace(/\b\w/g,c=>c.toUpperCase())}
 function esc(v=''){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 function link(url=''){return /^https?:\/\//i.test(String(url))?`<a href="${esc(url)}" target="_blank" rel="noopener noreferrer">${esc(url)}</a>`:esc(url)}

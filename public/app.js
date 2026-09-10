@@ -444,7 +444,7 @@ function animateCount(el, target, duration = 1300) {
   requestAnimationFrame(tick);
 }
 
-document.querySelectorAll('.hero-card, .price-card').forEach(card => {
+document.querySelectorAll('.price-card').forEach(card => {
   const countEls = card.querySelectorAll('.count-up');
   const meter = card.querySelector('.meter i');
   const cardObserver = new IntersectionObserver((entries) => {
