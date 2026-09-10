@@ -412,7 +412,9 @@ el('#autonomos-fund-treasury')?.addEventListener('click',async(event)=>{
   button.disabled=true;
   if(status)status.textContent='Recording…';
   try{
-    const result=await api('/api/admin/autonomos/treasury/fund',{method:'POST',body:JSON.stringify({amountUsd,note:'Recorded from admin dashboard'})});
+    // One id per click, so a retry of this exact request cannot book the amount twice.
+    const requestId=(crypto.randomUUID?crypto.randomUUID():String(Date.now())+Math.random());
+    const result=await api('/api/admin/autonomos/treasury/fund',{method:'POST',body:JSON.stringify({amountUsd,note:'Recorded from admin dashboard',requestId})});
     // After the refresh, not before: loadDashboard() rewrites this line with its own
     // "Updated ..." stamp and the result would never be readable.
     await loadDashboard();

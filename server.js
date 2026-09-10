@@ -425,10 +425,13 @@ app.post('/api/admin/autonomos/treasury/refresh', requireAdmin, requireSameSiteM
 app.post('/api/admin/autonomos/treasury/fund', requireAdmin, requireSameSiteMutation, (req, res) => {
   const result = autonomos.fundAgentTreasury({
     amountUsd: Number(req.body?.amountUsd),
-    note: clean(req.body?.note || '', 200)
+    note: clean(req.body?.note || '', 200),
+    // Supplied by the dashboard and stable across retries, so a repeated submission of the
+    // same click records the funding once instead of raising the agents' spend pool twice.
+    requestId: clean(req.body?.requestId || '', 120)
   });
   if (!result.ok) return res.status(400).json(result);
-  logAdminEvent('autonomos_treasury_funded', { amountUsd: result.amountUsd });
+  logAdminEvent(result.duplicate ? 'autonomos_treasury_funding_duplicate' : 'autonomos_treasury_funded', { amountUsd: result.amountUsd });
   res.json(result);
 });
 

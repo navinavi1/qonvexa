@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { computeEarnedSpendBudgetUsd, allocateRevenue } from '../src/autonomos/profit-engine.js';
 import { normalizeConfig, DEFAULT_AUTONOMOS_CONFIG } from '../src/autonomos/policy-engine.js';
+import { createAutonomOS } from '../src/autonomos/runtime.js';
 
 // The cold-start deadlock this file exists to prevent regressing: the agents' spend pool
 // starts at seedSpendBudgetUsd, every attempt (successful or not) appends a cost row, and
@@ -69,5 +73,36 @@ delete process.env.AUTONOMOS_MAX_CHILDREN;
 process.env.AUTONOMOS_MAX_PAID_PROCUREMENT_USD = '25';
 assert.equal(normalizeConfig({ ...DEFAULT_AUTONOMOS_CONFIG }).maxPaidProcurementUsd, 25);
 delete process.env.AUTONOMOS_MAX_PAID_PROCUREMENT_USD;
+
+// 11) Funding is the one admin action that writes money into the ledger, and every row it
+// writes raises what the agents may spend. A double-clicked button or a retried POST must
+// not book the amount twice — the browser guard is a convenience, not the enforcement.
+{
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'treasury-fund-'));
+  const wallet = '0x1f674bf085f6fed36fa198287d51edf0fe0bb9e2';
+  const runtime = createAutonomOS({ storageDir: root, siteUrl: 'https://qonvexa.co', ownerWallet: wallet,
+    env: { AUTONOMOS_ENABLED: 'false', AUTONOMOS_X402_ENABLED: 'false', AUTONOMOS_OWNER_WALLET: wallet },
+    logger: { error() {}, warn() {}, info() {} } });
+
+  const first = runtime.fundAgentTreasury({ amountUsd: 40, requestId: 'click-1' });
+  const replay = runtime.fundAgentTreasury({ amountUsd: 40, requestId: 'click-1' });
+  assert.equal(first.ok, true);
+  assert.equal(first.duplicate, false);
+  assert.equal(replay.duplicate, true, 'the same click must not be booked twice');
+  assert.equal(replay.availableUsd, first.availableUsd, 'a replay must not raise the pool');
+
+  // A genuinely separate top-up still goes through.
+  const second = runtime.fundAgentTreasury({ amountUsd: 10, requestId: 'click-2' });
+  assert.equal(second.duplicate, false);
+  assert.ok(second.availableUsd > first.availableUsd, 'a second top-up must still count');
+
+  const rows = fs.readFileSync(path.join(root, 'autonomos', 'ledger.ndjson'), 'utf8')
+    .split('\n').filter(Boolean).map(JSON.parse).filter(x => x.type === 'owner_funding');
+  assert.equal(rows.length, 2, 'exactly two funding rows, not three');
+  assert.equal(rows.reduce((sum, x) => sum + Number(x.amountUsd), 0), 50);
+
+  runtime.stop?.();
+  fs.rmSync(root, { recursive: true, force: true });
+}
 
 console.log('AGENT TREASURY: PASS');

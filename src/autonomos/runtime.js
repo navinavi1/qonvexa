@@ -444,19 +444,31 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
     // and a job has to run to earn the revenue that would refill it. This creates no money —
     // it is an auditable ledger row for funding the owner already paid for (API credits),
     // and it counts in full toward the agent treasury rather than being split 50/50.
-    fundAgentTreasury({amountUsd=0,note=''}={}){
+    fundAgentTreasury({amountUsd=0,note='',requestId=''}={}){
       const amount=Number(amountUsd);
       if(!Number.isFinite(amount)||amount<=0)return{ok:false,reason:'amount_must_be_positive'};
       if(amount>100000)return{ok:false,reason:'amount_above_sane_limit'};
+      // This is the one admin endpoint that writes money into the ledger, and every row it
+      // writes raises what the agents are allowed to spend. A double-clicked button, a
+      // retried request or a browser replaying the POST would each book the amount again.
+      // The dashboard disables the button for the round trip, but the browser is not where
+      // this can be enforced: when the caller supplies a request id the ledger id is derived
+      // from it, and appendUniqueLedgerEntry() collapses the repeat into the first row.
+      const key=String(requestId||'').trim().slice(0,120);
+      const id=key
+        ?'fund_'+crypto.createHash('sha256').update(key).digest('hex').slice(0,24)
+        :`fund_${Date.now().toString(36)}_${crypto.randomBytes(3).toString('hex')}`;
       const entry=ledgerEntry({
-        id:`fund_${Date.now().toString(36)}_${crypto.randomBytes(3).toString('hex')}`,
-        type:'owner_funding',source:'owner',amountUsd:amount,grossUsd:amount,
+        id,type:'owner_funding',source:'owner',amountUsd:amount,grossUsd:amount,
         status:'recorded',note:String(note||'owner working capital').slice(0,200)
       });
-      appendUniqueLedgerEntry(store,entry);
+      // Written, or already there. Reporting ok:true either way while quietly discarding the
+      // row would tell the owner money was recorded when it was not.
+      const recorded=appendUniqueLedgerEntry(store,entry);
       const available=computeEarnedSpendBudgetUsd(store.readNdjson('ledger.ndjson',-1),config);
-      event('agent_treasury_funded',{amountUsd:amount,availableUsd:available});
-      return{ok:true,amountUsd:amount,availableUsd:available};
+      if(recorded)event('agent_treasury_funded',{amountUsd:amount,availableUsd:available});
+      else event('agent_treasury_funding_duplicate',{amountUsd:amount,ledgerId:id});
+      return{ok:true,duplicate:!recorded,amountUsd:amount,availableUsd:available};
     },
 
     // Revenue that arrived through a rail the runtime does not poll itself — today the
