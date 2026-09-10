@@ -3,6 +3,7 @@ import { isRetiredMarket } from './retired-markets.js';
 import { isRetiredResource } from './retired-resources.js';
 import path from 'node:path';
 import { FREE_SKILL_MATRIX } from './free-capability-layer.js';
+import { readJson, writeJson } from './util.js';
 
 const SUCCESS=/^(paid|settled|client_accepted)$/i;
 const FAILURE=/^(rejected|archived|failed|qa_failed|repair_exhausted|accepted_repair_exhausted|submission_failed|submit_failed)$/i;
@@ -23,5 +24,5 @@ export class SkillLibraryWorker{
     const payload={...previous,generatedAt:new Date().toISOString(),mode:'adaptive_free_first',skills,topWorkflows:top,policy:{paidToolAutoload:false,freeFallbackFirst:true,retainSuccessfulProcedures:true,demoteRepeatedFailures:true},history:[{at:new Date().toISOString(),skillsObserved:Object.keys(stats).length},...(previous.history||[])].slice(0,100)};writeJson(this.file,payload);try{this.logger.info?.('[SkillLibrary] '+JSON.stringify({generatedAt:payload.generatedAt,skills:Object.keys(skills).length,observed:Object.keys(stats).length}));}catch{}
   }catch(error){try{this.logger.warn?.('[SkillLibrary] '+String(error?.message||error).slice(0,180));}catch{}}}
 }
-function readJson(file,fallback){try{return JSON.parse(fs.readFileSync(file,'utf8'));}catch{return structuredClone(fallback);}}
-function writeJson(file,value){const tmp=`${file}.${process.pid}.${Date.now()}.tmp`;fs.writeFileSync(tmp,JSON.stringify(value,null,2),{mode:0o600});fs.renameSync(tmp,file);}
+
+

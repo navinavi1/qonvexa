@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { round } from './util.js';
 
 /**
  * AutonomOS Agency Intelligence 4.0
@@ -254,7 +255,7 @@ function positive(v){const n=Number(v);return Number.isFinite(n)&&n>0?n:0;}
 function clamp(v,min,max,fallback){
   const n=Number(v);return Number.isFinite(n)?Math.min(max,Math.max(min,n)):fallback;
 }
-function round(v){return Math.round((Number(v||0)+Number.EPSILON)*1e6)/1e6;}
+
 function safeDetail(value){
   if(!value||typeof value!=='object')return {};
   const out={};

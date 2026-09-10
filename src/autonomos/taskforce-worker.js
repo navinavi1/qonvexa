@@ -16,6 +16,7 @@ import { computeEarnedSpendBudgetUsd, allocateRevenue } from './profit-engine.js
 import { AutonomOSStore } from './store.js';
 import { ledgerEntry, appendUniqueLedgerEntry } from './financial-ledger.js';
 import { paymentDestinations } from './payment-router.js';
+import { safeError } from './util.js';
 
 const BASE='https://www.task-force.app';
 const ACCEPTED=new Set(['ACCEPTED','IN_PROGRESS','WORKING','SUBMISSION_REJECTED']);
@@ -169,6 +170,6 @@ function normalizeTask(raw){const id=String(raw?.id||raw?.taskId||'');return{sou
 function authHeaders(key){return{accept:'application/json','x-api-key':String(key||''),'user-agent':'AutonomOS-TaskForceWorker/1.0'};}
 function arrayFrom(value,keys=[]){if(Array.isArray(value))return value;for(const key of keys){if(Array.isArray(value?.[key]))return value[key];}return[];}
 function hash(value){return crypto.createHash('sha256').update(String(value)).digest('hex').slice(0,24);}
-function safeError(error){return String(error?.message||error||'').slice(0,300);}
+
 function publicError(value){if(typeof value==='string')return value.slice(0,300);return String(value?.error?.message||value?.error||value?.message||'').slice(0,300);}
 async function safeJson(response){const raw=await response.text().catch(()=>'');try{return JSON.parse(raw);}catch{return{message:raw.slice(0,600)}}}

@@ -3,6 +3,7 @@ import { gmailMessageIdentity } from './gmail-mailbox.js';
 import { GlobalLeadActioner } from './global-lead-actioner.js';
 import { classifyOpportunity } from './capabilities.js';
 import { composioSearch, composioExecute } from './composio-tool.js';
+import { safeError } from './util.js';
 
 const TERMINAL_STATUSES=new Set([
   'expired','rejected','github_closed','github_rejected','retired','archived','human_gate','ai_prohibited','physical_or_employment','paid_registration_required',
@@ -213,7 +214,7 @@ function contextAround(text,index,radius=320){return String(text||'').slice(Math
 function decodeURIComponentSafe(v){try{return decodeURIComponent(v);}catch{return v;}}
 function hostname(url){try{return new URL(String(url)).hostname.toLowerCase().replace(/^www\./,'');}catch{return'';}}
 function truthy(value,fallback='false'){return /^(1|true|yes|on)$/i.test(String(value??fallback));}
-function safeError(error){return String(error?.message||error||'').slice(0,300);}
+
 function now(){return new Date().toISOString();}
 function backoffMs(attempt){return Math.min(24*60*60_000,Math.max(15*60_000,15*60_000*Math.pow(2,Math.min(6,Math.max(0,Number(attempt||1)-1)))));}
 function maskEmail(email){const [local,domain]=String(email||'').split('@');return local&&domain?`${local.slice(0,2)}***@${domain}`:'redacted';}

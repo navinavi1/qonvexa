@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { readJson, writeJson } from './util.js';
 
 const CRYPTO=new Set(['USDC','USDT','DAI','ETH','SOL','BTC']);
 const FIAT=new Set(['USD','EUR','GBP','UAH','CAD','AUD']);
@@ -23,5 +24,5 @@ export class FiatCryptoRoutePlanner{
 function defaultRoute(currency){return{currency,steps:['receive payout through marketplace-supported lawful fiat rail','move funds through an owner-configured regulated exchange/on-ramp that supports the jurisdiction','convert to a supported stablecoin such as USDC/USDT where lawful and available','withdraw to the configured owner wallet on a verified compatible network'],status:'needs_verified_owner_financial_rail'};}
 function safeRoute(r){return{currency:String(r.currency||''),provider:String(r.provider||''),receiveMethod:String(r.receiveMethod||''),asset:String(r.asset||'USDC'),network:String(r.network||''),status:String(r.status||'configured'),requiresOwnerAction:true};}
 function parseRoutes(v){try{const x=JSON.parse(String(v||'[]'));return Array.isArray(x)?x:[];}catch{return[];}}
-function readJson(file,fallback){try{return JSON.parse(fs.readFileSync(file,'utf8'));}catch{return structuredClone(fallback);}}
-function writeJson(file,value){const tmp=`${file}.${process.pid}.${Date.now()}.tmp`;fs.writeFileSync(tmp,JSON.stringify(value,null,2),{mode:0o600});fs.renameSync(tmp,file);}
+
+

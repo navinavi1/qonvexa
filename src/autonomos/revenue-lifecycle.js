@@ -6,6 +6,7 @@ import fs from 'node:fs';
 import { DEFAULT_AUTONOMOS_CONFIG, normalizeConfig } from './policy-engine.js';
 import { allocateRevenue } from './profit-engine.js';
 import { taskForceHeaders } from './taskforce-auth.js';
+import { readJson, round } from './util.js';
 
 const EMAIL_ACCEPTED_RETRY = new Set([
   'accepted_email','accepted_needs_capability','accepted_waiting_treasury','accepted_repair_exhausted'
@@ -219,7 +220,7 @@ export function hardenedMoneyRefresh(){try{
   const summary={type:this.lastDaily!==day?'daily_money_report':'money_report_updated',date:day,netProfitUsd:report.money.netProfitUsd,ownerShareUsd:report.money.ownerShareUsd,agentTreasuryShareUsd:report.money.agentTreasuryShareUsd,...report.counts};this.lastDaily=day;this.logger.info?.('[MoneyReport] '+JSON.stringify(summary));
 }catch(error){try{this.logger.warn?.('[MoneyReport] '+safe(error));}catch{}}};
 
-function readJson(file,fallback){try{return JSON.parse(fs.readFileSync(file,'utf8'));}catch{return structuredClone(fallback);}}
+
 function readNdjson(file){try{return fs.readFileSync(file,'utf8').split(/\r?\n/).filter(Boolean).map(x=>{try{return JSON.parse(x)}catch{return null}}).filter(Boolean);}catch{return[];}}
 function writeJson(file,value,mode){const tmp=`${file}.${process.pid}.${Date.now()}.tmp`;fs.writeFileSync(tmp,JSON.stringify(value,null,2),{mode});fs.renameSync(tmp,file);}
-function round(v){return Math.round((Number(v||0)+Number.EPSILON)*1e6)/1e6;}
+

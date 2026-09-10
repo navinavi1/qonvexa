@@ -1,3 +1,5 @@
+import { round } from './util.js';
+
 const CRYPTO_CODES=new Set(['USDC','USDT','ETH','BTC','SOL','DAI']);
 const MANAGED_METHOD=/escrow|platform(?:_balance)?|marketplace|seller_balance|internal_balance/;
 const DIRECT_CRYPTO_METHOD=/direct_crypto|direct_wallet|owner_wallet/;
@@ -112,4 +114,4 @@ function isVerifiedIntermediary(x,{now,maxAgeDays}){if(!x||x.verifiedForUkraineF
 function intermediarySupports(x,{marketplace,currency,methods}){const markets=Array.isArray(x.marketplaces)?x.marketplaces.map(v=>String(v).toLowerCase()):[];const currencies=Array.isArray(x.currencies)?x.currencies.map(v=>String(v).toUpperCase()):[];const supported=Array.isArray(x.methods)?x.methods.map(v=>String(v).toLowerCase()):[];if(markets.length&&marketplace&&!markets.includes(String(marketplace).toLowerCase()))return false;if(currencies.length&&!currencies.includes(currency))return false;if(supported.length&&methods.length&&!methods.some(m=>supported.includes(m)))return false;return true;}
 function arrayJson(value,fallback){const v=parseJson(value,fallback);return Array.isArray(v)?v:fallback;}
 function parseJson(value,fallback){try{return JSON.parse(String(value||''))}catch{return fallback}}
-function round(v){return Math.round((Number(v||0)+Number.EPSILON)*1e6)/1e6;}
+

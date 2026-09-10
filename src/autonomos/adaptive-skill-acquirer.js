@@ -37,6 +37,7 @@ if(!ok)process.exit(2);
 NODE`},
   design_media_tool:{workflow:'e2b_open_source_media',probe:`python - <<'PY'
 import shutil,importlib.util,sys
+import { readJson, writeJson } from './util.js';
 ff=bool(shutil.which('ffmpeg') or shutil.which('convert') or shutil.which('magick'))
 pil=bool(importlib.util.find_spec('PIL'))
 print('ffmpeg_or_imagemagick',ff); print('pillow',pil)
@@ -65,7 +66,7 @@ export class AdaptiveSkillAcquirer{
 function collectMissing(value,out){if(!value||typeof value!=='object')return;if(Array.isArray(value)){for(const x of value)collectMissing(x,out);return;}for(const [k,v] of Object.entries(value)){if(k==='missingTools'&&Array.isArray(v))for(const x of v)out.push(String(x));if(k==='missingTools'&&v&&typeof v==='object'&&!Array.isArray(v))for(const x of Object.keys(v))out.push(String(x));collectMissing(v,out);}}
 function normalizeGap(v){return String(v||'').toLowerCase().trim();}
 function fallbackPlan(key){if(!key)return null;if(key.startsWith('connected_app:'))return ACQUIRABLE.connected_app_gateway;if(/browser/.test(key))return ACQUIRABLE.browser;if(/search|research/.test(key))return ACQUIRABLE.web_search;if(/design|media|image|video|audio/.test(key))return ACQUIRABLE.design_media_tool;if(/deploy/.test(key))return ACQUIRABLE.deploy;if(/artifact|file/.test(key))return ACQUIRABLE.artifact_storage;if(/shell|sandbox/.test(key))return ACQUIRABLE.sandbox_shell;if(/github|pull_request|\bpr\b/.test(key))return ACQUIRABLE.github_pr;if(/app|gmail|sheet|drive|slack|notion/.test(key))return ACQUIRABLE.connected_app_gateway;return null;}
-function readJson(file,fallback){try{return JSON.parse(fs.readFileSync(file,'utf8'));}catch{return structuredClone(fallback);}}
-function writeJson(file,value){const tmp=`${file}.${process.pid}.${Date.now()}.tmp`;fs.writeFileSync(tmp,JSON.stringify(value,null,2),{mode:0o600});fs.renameSync(tmp,file);}
+
+
 function enabled(v,f='false'){return !/^(0|false|no|off)$/i.test(String(v??f));}
 function safe(error){return String(error?.message||error||'').slice(0,240);}
