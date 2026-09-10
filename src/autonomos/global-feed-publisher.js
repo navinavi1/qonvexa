@@ -2,9 +2,10 @@ import { businessSnapshot } from './business-snapshot.js';
 import { isRetiredMarket } from './retired-markets.js';
 import fs from 'node:fs';
 import path from 'node:path';
+import { publicDir } from './util.js';
 
 export class GlobalFeedPublisher{
-  constructor({env=process.env,storageDir='',logger=console}={}){this.env=env;this.logger=logger;this.root=path.join(storageDir||env.STORAGE_DIR||'data','autonomos');this.publicFile=path.join(process.cwd(),'public','autonomos-global-feed.json');this.timer=null;}
+  constructor({env=process.env,storageDir='',logger=console}={}){this.env=env;this.logger=logger;this.root=path.join(storageDir||env.STORAGE_DIR||'data','autonomos');this.publicFile=path.join(publicDir(env),'autonomos-global-feed.json');this.timer=null;}
   start(){if(this.timer)return;const every=Math.max(5000,Number(this.env.AUTONOMOS_GLOBAL_FEED_PUBLISH_MS||10000));this.publish();this.timer=setInterval(()=>this.publish(),every);this.timer.unref?.();}
   stop(){if(this.timer)clearInterval(this.timer);this.timer=null;}
   publish(){try{

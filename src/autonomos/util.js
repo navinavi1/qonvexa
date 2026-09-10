@@ -1,4 +1,6 @@
 import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 // Helpers that were copied verbatim into a dozen worker files. Only the byte-identical
 // copies were replaced by these: publicError, arrayFrom, safeJson, maskEmail, hash, clamp
@@ -25,4 +27,21 @@ export function safeError(error) {
 
 export function round(value) {
   return Math.round((Number(value || 0) + Number.EPSILON) * 1e6) / 1e6;
+}
+
+// Where the two publisher workers drop the JSON the dashboard fetches over HTTP.
+//
+// This used to be path.join(process.cwd(), 'public', ...) in each worker, while the server
+// serves path.resolve(__dirname, 'public'). Those agree only while the process happens to be
+// started from the repository root. Started from anywhere else the workers write into a
+// 'public' directory that nothing serves, and the dashboard keeps fetching whatever stale
+// copy was on disk — with no error anywhere, because writing succeeded.
+//
+// It also meant `npm run verify` scribbled generated output over the tracked files in the
+// repository: worker-smoke-test.mjs constructs both workers against a temp storage dir, but
+// the public path ignored that and pointed at the working tree.
+export function publicDir(env = process.env) {
+  return env.AUTONOMOS_PUBLIC_DIR
+    ? path.resolve(env.AUTONOMOS_PUBLIC_DIR)
+    : path.resolve(fileURLToPath(import.meta.url), '..', '..', '..', 'public');
 }

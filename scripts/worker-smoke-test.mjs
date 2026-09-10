@@ -18,6 +18,10 @@ import path from 'node:path';
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'worker-smoke-'));
 const env = {
   STORAGE_DIR: root,
+  // Two of these workers publish JSON for the dashboard to fetch. Without this they wrote
+  // it into the repository's own public/ directory, so running the test suite dirtied
+  // tracked files.
+  AUTONOMOS_PUBLIC_DIR: root,
   // No API keys on purpose: every lane must park cleanly rather than throw.
   AUTONOMOS_ENABLED: 'false',
   AUTONOMOS_X402_ENABLED: 'false',
@@ -74,6 +78,11 @@ for (const [name, modulePath, method] of workers) {
     worker.stop?.();
   }
   checked++;
+}
+
+// The publisher workers must have written into the throwaway directory, not the repo.
+for (const name of ['autonomos-global-feed.json', 'autonomos-money-report.json']) {
+  assert.ok(fs.existsSync(path.join(root, name)), `${name} must be published under AUTONOMOS_PUBLIC_DIR`);
 }
 
 fs.rmSync(root, { recursive: true, force: true });

@@ -3,10 +3,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { allocateRevenue } from './profit-engine.js';
 import { DEFAULT_AUTONOMOS_CONFIG, normalizeConfig } from './policy-engine.js';
-import { readJson, round } from './util.js';
+import { readJson, round, publicDir } from './util.js';
 
 export class DailyMoneyReporter{
-  constructor({env=process.env,storageDir='',logger=console}={}){this.env=env;this.logger=logger;this.root=path.join(storageDir||env.STORAGE_DIR||'data','autonomos');fs.mkdirSync(this.root,{recursive:true});this.file=path.join(this.root,'money-report.json');this.publicFile=path.join(process.cwd(),'public','autonomos-money-report.json');this.timer=null;this.lastDaily='';}
+  constructor({env=process.env,storageDir='',logger=console}={}){this.env=env;this.logger=logger;this.root=path.join(storageDir||env.STORAGE_DIR||'data','autonomos');fs.mkdirSync(this.root,{recursive:true});this.file=path.join(this.root,'money-report.json');this.publicFile=path.join(publicDir(env),'autonomos-money-report.json');this.timer=null;this.lastDaily='';}
   start(){if(this.timer)return;const every=Math.max(5*60_000,Number(this.env.AUTONOMOS_MONEY_REPORT_MS||15*60_000));this.refresh();this.timer=setInterval(()=>this.refresh(),every);this.timer.unref?.();}
   stop(){if(this.timer)clearInterval(this.timer);this.timer=null;}
   refresh(){return hardenedMoneyRefresh.call(this);}
