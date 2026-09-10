@@ -13,6 +13,7 @@ import { createLlmClient } from './llm.js';
 import { classifyOpportunity } from './capabilities.js';
 import { taskForceHeaders } from './taskforce-auth.js';
 import { MarketplaceHttp } from './marketplace-http.js';
+import { normalizeConfig, DEFAULT_AUTONOMOS_CONFIG } from './policy-engine.js';
 
 // Broad, rotating worldwide discovery. These intentionally cover normal freelance work as
 // well as agent-native markets; crypto words are NOT required for discovery because payout
@@ -120,9 +121,17 @@ export class GlobalWorkHunter {
 
   stop(){if(this.timer)clearInterval(this.timer);this.timer=null;}
 
+  // Same config.json the runtime writes, read the way the agrenting and taskforce lanes
+  // already read it. Without this, Pause and Emergency stop only stopped those two lanes
+  // while discovery and applications kept running — the buttons did not mean what they say.
+  currentConfig(){return normalizeConfig(this.read(path.join(this.root,'config.json'),{...DEFAULT_AUTONOMOS_CONFIG,enabled:true}));}
+
   async cycle(){
     if(this.running)return{ok:false,reason:'cycle_already_running'};
     if(String(this.env.AUTONOMOS_GLOBAL_HUNTER_ENABLED||'true').toLowerCase()==='false')return{ok:false,reason:'disabled'};
+    const config=this.currentConfig();
+    if(config.killSwitch)return{ok:false,reason:'emergency_stopped'};
+    if(!config.enabled)return{ok:false,reason:'runtime_paused'};
     this.running=true;const started=Date.now();
     try{
       const search=await this.searchWorldwide();

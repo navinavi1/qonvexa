@@ -527,8 +527,11 @@ async refreshTreasury(){
       if(config.killSwitch||(!config.enabled&&trigger!=='manual'))return{ok:false,reason:config.killSwitch?'emergency_stop':'runtime_stopped'};
       event('cycle_started',{cycleId,trigger});
       setAgent('prime-governor','working'); setAgent('policy-agent','working'); setAgent('opportunity-radar','working');
-      if(config.enabled)await recoverInFlightJobs({max:Math.max(1,Math.min(3,Number(config.maxConcurrentJobs||4)))}).catch(()=>{});
-      await retryPendingArtifactPersistence({max:5}).catch(()=>{});
+      // These were `.catch(()=>{})`. Startup recovery is exactly where a silent failure
+      // hurts most: a job already claimed on a marketplace stays unfinished and nobody
+      // learns why.
+      if(config.enabled)await recoverInFlightJobs({max:Math.max(1,Math.min(3,Number(config.maxConcurrentJobs||4)))}).catch(error=>event('in_flight_recovery_failed',{error:String(error?.message||error).slice(0,200)}));
+      await retryPendingArtifactPersistence({max:5}).catch(error=>event('artifact_retry_failed',{error:String(error?.message||error).slice(0,200)}));
 
       const boot=await bootstrapMarketCredentials({env,credentials,ownerWallet:wallet,storeCredential:(id,value)=>{credentials={...credentials,[id]:value};store.writeSecretJson('credentials.private.json',credentials);}});
       state.bootstrapHealth=boot;
