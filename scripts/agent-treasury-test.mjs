@@ -44,4 +44,30 @@ const plain = normalizeConfig({ ...DEFAULT_AUTONOMOS_CONFIG, updatedAt: new Date
 assert.equal(plain.ownerRevenuePercent, 50);
 assert.equal(plain.agentTreasuryPercent, 50);
 
+// 8) The seed float is owner-controlled from the dashboard and bounded. Reading it from env
+// made the form field unsettable (render.yaml pinned it to 3, normalizeConfig re-applied
+// that on every save), and a five-figure seed is an UNEARNED allowance that walks straight
+// past earnedFundsOnly.
+process.env.AUTONOMOS_SEED_SPEND_BUDGET_USD = '3';
+const ownerSet = normalizeConfig({ ...DEFAULT_AUTONOMOS_CONFIG, seedSpendBudgetUsd: 25, updatedAt: new Date().toISOString() });
+assert.equal(ownerSet.seedSpendBudgetUsd, 25, 'the dashboard value must win over the environment');
+process.env.AUTONOMOS_SEED_SPEND_BUDGET_USD = '90000';
+assert.equal(normalizeConfig({ ...DEFAULT_AUTONOMOS_CONFIG }).seedSpendBudgetUsd, 3, 'the seed stays bounded');
+delete process.env.AUTONOMOS_SEED_SPEND_BUDGET_USD;
+
+// 9) The runtimeEnv block raises the child/job/concurrency caps to 10000/1000/500, so it
+// still requires a config the owner actually authorised. A missing or corrupt config.json is
+// the moment env must not win.
+process.env.AUTONOMOS_RUNTIME_ENV_OVERRIDES = 'true';
+process.env.AUTONOMOS_MAX_CHILDREN = '9000';
+assert.equal(normalizeConfig({ ...DEFAULT_AUTONOMOS_CONFIG }).maxChildren, 50, 'no persisted config: caps stay low');
+assert.equal(normalizeConfig({ ...DEFAULT_AUTONOMOS_CONFIG, updatedAt: new Date().toISOString() }).maxChildren, 9000, 'owner-authorised config: caps apply');
+delete process.env.AUTONOMOS_RUNTIME_ENV_OVERRIDES;
+delete process.env.AUTONOMOS_MAX_CHILDREN;
+
+// 10) But the spend knobs must still reach a fresh install — that was the original bug.
+process.env.AUTONOMOS_MAX_PAID_PROCUREMENT_USD = '25';
+assert.equal(normalizeConfig({ ...DEFAULT_AUTONOMOS_CONFIG }).maxPaidProcurementUsd, 25);
+delete process.env.AUTONOMOS_MAX_PAID_PROCUREMENT_USD;
+
 console.log('AGENT TREASURY: PASS');

@@ -81,10 +81,6 @@ services:
         sync: false
       - key: AUTONOMOS_BITCOIN_WALLET
         sync: false
-      # The agents' working float. Executors stop when the pool reaches zero and, with no
-      # revenue yet, this is the only thing that lets them run at all.
-      - key: AUTONOMOS_SEED_SPEND_BUDGET_USD
-        value: "3"
       - key: AUTONOMOS_ENABLED
         value: "true"
       - key: AUTONOMOS_BASE_RPC_URL

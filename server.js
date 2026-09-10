@@ -1484,7 +1484,11 @@ process.on('unhandledRejection', (reason) => {
 });
 process.on('uncaughtException', (error) => {
   console.error('[uncaughtException]', error?.stack || error?.message || String(error));
-  setTimeout(() => process.exit(1), 250).unref();
+  // exitCode first, and the timer is deliberately NOT unref'd: an unref'd timer lets the
+  // loop drain and the process exit 0, so the platform would see a clean shutdown instead
+  // of a crash and might not restart. The delay only gives the log a chance to flush.
+  process.exitCode = 1;
+  setTimeout(() => process.exit(1), 250);
 });
 
 app.listen(port, '0.0.0.0', () => {

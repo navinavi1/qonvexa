@@ -87,4 +87,36 @@ assert.equal(publicUrl('https://ok.test/x'), 'https://ok.test/x');
   assert.equal((await noKey.request('/api/tasks')).reason, 'credentials_missing');
 }
 
+// 6) A served cooldown clears the strike count. Failures used to only ever grow, and this
+// state is persisted, so after three failures every later error re-parked the lane for
+// another two minutes for the life of the deployment.
+{
+  const state = { failures: 3, until: now - 1, reason: 'network_error' };
+  let called = 0;
+  const http = new MarketplaceHttp({ origin: 'https://x.test', apiKey: 'k', state, now: clock,
+    fetchImpl: async () => { called++; return json(200, { tasks: [] }); } });
+  const result = await http.request('/api/tasks');
+  assert.equal(called, 1, 'an expired cooldown must let the request through');
+  assert.equal(result.ok, true);
+  assert.equal(state.failures, 0, 'strikes must not survive a served cooldown');
+}
+
+// 7) An empty or non-JSON 200 is "no work today", not a strike toward parking the lane —
+// that is exactly what the previous bare-fetch path treated as an empty list.
+{
+  const state = {};
+  const http = new MarketplaceHttp({ origin: 'https://x.test', apiKey: 'k', state, now: clock,
+    fetchImpl: async () => ({ ok: true, status: 200, headers: { get: () => null }, json: async () => null }) });
+  for (let i = 0; i < 4; i++) await http.request('/api/tasks');
+  assert.equal(state.failures || 0, 0, 'schema drift must not accumulate strikes');
+  assert.equal(state.until || 0, 0, 'schema drift must not park the lane');
+}
+
+// 8) The server's own message survives to the caller; it used to be reduced to http_<status>.
+{
+  const http = new MarketplaceHttp({ origin: 'https://x.test', apiKey: 'k', state: {}, now: clock,
+    fetchImpl: async () => json(400, { error: { message: 'budget below minimum' } }) });
+  assert.equal((await http.request('/api/tasks')).detail, 'budget below minimum');
+}
+
 console.log('MARKETPLACE TRANSPORT: PASS');

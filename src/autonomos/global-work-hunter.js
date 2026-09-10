@@ -231,7 +231,8 @@ export class GlobalWorkHunter {
   taskForceTransport(credential){
     this.state.taskforceTransport=this.state.taskforceTransport||{};
     return new MarketplaceHttp({
-      origin:'https://task-force.app',
+      origin:'https://www.task-force.app', // canonical host: the apex redirects, and redirect:'error' would fail the request
+
       apiKey:String(credential?.apiKey||''),
       state:this.state.taskforceTransport,
       persist:()=>this.persist(),
@@ -242,7 +243,7 @@ export class GlobalWorkHunter {
   async pollTaskForceCore(credential){
     try{
       const response=await this.taskForceTransport(credential).request('/api/agent/tasks?status=ACTIVE&limit=100');
-      if(!response.ok){this.event('taskforce_tasks_failed',{status:response.status||0,error:String(response.reason||'request_failed'),retryAt:response.retryAt||null});return{open:0,applied:0};}
+      if(!response.ok){this.event('taskforce_tasks_failed',{status:response.status||0,error:String(response.reason||'request_failed'),detail:String(response.detail||''),retryAt:response.retryAt||null});return{open:0,applied:0};}
       const data=response.data;
       const rows=arrayFrom(data,['tasks','items','data']);let open=0,applied=0;const maxApply=Math.max(1,Math.min(50,Number(this.env.AUTONOMOS_TASKFORCE_MAX_APPLY_PER_CYCLE||12)));
       for(const raw of rows){const task=this.normalizeTaskForceTask(raw);if(!task)continue;open++;const capability=classifyOpportunity(task,this.capabilityContext());const key=task.externalId;this.state.taskforce.tasks[key]={...task,capability:{skill:capability.skill,executable:capability.executable,missingTools:capability.missingTools||[]},observedAt:new Date().toISOString()};if(applied>=maxApply||!credential.verified||!capability.executable||Number(task.budgetUsd||0)<minimumJobPayoutUsd(this.env))continue;if(this.state.taskforce.applications[key])continue;const result=await this.applyTaskForce(task,capability,credential);if(result.ok)applied++;}

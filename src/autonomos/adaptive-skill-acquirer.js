@@ -1,4 +1,5 @@
 import { recoverFreeCapability } from './free-tool-recovery.js';
+import { readJson, writeJson } from './util.js';
 import { refreshCapabilities, unifiedCapabilityContext } from './capability-registry.js';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -37,7 +38,6 @@ if(!ok)process.exit(2);
 NODE`},
   design_media_tool:{workflow:'e2b_open_source_media',probe:`python - <<'PY'
 import shutil,importlib.util,sys
-import { readJson, writeJson } from './util.js';
 ff=bool(shutil.which('ffmpeg') or shutil.which('convert') or shutil.which('magick'))
 pil=bool(importlib.util.find_spec('PIL'))
 print('ffmpeg_or_imagemagick',ff); print('pillow',pil)
