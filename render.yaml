@@ -74,12 +74,17 @@ services:
         sync: false
       - key: AUTONOMOS_OWNER_WALLET
         value: "0x1f674bf085f6fed36fa198287d51edf0fe0bb9e2"
+      # TaskForce settles USDC on Solana. While this is unset the payout router answers
+      # no_compatible_wallet_for_currency_or_network and those jobs are refused before
+      # they are ever claimed.
+      - key: AUTONOMOS_PHANTOM_WALLET
+        sync: false
+      - key: AUTONOMOS_BITCOIN_WALLET
+        sync: false
       - key: AUTONOMOS_ENABLED
         value: "true"
       - key: AUTONOMOS_BASE_RPC_URL
         value: "https://mainnet.base.org"
-      - key: AUTONOMOS_BAZAAR_URL
-        value: "https://api.cdp.coinbase.com/platform/v2/x402/discovery/resources?limit=50"
       - key: AUTONOMOS_X402_ENABLED
         value: "true"
       - key: AUTONOMOS_X402_NETWORK
@@ -140,8 +145,6 @@ services:
         value: https://cloud.langfuse.com
       - key: CODERABBIT_API_KEY
         sync: false
-      - key: AUTONOMOS_SECRETS_REQUIRED
-        value: "false"
       - key: AUTONOMOS_VERIFIED_PAYOUT_INTERMEDIARIES_JSON
         value: "[]"
       - key: AUTONOMOS_PAYOUT_NETWORKS_JSON
@@ -149,8 +152,8 @@ services:
       - key: AUTONOMOS_PAYOUT_CRYPTO_JSON
         value: '["USDC","USDT"]'
 
-      # New competitive marketplaces start in read-only mode in persisted settings.
-      - key: AUTONOMOS_MARKETPLACE_MAX_CONCURRENT_JOBS
-        value: "1"
+      # Concurrency is config.maxConcurrentJobs (admin dashboard), not an env var. The
+      # AUTONOMOS_MARKETPLACE_MAX_CONCURRENT_JOBS key that used to sit here was read by no
+      # code at all; so were AUTONOMOS_BAZAAR_URL and AUTONOMOS_SECRETS_REQUIRED.
 
 

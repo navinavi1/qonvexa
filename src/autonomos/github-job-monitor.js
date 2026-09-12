@@ -42,7 +42,15 @@ export class GithubJobMonitor {
       if(proof.revisionKey==='initial'&&!String(pr.body||'').includes('AutonomOS verification: '+proof.evidence.repositoryVerification.patchSha256)){a.setAction(id,{status:'github_execution_uncertain',reason:'existing_pr_verification_mismatch',nextCheckAt:due(1800000)});return;}
       if(proof.revisionKey!=='initial'&&proof.revisionKey!==row.lastRevisionId){const recovered=await updateVerifiedPullRequest(proof.evidence.repositoryVerification,pr,{env});if(recovered.ok){a.setAction(id,{lastRevisionId:proof.revisionKey,status:'submitted',nextCheckAt:due(900000)});return;}}
       a.setAction(id,{deliveryUrl:pr.html_url,submittedAt:row.submittedAt||stamp(),status:pr.merged_at?'client_accepted':'submitted',clientAcceptedAt:pr.merged_at||'',payoutStatus:'PAYOUT_PENDING'});
-      const ledger=a.store.readNdjson('ledger.ndjson',-1).find(x=>x.jobId===jobId&&x.type==='revenue'&&!x.testnet&&['settled','paid','confirmed','released'].includes(x.status)&&Number(x.amountUsd)>0&&(x.externalTransactionId||x.txId));
+      // Match on any identifier that can carry this bounty, but only within GitHub revenue.
+      // Nothing writes jobId 'github_<id>' — bounty platforms settle on-chain or through
+      // their own rail, so the receipt arrives carrying the issue id or its URL, and a
+      // merged, paid PR sat in PAYOUT_PENDING forever. Matching a bare issue id against
+      // ANY marketplace row would let an unrelated payment mark this PR settled and stamp
+      // someone else's transaction as its evidence, so the source has to agree too.
+      const bountyRefs=new Set([String(id),String(row.url||''),String(row.externalId||'')].filter(Boolean));
+      const isGithubSource=x=>/^github/i.test(String(x.source||''))||String(x.jobId||'')===jobId;
+      const ledger=a.store.readNdjson('ledger.ndjson',-1).find(x=>x.type==='revenue'&&!x.testnet&&['settled','paid','confirmed','released'].includes(x.status)&&Number(x.amountUsd)>0&&(x.externalTransactionId||x.txId)&&(String(x.jobId||'')===jobId||(isGithubSource(x)&&(bountyRefs.has(String(x.externalId||''))||bountyRefs.has(String(x.registryIdentity||''))))));
       if(ledger){a.setAction(id,{status:'paid',payoutStatus:'SETTLED',payoutEvidenceId:ledger.externalTransactionId||ledger.txId,paidAt:stamp()});return;}
       if(pr.merged_at){a.setAction(id,{nextCheckAt:due(1800000)});return;}
       if(pr.state==='closed'){a.setAction(id,{status:'github_rejected',reason:'pr_closed_without_merge_or_verified_payment'});return;}

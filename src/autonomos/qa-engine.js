@@ -81,7 +81,11 @@ export function deterministicInfrastructureFallback(opportunity,deliverable){
     return{ok:true,score:.76,reasons:['qa_evaluator_unavailable_but_required_tool_evidence_passed'],mode:'deterministic_evaluator_fallback'};
   }
   if(SIMPLE_TEXT.test(task)){
-    return{ok:true,score:.78,reasons:['qa_evaluator_unavailable_simple_text_result_verified'],mode:'deterministic_evaluator_fallback'};
+    // Deliberate and covered by qa-resilience-test: for a translation or rewrite the text
+    // itself is the deliverable, so there is no tool evidence to demand. But nothing graded
+    // its quality either, so the reason must not claim it was verified — this row is the
+    // "shipped without a grader" marker an operator needs to see in the evidence pack.
+    return{ok:true,score:.78,reasons:['qa_evaluator_unavailable_simple_text_shipped_ungraded'],mode:'deterministic_evaluator_fallback'};
   }
   // General digital fallback requires at least one successful real tool; unsupported prose alone never passes.
   if(successful.length>0)return{ok:true,score:.74,reasons:['qa_evaluator_unavailable_but_real_tool_evidence_passed'],mode:'deterministic_evaluator_fallback'};

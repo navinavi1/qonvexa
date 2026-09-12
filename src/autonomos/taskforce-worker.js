@@ -16,6 +16,7 @@ import { computeEarnedSpendBudgetUsd, allocateRevenue } from './profit-engine.js
 import { AutonomOSStore } from './store.js';
 import { ledgerEntry, appendUniqueLedgerEntry } from './financial-ledger.js';
 import { paymentDestinations } from './payment-router.js';
+import { safeError } from './util.js';
 
 const BASE='https://www.task-force.app';
 const ACCEPTED=new Set(['ACCEPTED','IN_PROGRESS','WORKING','SUBMISSION_REJECTED']);
@@ -63,8 +64,15 @@ export class TaskForceWorker {
     const config=this.currentConfig();
     const ledger=this.store.readNdjson('ledger.ndjson',-1);
     const treasuryUsd=computeEarnedSpendBudgetUsd(ledger,config);
-    if(treasuryUsd<=0.000001){this.state.tasks[taskId]={...this.state.tasks[taskId],status:'waiting_agent_treasury',updatedAt:new Date().toISOString()};this.persist();return;}
-    const spendLimit=Math.min(treasuryUsd,Number(opportunity.budgetUsd||0)*.35,Number(config.maxPaidProcurementUsd||3));if(!(spendLimit>0))return;
+    if(treasuryUsd<=0.000001){this.state.tasks[taskId]={...this.state.tasks[taskId],status:'waiting_agent_treasury',availableTreasuryUsd:treasuryUsd,reason:'agent_spend_pool_empty',updatedAt:new Date().toISOString()};this.persist();this.event('task_waiting_agent_treasury',{taskId,availableUsd:treasuryUsd});return;}
+    const spendLimit=Math.min(treasuryUsd,Number(opportunity.budgetUsd||0)*.35,Number(config.maxPaidProcurementUsd||3));
+    // A zero ceiling used to return with no status written and no event: the task simply
+    // vanished from the dashboard with no way to tell it apart from one never seen. The
+    // usual cause is a task whose payout is unknown, so payout*0.35 is 0.
+    if(!(spendLimit>0)){
+      this.state.tasks[taskId]={...this.state.tasks[taskId],status:'waiting_spend_ceiling',availableTreasuryUsd:treasuryUsd,budgetUsd:Number(opportunity.budgetUsd||0),reason:Number(opportunity.budgetUsd||0)>0?'spend_ceiling_rounds_to_zero':'task_payout_unknown',updatedAt:new Date().toISOString()};this.persist();
+      this.event('task_waiting_spend_ceiling',{taskId,budgetUsd:Number(opportunity.budgetUsd||0),treasuryUsd});return;
+    }
     const budget=createJobBudget(spendLimit,{env:this.env,jobId:'taskforce_'+taskId,onCost:amount=>this.recordCost(taskId,amount)});
     const budgetedLlm=budget.llm(this.llm);
     const executionConfig={...config,availableSpendUsd:spendLimit,maxPaidProcurementUsd:spendLimit};
@@ -162,6 +170,6 @@ function normalizeTask(raw){const id=String(raw?.id||raw?.taskId||'');return{sou
 function authHeaders(key){return{accept:'application/json','x-api-key':String(key||''),'user-agent':'AutonomOS-TaskForceWorker/1.0'};}
 function arrayFrom(value,keys=[]){if(Array.isArray(value))return value;for(const key of keys){if(Array.isArray(value?.[key]))return value[key];}return[];}
 function hash(value){return crypto.createHash('sha256').update(String(value)).digest('hex').slice(0,24);}
-function safeError(error){return String(error?.message||error||'').slice(0,300);}
+
 function publicError(value){if(typeof value==='string')return value.slice(0,300);return String(value?.error?.message||value?.error||value?.message||'').slice(0,300);}
 async function safeJson(response){const raw=await response.text().catch(()=>'');try{return JSON.parse(raw);}catch{return{message:raw.slice(0,600)}}}

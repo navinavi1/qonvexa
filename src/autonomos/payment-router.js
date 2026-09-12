@@ -1,3 +1,5 @@
+import { round } from './util.js';
+
 const CRYPTO_CODES=new Set(['USDC','USDT','ETH','BTC','SOL','DAI']);
 const MANAGED_METHOD=/escrow|platform(?:_balance)?|marketplace|seller_balance|internal_balance/;
 const DIRECT_CRYPTO_METHOD=/direct_crypto|direct_wallet|owner_wallet/;
@@ -12,10 +14,25 @@ export function paymentDestinations(env=process.env){
   const now=Date.now();const maxAgeDays=Math.max(1,Number(env.AUTONOMOS_PAYOUT_VERIFICATION_MAX_AGE_DAYS||180));
   const intermediaries=parseJson(env.AUTONOMOS_VERIFIED_PAYOUT_INTERMEDIARIES_JSON,[]);
   const wallets={
-    evm:{id:'rabby',configured:isEvmAddress(evm),wallet:evm,networks:arrayJson(env.AUTONOMOS_EVM_PAYOUT_NETWORKS_JSON,['base','ethereum','arbitrum','polygon']).map(norm),currencies:['USDC','USDT','DAI','ETH']},
+    // AUTONOMOS_PAYOUT_NETWORKS_JSON is the name documented in .env.example and set in
+    // render.yaml; only AUTONOMOS_EVM_PAYOUT_NETWORKS_JSON was ever read, so an owner who
+    // restricted payouts to one network got the four-network default instead. Both names
+    // are accepted now, the EVM-specific one first so existing setups do not change.
+    evm:{id:'rabby',configured:isEvmAddress(evm),wallet:evm,networks:arrayJson(env.AUTONOMOS_EVM_PAYOUT_NETWORKS_JSON??env.AUTONOMOS_PAYOUT_NETWORKS_JSON,['base','ethereum','arbitrum','polygon']).map(norm),currencies:['USDC','USDT','DAI','ETH']},
     solana:{id:'phantom',configured:isSolanaAddress(solana),wallet:solana,networks:['solana'],currencies:['USDC','USDT','SOL']},
     bitcoin:{id:'bitcoin',configured:isBitcoinAddress(bitcoin),wallet:bitcoin,networks:['bitcoin'],currencies:['BTC']}
   };
+  // AUTONOMOS_PAYOUT_CRYPTO_JSON is documented in .env.example and set in render.yaml but
+  // was read by no code, so an owner who limited payouts to USDC/USDT still had DAI, ETH
+  // and SOL offered as acceptable settlement currencies. An empty or absent list keeps the
+  // per-wallet defaults.
+  const allowedCurrencies=arrayJson(env.AUTONOMOS_PAYOUT_CRYPTO_JSON,[]).map(x=>String(x).toUpperCase()).filter(Boolean);
+  if(allowedCurrencies.length){
+    for(const wallet of Object.values(wallets)){
+      const kept=wallet.currencies.filter(code=>allowedCurrencies.includes(String(code).toUpperCase()));
+      if(kept.length)wallet.currencies=kept;
+    }
+  }
   return{
     // Legacy fields retained so old UI/tests still have one primary crypto destination.
     crypto:{configured:Object.values(wallets).some(x=>x.configured),wallet:wallets.evm.configured?evm:wallets.solana.configured?solana:bitcoin,networks:[...new Set(Object.values(wallets).filter(x=>x.configured).flatMap(x=>x.networks))],currencies:[...new Set(Object.values(wallets).filter(x=>x.configured).flatMap(x=>x.currencies))],wallets},
@@ -97,4 +114,4 @@ function isVerifiedIntermediary(x,{now,maxAgeDays}){if(!x||x.verifiedForUkraineF
 function intermediarySupports(x,{marketplace,currency,methods}){const markets=Array.isArray(x.marketplaces)?x.marketplaces.map(v=>String(v).toLowerCase()):[];const currencies=Array.isArray(x.currencies)?x.currencies.map(v=>String(v).toUpperCase()):[];const supported=Array.isArray(x.methods)?x.methods.map(v=>String(v).toLowerCase()):[];if(markets.length&&marketplace&&!markets.includes(String(marketplace).toLowerCase()))return false;if(currencies.length&&!currencies.includes(currency))return false;if(supported.length&&methods.length&&!methods.some(m=>supported.includes(m)))return false;return true;}
 function arrayJson(value,fallback){const v=parseJson(value,fallback);return Array.isArray(v)?v:fallback;}
 function parseJson(value,fallback){try{return JSON.parse(String(value||''))}catch{return fallback}}
-function round(v){return Math.round((Number(v||0)+Number.EPSILON)*1e6)/1e6;}
+

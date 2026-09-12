@@ -6,6 +6,7 @@ import { minimumJobPayoutUsd } from './payout-floor.js';
 import { BrowserlessLeadActioner, discoverEmailRoutes, discoverApplyLinks } from './browserless-lead-actioner.js';
 import { classifyOpportunity } from './capabilities.js';
 import { freeWebSearch } from './free-web-tool.js';
+import { safeError } from './util.js';
 
 const AGGREGATOR_HOST=/(^|\.)(indeed\.com|ziprecruiter\.com|dailyremote\.com|remoterocketship\.com|remoteleads\.io|euremotejobs\.com|weworkremotely\.com|nodesk\.co)$/i;
 const MAX_FETCH_BYTES=1_500_000;
@@ -166,7 +167,7 @@ function cleanTitle(value){return String(value||'').replace(/["']/g,' ').replace
 function companyHint(lead,host){const title=cleanTitle(lead?.title);const parts=title.split(/\s[-–—|]\s/).map(x=>x.trim()).filter(Boolean);if(parts.length>1)return `"${parts[parts.length-1].slice(0,100)}"`;const base=String(host||'').split('.')[0].replace(/[-_]+/g,' ');return base?`"${base.slice(0,80)}"`:'';}
 function unique(rows){return[...new Set((rows||[]).filter(Boolean))];}
 function hostname(url){try{return new URL(String(url)).hostname.toLowerCase().replace(/^www\./,'');}catch{return'';}}
-function safeError(error){return String(error?.message||error||'').slice(0,300);}
+
 function now(){return new Date().toISOString();}
 function backoffMs(attempt){return Math.min(12*60*60_000,Math.max(10*60_000,10*60_000*Math.pow(2,Math.min(6,Math.max(0,Number(attempt||1)-1)))));}
 function stripHtml(value){return decodeEntities(String(value||'').replace(/<script\b[\s\S]*?<\/script>/gi,' ').replace(/<style\b[\s\S]*?<\/style>/gi,' ').replace(/<[^>]+>/g,' ').replace(/\s+/g,' ')).trim();}

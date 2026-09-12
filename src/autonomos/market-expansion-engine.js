@@ -5,6 +5,7 @@ import { DynamicMarketRegistry } from './dynamic-market-registry.js';
 import { isRetiredMarket } from './retired-markets.js';
 import fs from 'node:fs';
 import path from 'node:path';
+import { readJson, writeJson } from './util.js';
 
 const HUMAN_GATE=/\b(captcha|kyc|government id|passport|selfie|phone verification|sms verification|2fa|mfa|identity verification)\b/i;
 const MONEY=/\b(USD|EUR|USDC|USDT|DAI|ETH|SOL|BTC|payment|payout|reward|escrow|paid)\b/i;
@@ -137,8 +138,8 @@ function extractLinks(text,base){const out=[];for(const m of String(text||'').ma
 async function safeJson(r){try{return await r.json();}catch{return{};}}
 function publicError(data){return String(data?.error?.message||data?.error||data?.message||data?.detail||'').slice(0,220);}
 function dedupeFeed(rows){const m=new Map();for(const r of rows){const k=`${r.marketId}:${r.url}:${r.title}`;if(!m.has(k))m.set(k,r);}return[...m.values()];}
-function readJson(file,fallback){try{return JSON.parse(fs.readFileSync(file,'utf8'));}catch{return structuredClone(fallback);}}
-function writeJson(file,value){const tmp=`${file}.${process.pid}.${Date.now()}.tmp`;fs.writeFileSync(tmp,JSON.stringify(value,null,2),{mode:0o600});fs.renameSync(tmp,file);}
+
+
 function writeSecretJson(file,value){const tmp=`${file}.${process.pid}.${Date.now()}.tmp`;fs.writeFileSync(tmp,JSON.stringify(value,null,2),{mode:0o600});fs.renameSync(tmp,file);}
 function enabled(v,f='false'){return !/^(0|false|no|off)$/i.test(String(v??f));}
 function safe(error){return String(error?.message||error||'').slice(0,240);}

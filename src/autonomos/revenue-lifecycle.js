@@ -4,7 +4,8 @@ import { businessSnapshot } from './business-snapshot.js';
 import path from 'node:path';
 import fs from 'node:fs';
 import { DEFAULT_AUTONOMOS_CONFIG, normalizeConfig } from './policy-engine.js';
-import { allocateRevenue } from './profit-engine.js';
+import { taskForceHeaders } from './taskforce-auth.js';
+import { readJson, round } from './util.js';
 
 const EMAIL_ACCEPTED_RETRY = new Set([
   'accepted_email','accepted_needs_capability','accepted_waiting_treasury','accepted_repair_exhausted'
@@ -20,7 +21,7 @@ function ownEmail(env){return String(env.AUTONOMOS_REGISTRATION_EMAIL||env.CONTA
 function maskEmail(email){const m=String(email||'').match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);if(!m)return'redacted';const [l,d]=m[0].toLowerCase().split('@');return `${l.slice(0,2)}***@${d}`;}
 function safe(error){return String(error?.message||error||'').slice(0,260);}
 function arrayFrom(data,keys){if(Array.isArray(data))return data;for(const k of keys)if(Array.isArray(data?.[k]))return data[k];return[];}
-function tfHeaders(key){return{accept:'application/json','x-api-key':String(key||''),authorization:`Bearer ${String(key||'')}`,'user-agent':'AutonomOS-RevenueLifecycle/1.0'};}
+function tfHeaders(key){return taskForceHeaders(key,'AutonomOS-RevenueLifecycle/1.0');}
 async function safeJson(r){try{return await r.json();}catch{return{};}}
 
 // 1) Once an email lead has been accepted, the browserless application worker must never
@@ -182,7 +183,14 @@ export async function hardenedTaskForceTick(){
       }
       if(processed>=maxSequential)break;
     }
-    await Promise.allSettled(queued.map(run=>run()));
+    // Sequential, as the comment above this function has always claimed. Promise.allSettled
+    // started up to AUTONOMOS_TASKFORCE_ACCEPTED_PER_TICK jobs at once, each having sized its
+    // spend limit from the same ledger snapshot; createJobBudget.charge() then re-checked
+    // under a lock and threw shared_treasury_spend_limit, killing jobs mid-execution after
+    // they had already booked cost rows — which drains the very pool they were competing for.
+    for(const run of queued){
+      try{await run();}catch(error){this.event('queued_task_failed',{error:safe(error)});}
+    }
     const pending=Object.values(apps).filter(a=>String(a?.status||'').toUpperCase()==='PENDING').length;
     if(accepted.length||pending)this.event('worker_queue_diagnostics',{accepted:accepted.length,pending,processed,localTasks:Object.keys(this.state.tasks||{}).length});
   }finally{this.running=false;}
@@ -193,8 +201,8 @@ export async function hardenedTaskForceTick(){
 export function hardenedMoneyRefresh(){try{
   const now=new Date(),day=now.toISOString().slice(0,10),root=this.root;
   const ledger=readNdjson(`${root}/ledger.ndjson`),hunter=readJson(`${root}/global-work-hunter.json`,{}),actioner=readJson(`${root}/global-lead-actioner.json`,{}),registry=readJson(`${root}/job-registry.json`,{}),tf=readJson(`${root}/taskforce-worker.json`,{}),config=normalizeConfig(readJson(`${root}/config.json`,{...DEFAULT_AUTONOMOS_CONFIG,enabled:true}));
-  const todays=ledger.filter(x=>String(x?.at||'').startsWith(day)&&!x?.testnet);let gross=0,cost=0,fees=0,owner=0,treasury=0;const bySource={};
-  for(const row of todays){const source=String(row?.source||'unknown');bySource[source]=bySource[source]||{revenueUsd:0,costUsd:0,netUsd:0};if(row.type==='revenue'){const amount=Number(row.amountUsd??row.grossUsd??0)||0,fee=Number(row.feeUsd||0)+Number(row.apiCostUsd||0)+Number(row.networkFeeUsd||0);gross+=amount;fees+=fee;const alloc=row.allocation||allocateRevenue(Math.max(0,amount-fee),config);owner+=Number(alloc.ownerUsd||0);treasury+=Number(alloc.treasuryUsd||0);bySource[source].revenueUsd+=amount;bySource[source].netUsd+=amount-fee;}else if(row.type==='cost'){const n=Number(row.amountUsd||0)||0;cost+=n;bySource[source].costUsd+=n;bySource[source].netUsd-=n;}}
+  const todays=ledger.filter(x=>String(x?.at||'').startsWith(day)&&!x?.testnet);let gross=0,cost=0,fees=0;const bySource={};
+  for(const row of todays){const source=String(row?.source||'unknown');bySource[source]=bySource[source]||{revenueUsd:0,costUsd:0,netUsd:0};if(row.type==='revenue'){const amount=Number(row.amountUsd??row.grossUsd??0)||0,fee=Number(row.feeUsd||0)+Number(row.apiCostUsd||0)+Number(row.networkFeeUsd||0);gross+=amount;fees+=fee;bySource[source].revenueUsd+=amount;bySource[source].netUsd+=amount-fee;}else if(row.type==='cost'){const n=Number(row.amountUsd||0)||0;cost+=n;bySource[source].costUsd+=n;bySource[source].netUsd-=n;}}
   const actions=Object.values(actioner?.actions||{}),tfApps=Object.values(hunter?.taskforce?.applications||{}),tfTasks=Object.values(tf?.tasks||{}),settlements=Object.values(tf?.settlements||{});
   const counts={
     found:Object.keys(hunter?.leads||{}).length,
@@ -205,13 +213,25 @@ export function hardenedMoneyRefresh(){try{
     paid:actions.filter(a=>String(a?.status||'')==='paid').length+settlements.filter(s=>Number(s?.amountUsd||0)>0&&s?.ledgerRecorded).length,
     registryOpen:Object.values(registry||{}).filter(r=>!['archived','graveyard','rejected','expired','cancelled','settled','paid'].includes(String(r?.status||''))).length
   };
-  const report={generatedAt:now.toISOString(),date:day,split:{ownerPercent:Number(config.ownerRevenuePercent||50),agentTreasuryPercent:Number(config.agentTreasuryPercent||50)},counts,money:{grossRevenueUsd:round(gross),feesUsd:round(fees),toolAndInfraCostUsd:round(cost),netProfitUsd:round(gross-fees-cost),ownerShareUsd:round(owner),agentTreasuryShareUsd:round(treasury)},bySource:Object.fromEntries(Object.entries(bySource).map(([k,v])=>[k,{revenueUsd:round(v.revenueUsd),costUsd:round(v.costUsd),netUsd:round(v.netUsd)}]).sort((a,b)=>b[1].netUsd-a[1].netUsd)),guardrails:{earnedFundsOnly:Boolean(config.earnedFundsOnly),allowExternalSpending:Boolean(config.allowExternalSpending),autoReplication:Boolean(config.autoReplication),survivalMode:Boolean(config.survivalMode)}};
+  // Everything above this line was computed from today's rows only; everything below
+  // overrides report.money with businessSnapshot's LIFETIME totals. Both are wanted, but
+  // the document carried one date stamp and no label saying which scope each field used,
+  // so a report reading "date: today, gross: $450, bySource: {}" looked like money from
+  // nowhere and gave the owner no way to see what today actually earned. The daily figures
+  // were computed and then discarded; they are kept now, next to the scope they belong to.
+  // Split the day's NET, not each receipt's gross-minus-fees. Accumulating allocateRevenue()
+  // per revenue row ignored cost rows entirely, so on $100 earned against $10 of API spend
+  // the shares summed to $100 while only $90 existed — the owner's half overstated. The
+  // lifetime figures below already split net profit; these now use the same basis.
+  const todayNet=gross-fees-cost;
+  const todayMoney={grossRevenueUsd:round(gross),feesUsd:round(fees),toolAndInfraCostUsd:round(cost),netProfitUsd:round(todayNet),ownerShareUsd:round(Math.max(0,todayNet)*Number(config.ownerRevenuePercent||50)/100),agentTreasuryShareUsd:round(Math.max(0,todayNet)*Number(config.agentTreasuryPercent||50)/100)};
+  const report={generatedAt:now.toISOString(),date:day,scope:{money:'lifetime',today:'this_calendar_day_utc',bySource:'this_calendar_day_utc'},today:todayMoney,split:{ownerPercent:Number(config.ownerRevenuePercent||50),agentTreasuryPercent:Number(config.agentTreasuryPercent||50)},counts,money:{...todayMoney},bySource:Object.fromEntries(Object.entries(bySource).map(([k,v])=>[k,{revenueUsd:round(v.revenueUsd),costUsd:round(v.costUsd),netUsd:round(v.netUsd)}]).sort((a,b)=>b[1].netUsd-a[1].netUsd)),guardrails:{earnedFundsOnly:Boolean(config.earnedFundsOnly),allowExternalSpending:Boolean(config.allowExternalSpending),autoReplication:Boolean(config.autoReplication),survivalMode:Boolean(config.survivalMode)}};
   const truth=businessSnapshot(path.dirname(this.root),this.env);report.counts={...report.counts,found:truth.counts.discovered,applied:truth.counts.applications,accepted:truth.counts.accepted,working:truth.counts.executing,submitted:truth.counts.delivered,paid:truth.counts.paid};report.funnel=truth.counts;report.money={...report.money,grossRevenueUsd:truth.money.grossRevenueUsd,feesUsd:truth.money.feesUsd,toolAndInfraCostUsd:truth.money.costUsd,netProfitUsd:truth.money.netProfitUsd,costsAreEstimates:truth.money.costsAreEstimates,ownerShareUsd:Math.max(0,truth.money.netProfitUsd)*Number(config.ownerRevenuePercent||50)/100,agentTreasuryShareUsd:Math.max(0,truth.money.netProfitUsd)*Number(config.agentTreasuryPercent||50)/100};report.counts.registryOpen=Object.values(registry||{}).filter(r=>!isRetiredMarket(r)&&!['retired','archived','graveyard','rejected','expired','cancelled','settled','paid'].includes(String(r.status))).length;
   writeJson(this.file,report,0o600);writeJson(this.publicFile,report,0o644);
   const summary={type:this.lastDaily!==day?'daily_money_report':'money_report_updated',date:day,netProfitUsd:report.money.netProfitUsd,ownerShareUsd:report.money.ownerShareUsd,agentTreasuryShareUsd:report.money.agentTreasuryShareUsd,...report.counts};this.lastDaily=day;this.logger.info?.('[MoneyReport] '+JSON.stringify(summary));
 }catch(error){try{this.logger.warn?.('[MoneyReport] '+safe(error));}catch{}}};
 
-function readJson(file,fallback){try{return JSON.parse(fs.readFileSync(file,'utf8'));}catch{return structuredClone(fallback);}}
+
 function readNdjson(file){try{return fs.readFileSync(file,'utf8').split(/\r?\n/).filter(Boolean).map(x=>{try{return JSON.parse(x)}catch{return null}}).filter(Boolean);}catch{return[];}}
 function writeJson(file,value,mode){const tmp=`${file}.${process.pid}.${Date.now()}.tmp`;fs.writeFileSync(tmp,JSON.stringify(value,null,2),{mode});fs.renameSync(tmp,file);}
-function round(v){return Math.round((Number(v||0)+Number.EPSILON)*1e6)/1e6;}
+

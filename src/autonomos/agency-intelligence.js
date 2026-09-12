@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { round } from './util.js';
 
 /**
  * AutonomOS Agency Intelligence 4.0
@@ -28,8 +29,11 @@ const TRANSITIONS = Object.freeze({
   claiming:['claim_failed','claimed'],
   claim_failed:['claiming'],
   claimed:['delivered','execution_failed'],
-  execution_failed:['delivered','execution_failed','manual_attention'],
-  manual_attention:['delivered','execution_failed'], // Reset auto-claim history re-opens retries
+  // Retrying a job re-enters the claim pipeline under the same deterministic job id, so
+  // 'claiming' is a legitimate successor of both recoverable states. Without these edges
+  // every retry was reported as an invalid transition.
+  execution_failed:['claiming','delivered','execution_failed','manual_attention'],
+  manual_attention:['claiming','delivered','execution_failed'], // Reset auto-claim history re-opens retries
   delivered:['settled','failed'],
   settled:[],
   started:['completed','failed'],
@@ -40,7 +44,27 @@ const TRANSITIONS = Object.freeze({
 export function canTransition(from,to){
   const source=String(from||'discovered'); const target=String(to||'');
   if(source===target)return true;
-  return String(TRANSITIONS[source]||[]).includes(target);
+  // Membership in the target list, not a substring scan of its joined text:
+  // String(['claim_failed','claimed']).includes('claim') accepted any target that merely
+  // appeared inside another state's name, and an unknown source rejected everything.
+  const allowed=TRANSITIONS[source];
+  return Array.isArray(allowed)&&allowed.includes(target);
+}
+
+// Which state a job should be *tracked* at once a status row has been journalled.
+// jobs.ndjson is append-only telemetry, so any status can land in it — including one the
+// machine does not recognize. Adopting such a status as the job's tracked state turns
+// telemetry into a gate: settlement reconciliation asks canTransition(tracked,'delivered')
+// and canTransition(tracked,'settled'), and canTransition() refuses every target from an
+// unrecognized source, so one stray row would permanently block recording that a job was
+// delivered and paid. Returning the previous state keeps those paths reachable; the
+// anomaly is still journalled and reported by the caller.
+export function nextTrackedJobStatus(previous,next){
+  const from=previous?String(previous):'';
+  const to=String(next||'');
+  if(!to||!JOB_STATES.includes(to))return from;
+  if(from&&!canTransition(from,to))return from;
+  return to;
 }
 
 export function transitionJob(job,to,detail={}){
@@ -247,7 +271,7 @@ function positive(v){const n=Number(v);return Number.isFinite(n)&&n>0?n:0;}
 function clamp(v,min,max,fallback){
   const n=Number(v);return Number.isFinite(n)?Math.min(max,Math.max(min,n)):fallback;
 }
-function round(v){return Math.round((Number(v||0)+Number.EPSILON)*1e6)/1e6;}
+
 function safeDetail(value){
   if(!value||typeof value!=='object')return {};
   const out={};

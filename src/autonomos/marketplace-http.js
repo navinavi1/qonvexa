@@ -31,6 +31,15 @@ export class MarketplaceHttp {
         reason: this.state.reason || "marketplace_cooldown",
         retryAt: this.state.until,
       };
+    // A served cooldown clears the strike count. Without this, failures only ever grew:
+    // this state is persisted, so after three failures every later error immediately
+    // re-parked the lane for another two minutes, for the life of the deployment.
+    if (this.state.until) {
+      this.state.until = 0;
+      this.state.reason = "";
+      this.state.failures = 0;
+      this.persist();
+    }
     const read = method === "GET";
     for (let attempt = 0; attempt < (read ? 2 : 1); attempt++) {
       try {
@@ -71,7 +80,7 @@ export class MarketplaceHttp {
         } else if (response.status === 401 || response.status === 403) {
           this.state.until = this.now() + 300000;
           this.state.reason = "credentials_rejected";
-        } else if (response.status >= 500 || data === null) this.fail(reason);
+        } else if (response.status >= 500) this.fail(reason);
         this.persist();
         if (
           read &&
@@ -83,6 +92,7 @@ export class MarketplaceHttp {
         return {
           ok: false,
           reason,
+          detail: publicDetail(data),
           status: response.status,
           uncertain: !read && (response.status >= 500 || data === null),
           retryAt: this.state.until || null,
@@ -104,6 +114,11 @@ export class MarketplaceHttp {
       this.state.reason = reason;
     }
   }
+}
+
+function publicDetail(body) {
+  const value = body?.error?.message ?? body?.error ?? body?.message ?? body?.detail ?? "";
+  return typeof value === "string" ? value.slice(0, 200) : "";
 }
 
 export function arrayEnvelope(body, keys) {

@@ -11,6 +11,9 @@ import crypto from 'node:crypto';
 import { freeWebSearch } from './free-web-tool.js';
 import { createLlmClient } from './llm.js';
 import { classifyOpportunity } from './capabilities.js';
+import { taskForceHeaders } from './taskforce-auth.js';
+import { MarketplaceHttp } from './marketplace-http.js';
+import { normalizeConfig, DEFAULT_AUTONOMOS_CONFIG } from './policy-engine.js';
 
 // Broad, rotating worldwide discovery. These intentionally cover normal freelance work as
 // well as agent-native markets; crypto words are NOT required for discovery because payout
@@ -118,9 +121,24 @@ export class GlobalWorkHunter {
 
   stop(){if(this.timer)clearInterval(this.timer);this.timer=null;}
 
+  // Same config.json the runtime writes, read the way the agrenting and taskforce lanes
+  // already read it. Without this, Pause and Emergency stop only stopped those two lanes
+  // while discovery and applications kept running — the buttons did not mean what they say.
+  currentConfig(){return normalizeConfig(this.read(path.join(this.root,'config.json'),{...DEFAULT_AUTONOMOS_CONFIG,enabled:true}));}
+
   async cycle(){
     if(this.running)return{ok:false,reason:'cycle_already_running'};
     if(String(this.env.AUTONOMOS_GLOBAL_HUNTER_ENABLED||'true').toLowerCase()==='false')return{ok:false,reason:'disabled'};
+    const config=this.currentConfig();
+    // Record the pause once per state change rather than on every tick: a lane that simply
+    // stops scanning with nothing in the timeline is indistinguishable from a lane that
+    // broke, which is the confusion this whole pass exists to remove.
+    const halted=config.killSwitch?'emergency_stopped':!config.enabled?'runtime_paused':'';
+    if(halted!==(this._haltedReason||'')){
+      this._haltedReason=halted;
+      this.event(halted?'hunter_halted_by_owner':'hunter_resumed',{reason:halted||'owner_started'});
+    }
+    if(halted)return{ok:false,reason:halted};
     this.running=true;const started=Date.now();
     try{
       const search=await this.searchWorldwide();
@@ -192,7 +210,7 @@ export class GlobalWorkHunter {
   async verifyTaskForceAgent(credential){
     if(!credential?.apiKey||credential.verified)return Boolean(credential?.verified);
     // Keep this best-effort; TaskForceVerifier also repairs auth independently.
-    const headers={accept:'application/json','x-api-key':credential.apiKey,authorization:credential.apiKey,'user-agent':'AutonomOS-GlobalHunter/2.0'};
+    const headers=taskForceHeaders(credential.apiKey,'AutonomOS-GlobalHunter/2.0');
     try{
       const challengeRes=await fetch('https://task-force.app/api/agent/verify/challenge',{method:'POST',headers,signal:AbortSignal.timeout(12000)});const challenge=await safeJson(challengeRes);
       if(!challengeRes.ok){if(challengeRes.status===409||/already verified/i.test(publicError(challenge))){credential.verified=true;this.saveTaskForceCredential(credential);return true;}this.event('taskforce_verification_failed',{stage:'challenge',status:challengeRes.status,error:publicError(challenge)});return false;}
@@ -205,10 +223,28 @@ export class GlobalWorkHunter {
 
   async pollTaskForce(credential){return hardenedPollTaskForce.call(this,credential,this.pollTaskForceCore);}
 
+  // Discovery runs on a timer, so this is the call most likely to be rate limited or to keep
+  // hammering a marketplace that has already rejected our credentials. It goes through
+  // MarketplaceHttp, which honours a 429's retry-after, backs off after repeated failures
+  // and parks for five minutes on 401/403 instead of retrying every cycle. That module was
+  // in the repository, complete and imported by nothing.
+  taskForceTransport(credential){
+    this.state.taskforceTransport=this.state.taskforceTransport||{};
+    return new MarketplaceHttp({
+      origin:'https://www.task-force.app', // canonical host: the apex redirects, and redirect:'error' would fail the request
+
+      apiKey:String(credential?.apiKey||''),
+      state:this.state.taskforceTransport,
+      persist:()=>this.persist(),
+      fetchImpl:(url,init={})=>fetch(url,{...init,headers:{...init.headers,...taskForceHeaders(credential?.apiKey,'AutonomOS-GlobalHunter/2.0')}})
+    });
+  }
+
   async pollTaskForceCore(credential){
-    const headers={accept:'application/json','x-api-key':credential.apiKey,authorization:credential.apiKey,'user-agent':'AutonomOS-GlobalHunter/2.0'};
     try{
-      const r=await fetch('https://task-force.app/api/agent/tasks?status=ACTIVE&limit=100',{headers,signal:AbortSignal.timeout(15000)});const data=await safeJson(r);if(!r.ok){this.event('taskforce_tasks_failed',{status:r.status,error:publicError(data)});return{open:0,applied:0};}
+      const response=await this.taskForceTransport(credential).request('/api/agent/tasks?status=ACTIVE&limit=100');
+      if(!response.ok){this.event('taskforce_tasks_failed',{status:response.status||0,error:String(response.reason||'request_failed'),detail:String(response.detail||''),retryAt:response.retryAt||null});return{open:0,applied:0};}
+      const data=response.data;
       const rows=arrayFrom(data,['tasks','items','data']);let open=0,applied=0;const maxApply=Math.max(1,Math.min(50,Number(this.env.AUTONOMOS_TASKFORCE_MAX_APPLY_PER_CYCLE||12)));
       for(const raw of rows){const task=this.normalizeTaskForceTask(raw);if(!task)continue;open++;const capability=classifyOpportunity(task,this.capabilityContext());const key=task.externalId;this.state.taskforce.tasks[key]={...task,capability:{skill:capability.skill,executable:capability.executable,missingTools:capability.missingTools||[]},observedAt:new Date().toISOString()};if(applied>=maxApply||!credential.verified||!capability.executable||Number(task.budgetUsd||0)<minimumJobPayoutUsd(this.env))continue;if(this.state.taskforce.applications[key])continue;const result=await this.applyTaskForce(task,capability,credential);if(result.ok)applied++;}
       this.persist();this.event('taskforce_heartbeat',{connected:true,verified:Boolean(credential.verified),openTasks:open,applied});return{open,applied};
@@ -222,7 +258,7 @@ export class GlobalWorkHunter {
     if(!intent.ok)return{ok:intent.status==='confirmed',uncertain:intent.status!=='confirmed'};
     this.state.taskforce.applications[task.externalId]={status:'application_uncertain',at:new Date().toISOString(),intentId:intent.id};this.persist();
     const message=`AutonomOS can complete this ${capability.skill||'digital'} task with tool-backed execution and verification. We will follow the stated requirements and submit evidence-backed work.`.slice(0,900);
-    try{const r=await fetch(`https://task-force.app/api/agent/tasks/${encodeURIComponent(task.externalId)}/apply`,{method:'POST',headers:{'content-type':'application/json',accept:'application/json','x-api-key':credential.apiKey,authorization:credential.apiKey,'user-agent':'AutonomOS-GlobalHunter/2.0'},body:JSON.stringify({message}),signal:AbortSignal.timeout(12000)});const data=await safeJson(r);if(!r.ok){this.state.taskforce.applications[task.externalId]={status:'apply_failed',at:new Date().toISOString(),error:`http_${r.status}:${publicError(data)}`.slice(0,240),failure:classifyFailure(r.status)};this.actionJournal.finish(intent.id,r.status>=500||r.status===408?'uncertain':'definite_failure',{httpStatus:r.status});if(r.status>=500||r.status===408)this.state.taskforce.applications[task.externalId].status='application_uncertain';this.persist();this.event('taskforce_apply_failed',{taskId:task.externalId,status:r.status,error:publicError(data)});return{ok:false};}const app=data?.application||data?.data||data;if(!app?.id){this.actionJournal.finish(intent.id,'uncertain',{httpStatus:r.status});return{ok:false,uncertain:true};}this.actionJournal.finish(intent.id,'confirmed',{externalId:String(app.id)});this.state.taskforce.applications[task.externalId]={applicationId:String(app?.id||''),status:String(app?.status||'PENDING'),title:task.title,budgetUsd:task.budgetUsd,skill:capability.skill,appliedAt:new Date().toISOString()};this.persist();this.event('taskforce_applied',{taskId:task.externalId,applicationId:String(app?.id||''),title:task.title,budgetUsd:task.budgetUsd,skill:capability.skill});return{ok:true};}catch(error){this.actionJournal.finish(intent.id,'uncertain');this.event('taskforce_apply_failed',{taskId:task.externalId,error:safeError(error)});return{ok:false};}
+    try{const r=await fetch(`https://task-force.app/api/agent/tasks/${encodeURIComponent(task.externalId)}/apply`,{method:'POST',headers:{'content-type':'application/json',...taskForceHeaders(credential.apiKey,'AutonomOS-GlobalHunter/2.0')},body:JSON.stringify({message}),signal:AbortSignal.timeout(12000)});const data=await safeJson(r);if(!r.ok){this.state.taskforce.applications[task.externalId]={status:'apply_failed',at:new Date().toISOString(),error:`http_${r.status}:${publicError(data)}`.slice(0,240),failure:classifyFailure(r.status)};this.actionJournal.finish(intent.id,r.status>=500||r.status===408?'uncertain':'definite_failure',{httpStatus:r.status});if(r.status>=500||r.status===408)this.state.taskforce.applications[task.externalId].status='application_uncertain';this.persist();this.event('taskforce_apply_failed',{taskId:task.externalId,status:r.status,error:publicError(data)});return{ok:false};}const app=data?.application||data?.data||data;if(!app?.id){this.actionJournal.finish(intent.id,'uncertain',{httpStatus:r.status});return{ok:false,uncertain:true};}this.actionJournal.finish(intent.id,'confirmed',{externalId:String(app.id)});this.state.taskforce.applications[task.externalId]={applicationId:String(app?.id||''),status:String(app?.status||'PENDING'),title:task.title,budgetUsd:task.budgetUsd,skill:capability.skill,appliedAt:new Date().toISOString()};this.persist();this.event('taskforce_applied',{taskId:task.externalId,applicationId:String(app?.id||''),title:task.title,budgetUsd:task.budgetUsd,skill:capability.skill});return{ok:true};}catch(error){this.actionJournal.finish(intent.id,'uncertain');this.event('taskforce_apply_failed',{taskId:task.externalId,error:safeError(error)});return{ok:false};}
   }
 
   async pollTaskForceNotifications(credential){return pollTaskForceNotificationsRecovered.call(this,credential);}

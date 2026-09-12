@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { FreeRevenueGlobalWorkHunter } from './free-revenue-global-work-hunter.js';
+import { readJson } from './util.js';
 
 export class ExpandedFreeRevenueGlobalWorkHunter extends FreeRevenueGlobalWorkHunter{
   constructor(opts={}){super(opts);this.dynamicFeedFile=path.join(opts.storageDir||opts.env?.STORAGE_DIR||process.env.STORAGE_DIR||'data','autonomos','dynamic-market-feed.json');}
@@ -18,4 +19,4 @@ export class ExpandedFreeRevenueGlobalWorkHunter extends FreeRevenueGlobalWorkHu
     this.persist();return{...base,newLeads:Number(base.newLeads||0)+dynamicNew,dynamicMarketRows:dynamicSeen,dynamicMarketNewLeads:dynamicNew};
   }
 }
-function readJson(file,fallback){try{return JSON.parse(fs.readFileSync(file,'utf8'));}catch{return structuredClone(fallback);}}
+

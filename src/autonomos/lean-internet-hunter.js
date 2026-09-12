@@ -6,7 +6,11 @@ import { InternetHunter } from './internet-hunter.js';
 export class LeanInternetHunter extends InternetHunter{
   async scan(){
     if(this.running)return{ok:false,reason:'scan_already_running'};
-    if(this.env.AUTONOMOS_INTERNET_HUNTER_ENABLED==='false')return{ok:false,reason:'disabled'};
+    // Same off-switch semantics as scripts/start-autonomos.mjs, which decides whether this
+    // lane is constructed at all: 0/false/no/off all mean off. An exact match on the string
+    // 'false' meant AUTONOMOS_INTERNET_HUNTER_ENABLED=0 built the hunter and then let it
+    // scan anyway, so the two halves of the same switch disagreed.
+    if(/^(0|false|no|off)$/i.test(String(this.env.AUTONOMOS_INTERNET_HUNTER_ENABLED??'')))return{ok:false,reason:'disabled'};
     this.running=true;const started=Date.now();
     try{
       await this.probeAgentLancer().catch(error=>this.event('probe_failed',{source:'agentlancer',error:safeError(error)}));

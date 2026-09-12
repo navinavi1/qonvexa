@@ -8,6 +8,14 @@ export function credentialFingerprint(env=process.env){return crypto.createHash(
 export function readCapabilities(env=process.env){try{const state=JSON.parse(fs.readFileSync(path.join(resourceRoot(env),'verified-capabilities.json'),'utf8'));if(state.credentialFingerprint!==credentialFingerprint(env))return{};return state;}catch{return{};}}
 export function saveCapabilities(state,env=process.env){const root=resourceRoot(env);fs.mkdirSync(root,{recursive:true});const file=path.join(root,'verified-capabilities.json');const tmp=file+'.'+crypto.randomUUID()+'.tmp';fs.writeFileSync(tmp,JSON.stringify({...state,credentialFingerprint:credentialFingerprint(env)}),{mode:0o600});fs.renameSync(tmp,file);}
 function fresh(proof){return proof?.ok===true&&Date.parse(proof.expiresAt||'')>Date.now();}
+// The no-llm branch below reads the SAME key names as llm-router.js
+// (AUTONOMOS_LLM_API_KEY || OPENAI_API_KEY). It used to read OPENAI_API_KEY alone, so a
+// deployment configured only with AUTONOMOS_LLM_API_KEY — which llm-router accepts and
+// happily makes real model calls with — reported llmEnabled:false to every caller that
+// passes no llm object. FreeRevenueLeadActioner is one of those, and it is the actioner the
+// running fleet is built on, so every non-deterministic job was classified
+// 'unsupported_without_llm' and never executed, with a working API key sitting in the
+// environment. One variable name differing between two files, and nothing says so.
 export function unifiedCapabilityContext(env=process.env,{llm=null}={}){
   const state=readCapabilities(env);const available=p=>resourceAvailability(p,env).allowed;
   const shell=Boolean(env.E2B_API_KEY)&&available('e2b')&&fresh(state.shell);
@@ -15,7 +23,7 @@ export function unifiedCapabilityContext(env=process.env,{llm=null}={}){
   const connected=app?(state.apps.connectedApps||[]).filter(name=>available(name)):[];
   const localArtifact=Boolean(env.STORAGE_DIR&&(env.SITE_URL||env.RENDER_EXTERNAL_URL||env.PUBLIC_URL))&&available('local_artifact');
   const deploy=Boolean(env.AUTONOMOS_DEPLOY_WEBHOOK_URL)&&fresh(state.deploy);
-  return{registryVersion:1,llmEnabled:Boolean(llm?(llm.available??llm.enabled):env.OPENAI_API_KEY)&&available('openai'),hasGithubPrTool:githubAvailable(env)&&available('github')&&fresh(state.github),hasShellTool:shell,hasBrowserTool:shell&&fresh(state.browser),hasDesignMediaTool:shell&&fresh(state.media),hasAppTool:app,connectedApps:connected,hasDeployTool:deploy,hasArtifactTool:localArtifact||(available('r2')&&fresh(state.artifact)),hasWebSearchTool:available('public_http')||available('github'),verifiedAt:state.updatedAt||'',strictCapabilityProof:true};
+  return{registryVersion:1,llmEnabled:Boolean(llm?(llm.available??llm.enabled):(env.AUTONOMOS_LLM_API_KEY||env.OPENAI_API_KEY))&&available('openai'),hasGithubPrTool:githubAvailable(env)&&available('github')&&fresh(state.github),hasShellTool:shell,hasBrowserTool:shell&&fresh(state.browser),hasDesignMediaTool:shell&&fresh(state.media),hasAppTool:app,connectedApps:connected,hasDeployTool:deploy,hasArtifactTool:localArtifact||(available('r2')&&fresh(state.artifact)),hasWebSearchTool:available('public_http')||available('github'),verifiedAt:state.updatedAt||'',strictCapabilityProof:true};
 }
 const pending=new Map();
 export async function refreshCapabilities(env=process.env,{force=false,fetchImpl=fetch,shellProbe=null}={}){
