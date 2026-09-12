@@ -337,7 +337,13 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
       const ledger = store.readNdjson('ledger.ndjson', -1);
       const events = store.readNdjson('events.ndjson', 500).reverse();
       const opportunities = store.readNdjson('opportunities.ndjson', 500).reverse();
-      const jobs = store.readNdjson('jobs.ndjson', 500).reverse();
+      // Recent outcomes is a panel about what to do next, so it must not be dominated by
+      // markets the owner permanently retired. Dealwork was retired on 2026-09-09 and its
+      // claim failures -- the job poster's own wallet holding 0.00, never our defect -- were
+      // still the four newest rows days later, reading as "we are failing" on a market we
+      // deliberately left. History is untouched: jobs.ndjson and the ledger still hold every
+      // row, this filters the view only.
+      const jobs = store.readNdjson('jobs.ndjson', 500).reverse().filter(job=>!isRetiredMarket(job));
       taskAgents.retireOrphans([...activeJobs.keys()]);
       const metrics = calculateMetrics(ledger, jobs, opportunities, seen.size);
       return {
@@ -522,7 +528,7 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
 
     async runLiveSelfTest(){
       const started=Date.now();
-      const result=await discoverMarketOpportunities({env,credentials,limit:10,sources:[]});
+      const result=await discoverSignals({limit:10,sources:[]});
       const statuses=connectorStatuses(env,x402.status(),credentials);
       const sourceDefs=new Map(statuses.map(x=>[x.id,x]));
       const sources=Object.fromEntries(Object.entries(result.health||{}).map(([id,h])=>{const def=sourceDefs.get(id)||{};const lifecycle=marketplaceLifecycleWithCashout(id);const claimReady=Boolean(h?.claimReady);return[id,{ok:Boolean(h?.ok),disabled:Boolean(h?.disabled),mode:h?.mode||def.mode||'',count:Number(h?.count||0),configured:Boolean(def.configured),claimReady,workAutoReady:Boolean(lifecycle.workAutoReady),fullAutoReady:Boolean(lifecycle.fullAutoReady),cashoutState:lifecycle.cashoutState||'',error:String(h?.error||'').slice(0,180)}];}));
@@ -572,7 +578,7 @@ async refreshTreasury(){
 
       const boot=await bootstrapMarketCredentials({env,credentials,ownerWallet:wallet,storeCredential:(id,value)=>{credentials={...credentials,[id]:value};store.writeSecretJson('credentials.private.json',credentials);}});
       state.bootstrapHealth=boot;
-      const discovery=await discoverMarketOpportunities({env,credentials,limit:100}); state.connectorHealth=discovery.health;
+      const discovery=await discoverSignals({limit:100}); state.connectorHealth=discovery.health;
       const cycleLedger=store.readNdjson('ledger.ndjson',-1);
       const jobHistory=store.readNdjson('jobs.ndjson',4000);
       const availableSpendUsd=computeEarnedSpendBudgetUsd(cycleLedger,config);
@@ -692,6 +698,37 @@ async refreshTreasury(){
   // executable capability, positive economics and a payout above the floor, and rejects
   // demo/test listings. Note that with connectors/index.js still stubbed, discovery yields
   // no signals, so in practice this changes the funnel's honesty rather than its output.
+  // connectors/index.js was decommissioned on purpose: retained markets are polled by their
+  // provider adapters inside the worker fleet, so discoverMarketOpportunities() returns an
+  // empty list by design. Mission Control never stopped reading that path, so its funnel
+  // counted an empty array and reported "no actionable paid jobs were discovered" while the
+  // fleet's own feed held a thousand live leads. Two panels, two pipelines, one of them dead.
+  //
+  // Rows carry ownedByFleet so this runtime reports on them without ever claiming them: the
+  // fleet owns their lifecycle. The connector claim path is itself a stub today, but a
+  // restored connector must not race the adapter that already applied for the same job.
+  function fleetDiscoveredSignals(limit=100){
+    const leads=store.readJson('global-work-hunter.json',{}).leads||{};
+    const rows=[];
+    for(const lead of Object.values(leads)){
+      if(!lead?.id||isRetiredMarket(lead))continue;
+      rows.push({...lead,externalId:String(lead.externalId||lead.id),
+        source:String(lead.source||lead.marketId||'unknown'),
+        budgetUsd:Number(lead.budgetUsd||lead.payoutUsd||0),
+        currency:String(lead.currency||'USD'),
+        observedAt:lead.lastSeenAt||lead.observedAt||'',
+        ownedByFleet:true});
+    }
+    rows.sort((a,b)=>Date.parse(b.observedAt||0)-Date.parse(a.observedAt||0));
+    return rows.slice(0,Math.max(1,Number(limit)||100));
+  }
+  async function discoverSignals({limit=100,sources=[]}={}){
+    const connector=await discoverMarketOpportunities({env,credentials,limit,sources});
+    const fleet=fleetDiscoveredSignals(limit);
+    const seen=new Set(connector.signals.map(x=>String(x.source)+':'+String(x.externalId)));
+    return{signals:[...connector.signals,...fleet.filter(x=>!seen.has(String(x.source)+':'+String(x.externalId)))],
+      health:connector.health};
+  }
   function isActionableEarningSignal(op={}){
     const source=String(op.source||'');
     const mode=String(op.claimMode||'');
@@ -871,8 +908,10 @@ async refreshTreasury(){
     appendJobStatus({id:jobId,source:op.source,externalId:op.externalId,title:op.title,budgetUsd:op.budgetUsd,currency:op.currency,status:'claiming',startedAt});event('market_job_claiming',{jobId,source:op.source,externalId:op.externalId,budgetUsd:op.budgetUsd});
     let claim;
     try{
-
-      claim=await claimMarketplaceJob(op,{env,credentials});
+      // The worker fleet discovered and applied for this one. Reporting on it here is the
+      // point; claiming it again would be a second application for the same job.
+      if(op.ownedByFleet)claim={ok:false,reason:'owned_by_worker_fleet'};
+      else claim=await claimMarketplaceJob(op,{env,credentials});
     }catch(error){claim={ok:false,reason:String(error?.message||error).slice(0,220)}}
     if(!claim.ok){
       const attempts=Number(claimAttempts[key]?.count||0)+1;
@@ -1445,7 +1484,7 @@ async refreshTreasury(){
       await integrationsReady;await recoveryReady;
       if(config.killSwitch||!config.enabled||!config.autoClaimJobs)return{ok:false,reason:'not_applicable'};
       const fastSources=[];
-      const discovery=await discoverMarketOpportunities({env,credentials,limit:60,sources:fastSources});
+      const discovery=await discoverSignals({limit:60,sources:fastSources});
       const cycleLedger=store.readNdjson('ledger.ndjson',-1);
       const jobHistory=store.readNdjson('jobs.ndjson',4000);
       const cycleConfig={...config,availableSpendUsd:computeEarnedSpendBudgetUsd(cycleLedger,config)};
