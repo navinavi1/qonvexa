@@ -43,7 +43,20 @@ export function businessSnapshot(storageDir,env=process.env){
  const seen=new Set(),revenues=ledger.filter(x=>x.type==='revenue'&&!x.testnet&&['settled','paid','confirmed','released'].includes(x.status)&&Number(x.amountUsd)>0).filter(x=>{const id=receiptIdentity(x)||x.id;if(!id||seen.has(id))return false;seen.add(id);return true;});
  const totals=new Map();for(const r of revenues){const id=r.jobId||r.externalId;if(id)totals.set(id,(totals.get(id)||0)+Number(r.amountUsd));}
  const expected=new Map([...jobs.values()].map(({op,a})=>[a.ledgerJobId,op.payoutUsd]));
- counts.paid=[...totals].filter(([id,total])=>!expected.has(id)||Number(expected.get(id))>0&&total>=Number(expected.get(id))).length;
+
+ // A job counts as paid when settled money arrived and nothing contradicts it. The old
+ // predicate read `!expected.has(id) || expected>0 && total>=expected`, which silently
+ // dropped the case where a job IS known but its expected payout is 0 — the posting never
+ // stated a price, which is the hunter's common case, not an edge one. A fully paid job
+ // then sat at paid:0 while grossRevenueUsd beside it showed the money, so two figures on
+ // the same dashboard contradicted each other. An unknown price is not evidence of
+ // underpayment; a known price that was not met still is.
+ const paidEnough=(id,total)=>{
+  const want=Number(expected.get(id)||0);
+  if(!expected.has(id)||!(want>0))return true; // no price to fall short of
+  return total>=want;
+ };
+ counts.paid=[...totals].filter(([id,total])=>paidEnough(id,total)).length;
  const gross=revenues.reduce((n,x)=>n+Number(x.amountUsd||0),0),cost=ledger.filter(x=>x.type==='cost').reduce((n,x)=>n+Number(x.amountUsd||0),0),fees=revenues.reduce((n,x)=>n+Number(x.feeUsd||0)+Number(x.networkFeeUsd||0),0);
  const workers=Object.values(read('execution-workforce.json')).map(x=>({...x,active:Boolean(x.active&&x.pid===process.pid&&Date.parse(x.updatedAt)>Date.now()-30*60*1000)}));
  const teamState=read('accepted-task-squads.json'),squads=teamState.pid===process.pid&&(Date.parse(teamState.updatedAt)>Date.now()-30*60000)?teamState.agents||[]:[];
