@@ -15,6 +15,7 @@ import { githubAvailable } from '../src/autonomos/github-transport.js';
 import { paymentDestinations, selectPayoutRoute } from '../src/autonomos/payment-router.js';
 import { computeEarnedSpendBudgetUsd } from '../src/autonomos/profit-engine.js';
 import { normalizeConfig, DEFAULT_AUTONOMOS_CONFIG } from '../src/autonomos/policy-engine.js';
+import { resourceAvailability } from '../src/autonomos/resource-control.js';
 
 const env = process.env;
 const storageDir = String(env.STORAGE_DIR || 'data');
@@ -86,6 +87,38 @@ const solRoute = selectPayoutRoute({ currency: 'USDC', network: 'solana', suppor
 check('PAID', 'USDC on Solana can be routed', solRoute.ok,
   solRoute.ok ? `-> ${solRoute.destination}` : `refused: ${solRoute.reason}`,
   'Set AUTONOMOS_PHANTOM_WALLET. TaskForce settles USDC on Solana, so without it those jobs are refused before they are claimed.');
+
+// ── 4b. The allowance the earning lane runs on ──────────────────────────────────────────
+// This is the check that took two weeks to find by hand. Everything above can be perfectly
+// configured and the lane still earns nothing, because the daily GitHub allowance is spent
+// on polling: discovery every 30s plus the PR monitor every 60s is ~4300 calls a day against
+// a 4000 cap. When it runs out, hasGithubPrTool goes false and the capability probe that
+// would re-enable it needs the same allowance, so it cannot recover until UTC midnight.
+// None of that is visible in the repository — only in a running deployment.
+{
+  const earning = resourceAvailability('github', env, { purpose: 'earning' });
+  const discovery = resourceAvailability('github', env, { purpose: 'opportunistic' });
+  const used = Number(earning.used || 0);
+  const limit = Number(earning.limit || 0);
+  const pct = limit > 0 ? Math.round((used / limit) * 100) : 0;
+
+  check('FIND', 'GitHub allowance not exhausted', earning.allowed !== false,
+    `${used}/${limit || '?'} used today (${pct}%)${earning.retryAt ? `, resets ${earning.retryAt}` : ''}`,
+    'Raise the cap: AUTONOMOS_FREE_RESOURCE_LIMITS_JSON={"github":{"limit":60000}}. Ours defaults to 4000/day while GitHub allows an authenticated token 5000/hour, so the default throttles the earning lane to a few percent of what the token actually permits.');
+
+  // A held reserve is the system working, not failing — say so rather than leaving the owner
+  // to read "blocked" and start changing things.
+  if (discovery.allowed === false && earning.allowed !== false) {
+    check('FIND', 'Discovery paused to protect delivery', true,
+      'the opportunistic share is spent; the earning reserve is intact',
+      '');
+  }
+  if (limit > 0 && pct >= 70 && earning.allowed !== false) {
+    check('FIND', 'GitHub allowance headroom', false,
+      `${100 - pct}% left before the earning lane stops`,
+      'Raise the cap before it runs out; polling alone consumes the default in under a day.');
+  }
+}
 
 // ── 5. The part no code here can verify ─────────────────────────────────────────────────
 // Bounty platforms pay the GitHub account that solved the issue, into the wallet connected

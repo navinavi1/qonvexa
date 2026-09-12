@@ -50,6 +50,25 @@ assert.doesNotMatch(readyOut, /\[FAIL\]/, 'no check may fail once everything is 
 assert.match(readyOut, /\[ \?\? \] Bounty platform payout account/, 'the unverifiable step must stay marked unverifiable');
 assert.match(readyOut, /is not a promise of income/, 'a green report must not read as a guarantee');
 
+// 5) The check that took two weeks to find by hand: a GitHub allowance spent on polling
+// shuts the earning lane down invisibly. It must be red in the report, not inferred from
+// logs. Written as the resource store really records it.
+const drained = fs.mkdtempSync(path.join(os.tmpdir(), 'preflight-drained-'));
+fs.mkdirSync(path.join(drained, 'autonomos'), { recursive: true });
+fs.writeFileSync(path.join(drained, 'autonomos', 'resource-usage.json'), JSON.stringify({
+  resources: { github: { period: new Date().toISOString().slice(0, 10), used: 4000, lastUseAt: new Date().toISOString() } },
+  events: []
+}));
+const drainedOut = run({
+  STORAGE_DIR: drained,
+  GITHUB_TOKEN: 'x', OPENAI_API_KEY: 'x', E2B_API_KEY: 'x',
+  AUTONOMOS_OWNER_WALLET: '0x1f674bf085f6fed36fa198287d51edf0fe0bb9e2'
+});
+assert.match(drainedOut, /\[FAIL\] GitHub allowance not exhausted: 4000\/4000/,
+  'an exhausted allowance must be reported, not left to be found in the logs');
+assert.match(drainedOut, /AUTONOMOS_FREE_RESOURCE_LIMITS_JSON/, 'and must name the fix');
+fs.rmSync(drained, { recursive: true, force: true });
+
 fs.rmSync(bare, { recursive: true, force: true });
 fs.rmSync(ready, { recursive: true, force: true });
 console.log('EARNING PREFLIGHT: PASS');

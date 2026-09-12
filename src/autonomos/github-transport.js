@@ -15,7 +15,13 @@ async function requestCore(endpoint, { method = 'GET', body, env = process.env, 
   if (!['GET', 'POST', 'PATCH', 'PUT'].includes(method) || body?.force === true) throw new Error('github_operation_not_allowed');
   const store=new AutonomOSStore(path.join(env.STORAGE_DIR||'data','autonomos'));const cooldown=store.readJson('github-cooldown.json',{});if(Number(cooldown.until)>Date.now())return {ok:false,status:429,error:'github_server_cooldown',retryAt:new Date(cooldown.until).toISOString()};
   const finish=(result,headers)=>{if(result.status===429||result.status===403&&/rate.limit|secondary|abuse/i.test(JSON.stringify(result.value||result.error||''))){const seconds=Number(headers?.get?.('retry-after')||60);const until=Date.now()+Math.max(60000,(Number.isFinite(seconds)?seconds:60)*1000);store.writeJson('github-cooldown.json',{until,reason:'upstream_rate_limit'});return {...result,status:429,retryAt:new Date(until).toISOString()};}return result;};
-  const cap = await reserveResource('github', 1, env);
+  // Discovery and delivery draw on the same daily allowance, and discovery is the one that
+  // runs on a timer. Classifying by endpoint costs nothing and needs no call-site changes:
+  // /search/* is looking for work, everything else is claiming it, delivering it, or
+  // checking that it was paid — and those are the calls that must still go through when the
+  // allowance is nearly spent, because the model and sandbox cost is already sunk.
+  const purpose = endpoint.startsWith('/search/') ? 'opportunistic' : 'earning';
+  const cap = await reserveResource('github', 1, env, { purpose });
   if (!cap.ok) return { ok: false, status: 429, value: { message: cap.error }, error: cap.error, retryAt:cap.retryAt };
   let response;
   if (env.GITHUB_TOKEN) {

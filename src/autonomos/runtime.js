@@ -214,6 +214,10 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
   // canTransition()/JOB_STATES existed only in agency-intelligence.js and a unit test —
   // nothing in the running system ever called them.
   const lastJobStatus=new Map();
+  // Declared here rather than beside logDiagnostics(): `let` is not hoisted, and
+  // logDiagnostics('runtime_initialized') runs during construction, before that point.
+  const DIAGNOSTICS_HEARTBEAT_MS=10*60_000;
+  let lastDiagnosticsKey='',lastDiagnosticsAt=0,identicalCycles=0;
   for(const [id,row] of Object.entries(latestStatuses(store.readNdjson('jobs.ndjson',4000)))){
     // Only states the machine actually knows are seeded. A legacy row carrying something
     // else ('paid', 'discovered', a status from a retired lane) used to become the
@@ -1486,9 +1490,22 @@ async refreshTreasury(){
   }
   function inferPayoutMethods(op){return Array.isArray(op?.supportedMethods)?op.supportedMethods:[];}
   async function mapLimit(items,limit,worker){const rows=Array.from(items||[]);const out=new Array(rows.length);let cursor=0;const runners=Array.from({length:Math.min(rows.length,Math.max(1,Number(limit||1)))},async()=>{while(true){const index=cursor++;if(index>=rows.length)return;try{out[index]=await worker(rows[index],index);}catch(error){out[index]={ok:false,error:String(error?.message||error).slice(0,220)};}}});await Promise.all(runners);return out;}
+  // Log on change, plus a heartbeat so silence is never mistaken for death.
+  //
+  // This block was written in full on every cycle. At a 20s heartbeat that is ~4300 large
+  // JSON dumps a day, all of them identical, and they buried the lines that mattered: the
+  // GitHub allowance running out — the single thing that had shut the earning lane down —
+  // sat in that noise for two weeks. An operator cannot read what a machine repeats.
+  //
+  // Nothing is lost. The fingerprint covers what someone would actually act on, and when the
+  // picture finally changes the line carries how many identical cycles it stood for.
   function logDiagnostics(type){
     const detail=executionDiagnostics({config,state,registry:Object.values(jobRegistry.records),inFlight:Object.values(inFlightJobs),capabilities:capabilityContext()});
-    try{logger.info?.('[AutonomOS] '+JSON.stringify({at:new Date().toISOString(),type,...detail}));}catch{}
+    const key=JSON.stringify({readiness:detail.readiness,blockers:detail.blockers,tools:detail.tools,failures:detail.failures,recoveryFailures:detail.recoveryFailures,markets:detail.markets,revenueSources:detail.revenueSources,availableSpendUsd:detail.availableSpendUsd});
+    const now=Date.now();
+    if(key===lastDiagnosticsKey&&now-lastDiagnosticsAt<DIAGNOSTICS_HEARTBEAT_MS){identicalCycles++;return;}
+    const repeated=identicalCycles;identicalCycles=0;lastDiagnosticsKey=key;lastDiagnosticsAt=now;
+    try{logger.info?.('[AutonomOS] '+JSON.stringify({at:new Date().toISOString(),type,...(repeated?{identicalCyclesSince:repeated}:{}),...detail}));}catch{}
   }
   function reschedule(){if(config.enabled&&!config.killSwitch)schedule();} function persistAgents(){store.writeJson('agents.json',agents);} function persistCore(){store.writeJson('config.json',config);store.writeJson('state.json',state);persistAgents();store.writeJson('children.json',children);store.writeJson('offers.json',offers);} function event(type,detail){const row={at:new Date().toISOString(),type,...detail};store.append('events.ndjson',row);logExecutionEvent(logger,type,detail);eventBus.publish(type,row).catch(()=>{});emitOperationalLog(row,{env}).catch(()=>{});}
 }

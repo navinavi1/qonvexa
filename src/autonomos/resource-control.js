@@ -7,6 +7,19 @@ import crypto from 'node:crypto';
 // plan, unused trial credits, or permission to buy from the presence of an API key.
 export const OWNER_CAPPED_PROVIDERS = Object.freeze(['openai','e2b','composio','trigger']);
 const DIRECT_FREE = new Set(['public_http','github','local_artifact','canva','figma','duckduckgo','gmail','gmail_read','browser_read','google_drive','google_sheets','google_calendar','slack','notion']);
+// A slice of the daily allowance that ONLY earning-path calls may draw from.
+//
+// The whole allowance used to be one pool, and polling drank it dry: discovery scans every
+// 30s and the PR monitor every 60s together consume ~4300 GitHub calls a day against a
+// 4000 cap, so by the time a bounty was worth applying to there was nothing left. Measured
+// in production: github 4000/4000 used, hasGithubPrTool false, the one lane where automated
+// work is permitted and paid shut down until the next UTC midnight — and the capability
+// probe that would re-enable it also needs quota, so it could not recover on its own.
+//
+// Losing discovery for a few hours costs a delay. Losing delivery loses money already spent
+// on the model and the sandbox, so the reserve protects the second at the expense of the
+// first. Applies per provider; a provider with no entry behaves exactly as before.
+const EARNING_RESERVE = { github: 0.25 };
 const DEFAULT_LIMITS = {public_http:2000,github:4000,local_artifact:128*1024*1024,canva:50,figma:100,duckduckgo:2000,gmail:200,gmail_read:5000,browser_read:100,google_drive:1000,google_sheets:1000,google_calendar:500,slack:500,notion:500};
 const listeners = new Set();
 const volatile = new Map();
@@ -30,18 +43,31 @@ export function resourcePolicy(provider,env=process.env){
   const rawLimit=Number(direct?(custom.limit??DEFAULT_LIMITS[name]):custom.remainingUnits||0);const limit=Number.isFinite(rawLimit)?Math.max(0,rawLimit):0;
   return{provider:name,mode:direct?'direct_free':'verified_free_quota',allowed:verified,providerCapVerified:!direct&&verified,limit,period:name==='local_artifact'?'lifetime':custom.period||'day',resetAt:custom.resetAt||'',reason:verified?'':'free_quota_not_verified'};
 }
-export function resourceAvailability(provider,env=process.env){
+// `purpose` is 'earning' (default, sees the whole allowance) or 'opportunistic' (discovery,
+// search fallbacks — sees the allowance minus the reserve). Callers that do not say are
+// treated as earning, so no provider's behaviour changes until a call site opts in.
+export function resourceAvailability(provider,env=process.env,{purpose='earning'}={}){
   const policy=resourcePolicy(provider,env);const row=readResourceState(env).resources?.[provider]||{};
   const until=Date.parse(row.unavailableUntil||'');
   if(Number.isFinite(until)&&until>Date.now())return{...policy,allowed:false,reason:row.reason||'resource_limit_reached',retryAt:row.unavailableUntil};
   if(!policy.allowed)return policy;
   const period=periodKey(policy);const used=row.period===period?Number(row.used||0):0;
-  if(policy.limit!==null&&used>=policy.limit)return{...policy,allowed:false,reason:'free_resource_limit_reached',retryAt:resetDate(policy),used};
-  return{...policy,used,remaining:policy.limit===null?null:Math.max(0,policy.limit-used)};
+  const reserve=Number(EARNING_RESERVE[provider]||0);
+  const ceiling=policy.limit!==null&&purpose==='opportunistic'&&reserve>0
+    ? Math.floor(policy.limit*(1-reserve))
+    : policy.limit;
+  if(ceiling!==null&&used>=ceiling){
+    // Distinct reason: the allowance is not gone, it is being held for work that earns.
+    // Reporting this as free_resource_limit_reached would make a healthy reserve look like
+    // an outage and send the lane into the same cooldown as a real exhaustion.
+    const held=purpose==='opportunistic'&&used<policy.limit;
+    return{...policy,allowed:false,reason:held?'earning_reserve_protected':'free_resource_limit_reached',retryAt:resetDate(policy),used,limit:ceiling};
+  }
+  return{...policy,used,limit:ceiling,remaining:ceiling===null?null:Math.max(0,ceiling-used)};
 }
-export async function reserveResource(provider,units=1,env=process.env){
+export async function reserveResource(provider,units=1,env=process.env,{purpose='earning'}={}){
   const n=Number(units);if(!Number.isFinite(n)||n<0)return{ok:false,error:'invalid_resource_units'};
-  const ready=resourceAvailability(provider,env);if(!ready.allowed){notify(provider,ready,env);return{ok:false,error:ready.reason,retryAt:ready.retryAt,resource:provider,replacementRequired:true};}
+  const ready=resourceAvailability(provider,env,{purpose});if(!ready.allowed){notify(provider,ready,env);return{ok:false,error:ready.reason,retryAt:ready.retryAt,resource:provider,replacementRequired:true};}
   if(ready.mode==='owner_capped')return{ok:true,resource:provider,mode:ready.mode};
   // Third-party free allowances are shared across all machines. A local estimate is
   // insufficient: an operator-provided remaining allowance requires a shared Redis cap.
