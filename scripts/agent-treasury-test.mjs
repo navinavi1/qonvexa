@@ -6,6 +6,29 @@ import { computeEarnedSpendBudgetUsd, allocateRevenue } from '../src/autonomos/p
 import { normalizeConfig, DEFAULT_AUTONOMOS_CONFIG } from '../src/autonomos/policy-engine.js';
 import { createAutonomOS } from '../src/autonomos/runtime.js';
 
+// This file reads and writes process.env to exercise normalizeConfig, so it must own the
+// environment it runs in rather than inherit one. It did not, and that is exactly how it
+// passed on a laptop and failed the production build: Render sets
+// AUTONOMOS_AGENT_TREASURY_PERCENT, which made BOTH split percentages count as explicitly
+// set, the one-sided complement never fired, and 60 + 50 renormalised to 54.5 — a test
+// failure caused entirely by the machine it ran on.
+//
+// Every AUTONOMOS_* name this file asserts on is cleared up front and restored at the end,
+// so the result depends on the code under test and nothing else.
+const OWNED_ENV = [
+  'AUTONOMOS_OWNER_REVENUE_PERCENT', 'AUTONOMOS_AGENT_TREASURY_PERCENT',
+  'AUTONOMOS_SEED_SPEND_BUDGET_USD', 'AUTONOMOS_RUNTIME_ENV_OVERRIDES',
+  'AUTONOMOS_MAX_CHILDREN', 'AUTONOMOS_MAX_PAID_PROCUREMENT_USD',
+  'npm_lifecycle_event'
+];
+const SAVED_ENV = Object.fromEntries(OWNED_ENV.map(k => [k, process.env[k]]));
+for (const key of OWNED_ENV) delete process.env[key];
+process.on('exit', () => {
+  for (const [key, value] of Object.entries(SAVED_ENV)) {
+    if (value === undefined) delete process.env[key]; else process.env[key] = value;
+  }
+});
+
 // The cold-start deadlock this file exists to prevent regressing: the agents' spend pool
 // starts at seedSpendBudgetUsd, every attempt (successful or not) appends a cost row, and
 // executors refuse to start once the pool hits zero — but a job has to execute to earn the
