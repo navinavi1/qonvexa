@@ -1355,12 +1355,18 @@ async refreshTreasury(){
       capability_missing:'Current paid jobs require capabilities or connected tools that are not available.',
       economics_failed:'Current jobs fail the profit/cost gate.',
       no_escrow:'Current jobs are not verified as escrow/funded for safe automatic claim.',
-      payout_route:'Current jobs do not satisfy the configured crypto/payout policy.',
+      // Name the setting and the consequence. "Does not satisfy the payout policy" reads as
+      // a market problem the owner should wait out, when it is usually a deliberate
+      // configuration meeting a fiat-paying board: AUTONOMOS_CRYPTO_ONLY_EARNINGS rejects
+      // every USD and EUR job, which is most of a freelance feed. That is the correct
+      // outcome while crypto wallets are the only way to get paid -- a fiat job cannot
+      // reach an owner with no fiat rail -- but it is a choice, and the panel should say so.
+      payout_route:'These jobs pay in fiat and AUTONOMOS_CRYPTO_ONLY_EARNINGS accepts crypto only. Correct while crypto wallets are the only payout rail: a USD job cannot reach you. To claim them you would need a fiat rail first, not just this setting turned off.',
       market_funding:'Marketplace/buyer funding is not valid yet.',
       not_claimable:'The marketplace exposes these jobs, but they are not in an autonomous claim path.',
       duplicate_permanent:'These jobs were already finished/taken and remain permanently deduplicated.',
       system_blocked:'Current jobs are blocked by a capability/system failure we own.',
-      auth_missing:'A required marketplace credential or connection is missing.',
+      auth_missing:'A marketplace credential is missing, so its jobs cannot be applied for. The per-source breakdown names which market.',
       expired_closed:'The latest jobs are already closed or expired.',
       unpriced:'Current signals do not expose a usable payout.',
       other:'No discovered job currently passes the complete claim preflight.'

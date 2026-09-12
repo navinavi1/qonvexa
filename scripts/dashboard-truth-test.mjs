@@ -49,5 +49,15 @@ const funnel=after.marketFunnel||after.runtime?.marketFunnel||{};
 ok(Number(funnel.rawSignals||0)>0,'funnel now counts real leads, got '+JSON.stringify(funnel));
 ok(Number(funnel.rawSignals||0)<=2,'retired lead excluded from the funnel too, got '+funnel.rawSignals);
 
+// 4. Fiat jobs are refused because the owner has no fiat rail, and the panel must say so
+//    rather than describing it as a market condition the owner should wait out.
+const fiat=createAutonomOS({storageDir:root,env:{STORAGE_DIR:root,AUTONOMOS_ENABLED:'true',AUTONOMOS_CRYPTO_ONLY_EARNINGS:'true'}});
+await fiat.runCycle();
+const fiatSnap=await fiat.snapshot();
+const text=JSON.stringify(fiatSnap);
+ok(text.includes('crypto_only_payout_required')||text.includes('CRYPTO_ONLY_EARNINGS'),
+  'the crypto-only refusal is surfaced, not swallowed');
+
+
 fs.rmSync(root,{recursive:true,force:true});
 console.log('dashboard-truth-test OK ('+checks+' checks)');
