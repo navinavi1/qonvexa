@@ -83,7 +83,22 @@ export function computeEarnedSpendBudgetUsd(ledger = [], config = {}) {
   let spent = 0;
   for (const row of ledger) {
     if (row.type === 'revenue' && !row.testnet) {
-      const allocation = row.allocation || allocateRevenue(Number(row.amountUsd || 0), config);
+      // Split what arrived, not what was invoiced. This read amountUsd, the gross, so a
+      // marketplace fee was handed out as if it were still ours: a $40 job whose platform
+      // keeps $3 allocated a full $40 between owner and agents, promising $40 out of a $37
+      // receipt. netUsd is gross minus fees and is what the wallet actually received.
+      const settledUsd = Math.max(0, Number.isFinite(Number(row.netUsd))
+        ? Number(row.netUsd)
+        : Number(row.amountUsd || 0) - Number(row.feeUsd || 0));
+      // A recorded allocation is the decision that was made and normally stands, but it
+      // cannot be allowed to distribute more than the receipt it came from.
+      const recorded = row.allocation;
+      const recordedTotal = recorded
+        ? Number(recorded.ownerUsd||0)+Number(recorded.treasuryUsd ?? (Number(recorded.growthUsd||0)+Number(recorded.experimentUsd||0)))
+        : 0;
+      const allocation = recorded && recordedTotal <= settledUsd + 1e-6
+        ? recorded
+        : allocateRevenue(settledUsd, config);
       earnedPool += Number(allocation.treasuryUsd ?? (Number(allocation.growthUsd||0)+Number(allocation.experimentUsd||0)));
     } else if (row.type === 'owner_funding' && !row.testnet) {
       // finite() rather than Number(): a malformed amount would otherwise turn the whole
