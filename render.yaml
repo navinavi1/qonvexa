@@ -101,6 +101,12 @@ services:
         value: "https://api.taskmarket.dev"
       - key: AUTONOMOS_TASKMARKET_INTERVAL_MS
         value: "180000"
+      - key: AUTONOMOS_SECURITY_RESEARCH_ENABLED
+        value: "false"
+      - key: AUTONOMOS_SECURITY_RESEARCH_INTERVAL_MS
+        value: "3600000"
+      - key: AUTONOMOS_SECURITY_FILES_PER_PROGRAM
+        value: "12"
       - key: AUTONOMOS_ARBITRUM_RPC_URL
         sync: false
       - key: AUTONOMOS_POLYGON_RPC_URL
