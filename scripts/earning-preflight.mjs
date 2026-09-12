@@ -1,9 +1,9 @@
 // Can this system actually earn money right now, and if not, what exactly is stopping it?
 //
-// Every other readiness surface in this repository reports on the runtime cycle, which calls
-// connectors/index.js discoverMarketOpportunities() — a stub that returns an empty list. So
-// those panels describe a lane that finds nothing, while the lane that can genuinely earn is
-// the worker fleet started by scripts/start-autonomos.mjs.
+// The earning lanes are the workers started by scripts/start-autonomos.mjs. The runtime
+// cycle now reads the same feed they fill — it used to read connectors/index.js, a stub
+// returning an empty list, which is why its panels reported an empty scan for 31,951 cycles
+// — but the workers are still the ones that apply, execute and deliver.
 //
 // This checks the real lane, against the real environment, and refuses to guess. Nothing here
 // promises income; it reports which preconditions hold and names the owner action for each
@@ -129,6 +129,38 @@ check('PAID', 'Bounty platform payout account', null,
   'On Algora / Opire / IssueHunt: sign in with the same GitHub account the agent uses and connect your wallet there. A merged PR pays that account, not this server.');
 
 // ── Report ──────────────────────────────────────────────────────────────────────────────
+// Taskmarket is the one lane the suite proves end to end: claiming and submitting are free
+// routes and it settles USDC on Base, so it satisfies the crypto-only payout policy. It
+// ships disabled and needs its CLI installed, so name whichever of the two is missing.
+const taskmarketOn = /^(1|true|yes|on)$/i.test(String(env.AUTONOMOS_TASKMARKET_ENABLED || 'false'));
+// An opt-in lane that is switched off is a choice, not a fault: reporting it as blocking
+// would leave this permanently red for anyone who never wanted the lane. Only turning it on
+// without its binary is a misconfiguration, and that is checked below.
+check('WORK', 'Taskmarket lane', taskmarketOn ? true : null,
+  taskmarketOn ? 'AUTONOMOS_TASKMARKET_ENABLED is on' : 'available but switched off, so no Taskmarket task is claimed',
+  taskmarketOn ? '' : 'to use it: npm run taskmarket-install, then set AUTONOMOS_TASKMARKET_ENABLED=true');
+if (taskmarketOn) {
+  let binary = false;
+  try {
+    const { execFileSync } = await import('node:child_process');
+    execFileSync(String(env.AUTONOMOS_TASKMARKET_BIN || 'taskmarket'), ['--version'], { stdio: 'ignore', timeout: 15000 });
+    binary = true;
+  } catch {}
+  check('WORK', 'Taskmarket CLI installed', binary,
+    binary ? 'the taskmarket binary answers' : 'the lane is on but its binary is missing, so every call fails',
+    binary ? '' : 'run npm run taskmarket-install');
+}
+
+// The security research lane queues findings for the owner to submit by hand. An enabled
+// lane with an empty program registry is a configuration that quietly does nothing.
+const securityOn = /^(1|true|yes|on)$/i.test(String(env.AUTONOMOS_SECURITY_RESEARCH_ENABLED || 'false'));
+if (securityOn) {
+  const programs = (readJson('security-programs.json', {}).programs || []).length;
+  check('FIND', 'Security programs seeded', programs > 0,
+    programs > 0 ? `${programs} bounty programs in scope` : 'the lane is on with no programs to scan',
+    programs > 0 ? '' : 'run npm run security-seed');
+}
+
 const STAGES = { RUN: 'Engine running', FIND: 'Finding paid work', WORK: 'Doing the work', PAID: 'Getting paid' };
 let blocking = 0, unknown = 0;
 for (const [stage, title] of Object.entries(STAGES)) {
