@@ -20,6 +20,7 @@ import { TaskForceVerifier } from '../src/autonomos/taskforce-verifier.js';
 import { TaskForceWorker } from '../src/autonomos/taskforce-worker.js';
 import { GlobalFeedPublisher } from '../src/autonomos/global-feed-publisher.js';
 import { probeRuntimeEmailChannel } from '../src/autonomos/email-channel-probe.js';
+import { TaskmarketWorker } from '../src/autonomos/taskmarket-worker.js';
 
 if (/^(1|true|yes|on)$/i.test(String(process.env.AUTONOMOS_PRODUCTION_SWARM_MODE||''))) process.env.AUTONOMOS_RUNTIME_ENV_OVERRIDES='true';
 
@@ -45,6 +46,7 @@ const nativeMarketWorker=new NativeMarketWorker(browserlessActioner);nativeMarke
 const taskForceVerifier=new TaskForceVerifier({env:process.env,storageDir:process.env.STORAGE_DIR,logger:console});
 const taskForceWorker=new TaskForceWorker({env:process.env,storageDir:process.env.STORAGE_DIR,logger:console});
 const globalFeedPublisher=new GlobalFeedPublisher({env:process.env,storageDir:process.env.STORAGE_DIR,logger:console});
+const taskmarketWorker=new TaskmarketWorker(browserlessActioner,{env:process.env,storageDir:process.env.STORAGE_DIR,logger:console});
 
 async function ensureRevenueEmailLane(){
   if(!outboundEmailRequested||gmailJobMonitor||emailGateRunning)return Boolean(gmailJobMonitor);emailGateRunning=true;
@@ -56,8 +58,8 @@ async function ensureRevenueEmailLane(){
 
 internetHunter?.start();globalHunter.start();agrentingWorker?.start();marketScout?.start();marketExpansion?.start();skillLibrary.start();skillAcquirer?.start();moneyReporter.start();fiatRoutePlanner.start();
 if(outboundEmailRequested){await ensureRevenueEmailLane();if(!gmailJobMonitor){const every=Math.max(30_000,Number(process.env.AUTONOMOS_EMAIL_REAUTH_POLL_MS||60_000));emailGateTimer=setInterval(()=>ensureRevenueEmailLane().catch(()=>{}),every);emailGateTimer.unref?.();}}
-taskForceVerifier.start();if(enabled(process.env.AUTONOMOS_TASKFORCE_WORKER_ENABLED,'true'))taskForceWorker.start();globalFeedPublisher.start();
+taskForceVerifier.start();if(enabled(process.env.AUTONOMOS_TASKFORCE_WORKER_ENABLED,'true'))taskForceWorker.start();globalFeedPublisher.start();taskmarketWorker.start();
 
-const stop=()=>{stopAcceptedExecutions();githubJobMonitor.stop();nativeMarketWorker.stop();stopUnifiedCapabilities();internetHunter?.stop();globalHunter.stop();agrentingWorker?.stop();marketScout?.stop();marketExpansion?.stop();skillLibrary.stop();skillAcquirer?.stop();moneyReporter.stop();fiatRoutePlanner.stop();browserlessActioner?.stop();gmailJobMonitor?.stop();taskForceVerifier.stop();taskForceWorker.stop();globalFeedPublisher.stop();if(emailGateTimer)clearInterval(emailGateTimer);emailGateTimer=null;};
+const stop=()=>{stopAcceptedExecutions();githubJobMonitor.stop();nativeMarketWorker.stop();stopUnifiedCapabilities();internetHunter?.stop();globalHunter.stop();agrentingWorker?.stop();marketScout?.stop();marketExpansion?.stop();skillLibrary.stop();skillAcquirer?.stop();moneyReporter.stop();fiatRoutePlanner.stop();browserlessActioner?.stop();gmailJobMonitor?.stop();taskForceVerifier.stop();taskForceWorker.stop();globalFeedPublisher.stop();taskmarketWorker.stop();if(emailGateTimer)clearInterval(emailGateTimer);emailGateTimer=null;};
 process.on('SIGTERM',stop);process.on('SIGINT',stop);await import('../server.js');
 function enabled(value,fallback='false'){return !/^(0|false|no|off)$/i.test(String(value??fallback));}

@@ -1,0 +1,89 @@
+import { execFile } from 'node:child_process';
+const run=(cmd,args,opts)=>new Promise(resolve=>execFile(cmd,args,opts,(error,stdout,stderr)=>resolve({code:error?(error.code??1):0,stdout:String(stdout||''),stderr:String(stderr||'')})));
+
+// Read-only and free worker commands only. Every Taskmarket route that spends USDC
+// (task create/accept/rate/bid/update, refund-expired, evaluator verdicts) and every
+// route that moves money out (withdraw, set-withdrawal-address) is deliberately absent:
+// this client cannot be made to spend or withdraw, whatever a task description asks for.
+export const ALLOWED_COMMANDS=Object.freeze(['address','legal','inbox','stats','identity','task list','task get','task claim','task submit','task my-submissions','wallet balance','wallet publish-key']);
+// Never reachable from code. The owner runs these by hand; set-withdrawal-address in
+// particular is one-shot and irreversible, so an agent must not be able to reach it.
+export const FORBIDDEN_COMMANDS=Object.freeze(['wallet set-withdrawal-address','withdraw','wallet withdraw-dreams','task create','task accept','task accept-submissions','task rate','task bid','task auction-accept','task update','task cancel','task refund-expired','task evaluate','task appeal','task resolve-dispute','task assign-evaluator','task reject-submission','task reject-all-submissions','task select-worker','task select-winner','task evaluator-timeout','task invite','task uninvite','task pitch','task proof']);
+
+export function commandAllowed(argv){
+  const joined=argv.map(part=>String(part)).join(' ');
+  for(const forbidden of FORBIDDEN_COMMANDS)if(joined===forbidden||joined.startsWith(forbidden+' '))return{allowed:false,reason:'forbidden_command:'+forbidden};
+  for(const allowed of ALLOWED_COMMANDS)if(joined===allowed||joined.startsWith(allowed+' '))return{allowed:true,reason:''};
+  return{allowed:false,reason:'command_not_allowlisted'};
+}
+
+export function parseCliJson(stdout){
+  const text=String(stdout||'').trim();if(!text)return{ok:false,error:'empty_output'};
+  try{return JSON.parse(text)}catch{}
+  // The CLI prints human lines around its JSON on some commands; take the last balanced object.
+  const start=text.indexOf('{'),end=text.lastIndexOf('}');
+  if(start>=0&&end>start){try{return JSON.parse(text.slice(start,end+1))}catch{}}
+  return{ok:false,error:'unparsable_output',raw:text.slice(0,400)};
+}
+
+export function createTaskmarketClient({env=process.env,exec=run,logger=null}={}){
+  const enabled=/^(1|true|yes|on)$/i.test(String(env.AUTONOMOS_TASKMARKET_ENABLED||'false'));
+  const binary=String(env.AUTONOMOS_TASKMARKET_BIN||'taskmarket');
+  const apiUrl=String(env.TASKMARKET_API_URL||'https://api.taskmarket.dev').replace(/\/$/,'');
+  const timeoutMs=Math.max(5000,Number(env.AUTONOMOS_TASKMARKET_TIMEOUT_MS||60000));
+
+  async function call(argv,{allowFailure=true}={}){
+    const gate=commandAllowed(argv);
+    if(!gate.allowed){logger?.warn?.('[Taskmarket] blocked '+argv.join(' ')+' ('+gate.reason+')');return{ok:false,error:gate.reason,blocked:true};}
+    if(!enabled)return{ok:false,error:'taskmarket_disabled'};
+    const result=await exec(binary,argv,{timeout:timeoutMs,env:{...env,TASKMARKET_API_URL:apiUrl},maxBuffer:8*1024*1024});
+    if(result.code!==0&&!allowFailure)throw Error('taskmarket_'+argv[0]+'_exit_'+result.code);
+    if(result.code!==0)return{ok:false,error:'exit_'+result.code,stderr:String(result.stderr||'').slice(0,400)};
+    const parsed=parseCliJson(result.stdout);
+    return parsed&&typeof parsed==='object'?{ok:parsed.ok!==false,...parsed}:{ok:false,error:'unexpected_output'};
+  }
+
+  return{
+    enabled,apiUrl,
+    status(){return{enabled,apiUrl,binary,network:'eip155:8453',allowedCommands:[...ALLOWED_COMMANDS],canWithdraw:false,canSpend:false};},
+    call,
+    address(){return call(['address']);},
+    legalStatus(){return call(['legal','status']);},
+    balance(){return call(['wallet','balance']);},
+    identityStatus(){return call(['identity','status']);},
+    listOpenTasks({mode='claim',limit=20,cursor=''}={}){
+      const argv=['task','list','--status','open','--mode',String(mode),'--limit',String(Math.max(1,Math.min(100,Number(limit)||20)))];
+      if(cursor)argv.push('--cursor',String(cursor));
+      return call(argv);
+    },
+    getTask(taskId){return call(['task','get',String(taskId)]);},
+    claimTask(taskId){return call(['task','claim',String(taskId)]);},
+    submitWork(taskId,files){
+      const argv=['task','submit',String(taskId)];
+      for(const file of (Array.isArray(files)?files:[files]).filter(Boolean))argv.push('--file',String(file));
+      if(argv.length===3)return Promise.resolve({ok:false,error:'no_files_to_submit'});
+      return call(argv);
+    },
+    mySubmissions(){return call(['task','my-submissions']);}
+  };
+}
+
+export function normalizeTask(raw){
+  const task=raw&&typeof raw==='object'?raw:{};
+  const baseUnits=Number(task.reward??task.rewardBaseUnits??0);
+  return{
+    taskId:String(task.taskId||task.id||''),
+    mode:String(task.mode||'').toLowerCase(),
+    status:String(task.status||'').toLowerCase(),
+    description:String(task.description||task.title||''),
+    rewardUsd:Number.isFinite(baseUnits)?baseUnits/1e6:0,
+    deadline:String(task.deadline||task.expiresAt||''),
+    claimedBy:String(task.claimedBy||''),
+    tags:Array.isArray(task.tags)?task.tags.map(String):[]
+  };
+}
+
+export function tasksFromListing(payload){
+  const rows=Array.isArray(payload?.data?.tasks)?payload.data.tasks:Array.isArray(payload?.tasks)?payload.tasks:Array.isArray(payload?.data)?payload.data:[];
+  return rows.map(normalizeTask).filter(task=>task.taskId);
+}

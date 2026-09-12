@@ -95,6 +95,12 @@ services:
         sync: false
       - key: AUTONOMOS_X402_ACCEPTS_JSON
         sync: false
+      - key: AUTONOMOS_TASKMARKET_ENABLED
+        value: "false"
+      - key: TASKMARKET_API_URL
+        value: "https://api.taskmarket.dev"
+      - key: AUTONOMOS_TASKMARKET_INTERVAL_MS
+        value: "180000"
       - key: AUTONOMOS_ARBITRUM_RPC_URL
         sync: false
       - key: AUTONOMOS_POLYGON_RPC_URL
