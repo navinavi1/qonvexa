@@ -30,7 +30,7 @@ ok(commandAllowed(['wallet','balance']).allowed,'wallet balance is allowed');
 // 2. A forbidden command must not reach exec even when the client is enabled.
 let execCalls=0;
 const spyExec=async()=>{execCalls++;return{code:0,stdout:'{"ok":true}',stderr:''};};
-const enabledClient=createTaskmarketClient({env:{AUTONOMOS_TASKMARKET_ENABLED:'true'},exec:spyExec,logger:{warn(){}}});
+const enabledClient=createTaskmarketClient({env:{AUTONOMOS_TASKMARKET_ENABLED:'true',STORAGE_DIR:root},exec:spyExec,logger:{warn(){}}});
 const blocked=await enabledClient.call(['wallet','set-withdrawal-address','0xabc']);
 eq(blocked.blocked,true,'blocked flag set');
 eq(execCalls,0,'forbidden command never reached exec');
@@ -97,13 +97,22 @@ ok(!offWorker.timer,'disabled worker scheduled no timer');
 offWorker.stop();
 
 // 10. A missing taskmarket binary degrades to an error, it never crashes the fleet.
-const realClient=createTaskmarketClient({env:{AUTONOMOS_TASKMARKET_ENABLED:'true',AUTONOMOS_TASKMARKET_BIN:'taskmarket-does-not-exist-'+Date.now()}});
+const realClient=createTaskmarketClient({env:{AUTONOMOS_TASKMARKET_ENABLED:'true',STORAGE_DIR:root,AUTONOMOS_TASKMARKET_BIN:'taskmarket-does-not-exist-'+Date.now()}});
 const missing=await realClient.address();
 eq(missing.ok,false,'missing binary reports failure');
 ok(String(missing.error).startsWith('exit_'),'missing binary surfaces an exit error, got '+missing.error);
 const missingWorker=new TaskmarketWorker(null,{env:{},storageDir:root,logger:{info(){},warn(){}},client:realClient});
 await missingWorker.discover();
 ok(true,'discover survived a missing binary without throwing');
+
+
+// 11. An enabled lane with nowhere persistent to keep the wallet must refuse, not mint a
+//     throwaway key in a directory the next deploy deletes.
+let homelessSpawns=0;
+const homeless=createTaskmarketClient({env:{AUTONOMOS_TASKMARKET_ENABLED:'true'},
+  exec:async()=>{homelessSpawns++;return{code:0,stdout:'{"ok":true}',stderr:''};}});
+eq((await homeless.address()).error,'taskmarket_home_unset','a lane with no persistent home refuses');
+eq(homelessSpawns,0,'and never spawns the CLI');
 
 
 fs.rmSync(root,{recursive:true,force:true});

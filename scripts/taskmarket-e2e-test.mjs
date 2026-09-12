@@ -33,7 +33,9 @@ case "$sub" in
 esac
 `,{mode:0o755});
 
-const env={AUTONOMOS_TASKMARKET_ENABLED:'true',AUTONOMOS_TASKMARKET_BIN:bin};
+// STORAGE_DIR is required: without a persistent home the client refuses to spawn rather
+// than mint a wallet in a directory the next deploy deletes.
+const env={AUTONOMOS_TASKMARKET_ENABLED:'true',AUTONOMOS_TASKMARKET_BIN:bin,STORAGE_DIR:root};
 let checks=0;
 const ok=(c,l)=>{assert.ok(c,l);checks++;};
 const eq=(a,b,l)=>{assert.deepEqual(a,b,l+' (got '+JSON.stringify(a)+')');checks++;};
@@ -85,6 +87,21 @@ eq(setAddr.blocked,true,'set-withdrawal-address is refused too');
 // 7. The task leaves the feed once claimed, and re-discovery adds nothing.
 await worker.discover();
 eq(Object.keys(worker.store.readJson('taskmarket-jobs.json',{})).length,1,'no duplicate job after a second scan');
+
+// 8. The agent must never sign the marketplace's policy bundle on the owner's behalf.
+//    Discovery is a read and continues; claiming stops until a human accepts.
+{
+  const gated=new TaskmarketWorker(null,{env,storageDir:root,logger:{info(){},warn(){}},
+    client:{...client,legalStatus:async()=>({ok:true,data:{accepted:false}})}});
+  eq(await gated.legalAccepted(),false,'unaccepted terms block claiming');
+  const signed=new TaskmarketWorker(null,{env,storageDir:root,logger:{info(){},warn(){}},
+    client:{...client,legalStatus:async()=>({ok:true,data:{accepted:true}})}});
+  eq(await signed.legalAccepted(),true,'accepted terms let the lane proceed');
+  const broken=new TaskmarketWorker(null,{env,storageDir:root,logger:{info(){},warn(){}},
+    client:{...client,legalStatus:async()=>({ok:false,error:'offline'})}});
+  eq(await broken.legalAccepted(),false,'an unreadable legal status is never read as consent');
+}
+
 
 fs.rmSync(root,{recursive:true,force:true});
 console.log('taskmarket-e2e-test OK ('+checks+' checks, discover -> claim -> submit -> paid)');

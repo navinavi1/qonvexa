@@ -4,7 +4,7 @@ services:
     runtime: node
     plan: starter
     region: oregon
-    buildCommand: npm ci --include=dev && npm run verify && npm prune --omit=dev
+    buildCommand: npm ci --include=dev && npm run verify && npm prune --omit=dev && (npm install -g @lucid-agents/taskmarket@latest || echo 'taskmarket CLI install failed; the Taskmarket lane stays inert and earning-preflight will say so')
     startCommand: npm start
     healthCheckPath: /health
     maxShutdownDelaySeconds: 30
@@ -96,7 +96,12 @@ services:
       - key: AUTONOMOS_X402_ACCEPTS_JSON
         sync: false
       - key: AUTONOMOS_TASKMARKET_ENABLED
-        value: "false"
+        value: "true"
+      # The CLI hardcodes its keystore at $HOME/.taskmarket/keystore.json with no override
+      # of its own, and $HOME is in the container's ephemeral layer. Without this the agent
+      # wallet is destroyed on every deploy and any settled USDC becomes unrecoverable.
+      - key: AUTONOMOS_TASKMARKET_HOME
+        value: "/var/lib/qonvexa/data/taskmarket-home"
       - key: TASKMARKET_API_URL
         value: "https://api.taskmarket.dev"
       - key: AUTONOMOS_TASKMARKET_INTERVAL_MS

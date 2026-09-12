@@ -29,12 +29,29 @@ export class TaskmarketWorker{
   save(id,patch){const rows=this.store.readJson(STATE_FILE,{});rows[id]={...rows[id],...patch,updatedAt:now()};this.store.writeJson(STATE_FILE,rows);return rows[id];}
   jobId(taskId){return crypto.createHash('sha256').update('taskmarket:'+taskId).digest('hex').slice(0,24);}
 
+  // Taskmarket requires a signed acceptance of its Terms, Privacy Policy, Risk Disclosure
+  // and Acceptable Use Policy before the first marketplace write. That is an agreement
+  // binding the owner, so the agent must never sign it on their behalf and must never infer
+  // assent from the lane simply being switched on. Discovery is a read and stays allowed;
+  // claiming stops here with the exact command the owner runs once they have read them.
+  async legalAccepted(){
+    if(this.legalOk===true)return true;
+    const status=await this.client.legalStatus();
+    const text=JSON.stringify(status?.data??status??{});
+    const accepted=status.ok===true&&/"(accepted|current|valid)"\s*:\s*true|"status"\s*:\s*"(accepted|current)"/i.test(text);
+    if(accepted)this.legalOk=true;
+    else this.logger?.warn?.('[Taskmarket] '+JSON.stringify({claiming:false,reason:'legal_terms_not_accepted',
+      action:'the owner must review the policy bundle and run: taskmarket legal accept'}));
+    return accepted;
+  }
+
   async tick(){
     const config=this.a?.currentConfig?.()||{enabled:true,killSwitch:false};
     if(this.running||!config.enabled||config.killSwitch)return;
     this.running=true;
     try{
       await this.discover();
+      if(!await this.legalAccepted())return;
       const jobs=this.store.readJson(STATE_FILE,{});
       const pending=Object.values(jobs)
         .filter(job=>!TERMINAL.includes(job.status))

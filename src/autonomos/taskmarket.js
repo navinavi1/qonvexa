@@ -1,4 +1,6 @@
 import { execFile } from 'node:child_process';
+import fs from 'node:fs';
+import path from 'node:path';
 const run=(cmd,args,opts)=>new Promise(resolve=>execFile(cmd,args,opts,(error,stdout,stderr)=>resolve({code:error?(error.code??1):0,stdout:String(stdout||''),stderr:String(stderr||'')})));
 
 // Read-only and free worker commands only. Every Taskmarket route that spends USDC
@@ -26,17 +28,42 @@ export function parseCliJson(stdout){
   return{ok:false,error:'unparsable_output',raw:text.slice(0,400)};
 }
 
+// The CLI keeps the agent's private key at os.homedir() + '/.taskmarket/keystore.json',
+// hardcoded -- unlike its XMTP database and x402 journal, that path takes no environment
+// override. On a container host $HOME lives in the ephemeral layer, so every deploy would
+// destroy the keystore and `taskmarket init` would mint a brand new wallet. Any USDC already
+// settled to the old address would be unrecoverable: no key, no seed, gone.
+//
+// os.homedir() reads $HOME on POSIX, so pointing HOME at the persistent disk for this child
+// process alone keeps the wallet across deploys without moving HOME for the whole service.
+export function taskmarketHome(env=process.env){
+  const explicit=String(env.AUTONOMOS_TASKMARKET_HOME||'').trim();
+  if(explicit)return explicit;
+  const storage=String(env.STORAGE_DIR||'').trim();
+  return storage?path.join(storage,'taskmarket-home'):'';
+}
+
 export function createTaskmarketClient({env=process.env,exec=run,logger=null}={}){
   const enabled=/^(1|true|yes|on)$/i.test(String(env.AUTONOMOS_TASKMARKET_ENABLED||'false'));
   const binary=String(env.AUTONOMOS_TASKMARKET_BIN||'taskmarket');
   const apiUrl=String(env.TASKMARKET_API_URL||'https://api.taskmarket.dev').replace(/\/$/,'');
   const timeoutMs=Math.max(5000,Number(env.AUTONOMOS_TASKMARKET_TIMEOUT_MS||60000));
+  const home=taskmarketHome(env);
 
   async function call(argv,{allowFailure=true}={}){
     const gate=commandAllowed(argv);
     if(!gate.allowed){logger?.warn?.('[Taskmarket] blocked '+argv.join(' ')+' ('+gate.reason+')');return{ok:false,error:gate.reason,blocked:true};}
     if(!enabled)return{ok:false,error:'taskmarket_disabled'};
-    const result=await exec(binary,argv,{timeout:timeoutMs,env:{...env,TASKMARKET_API_URL:apiUrl},maxBuffer:8*1024*1024});
+    // Refuse rather than silently mint a throwaway wallet in a directory that will not
+    // survive the next deploy. A missing persistent home is a configuration error, not a
+    // reason to start earning into a key we are about to lose.
+    if(!home)return{ok:false,error:'taskmarket_home_unset',blocked:true};
+    try{fs.mkdirSync(home,{recursive:true,mode:0o700});}catch(error){return{ok:false,error:'taskmarket_home_unwritable:'+String(error.code||error.message)};}
+    // PATH has to be carried explicitly. This spreads the caller's env, which in production
+    // is process.env and happens to contain one -- but any caller passing a narrow env
+    // object left the child with no PATH at all, so the binary could not be found on it.
+    const childEnv={...env,PATH:env.PATH||process.env.PATH||'',HOME:home,TASKMARKET_API_URL:apiUrl};
+    const result=await exec(binary,argv,{timeout:timeoutMs,env:childEnv,maxBuffer:8*1024*1024});
     if(result.code!==0&&!allowFailure)throw Error('taskmarket_'+argv[0]+'_exit_'+result.code);
     if(result.code!==0)return{ok:false,error:'exit_'+result.code,stderr:String(result.stderr||'').slice(0,400)};
     const parsed=parseCliJson(result.stdout);
@@ -45,7 +72,7 @@ export function createTaskmarketClient({env=process.env,exec=run,logger=null}={}
 
   return{
     enabled,apiUrl,
-    status(){return{enabled,apiUrl,binary,network:'eip155:8453',allowedCommands:[...ALLOWED_COMMANDS],canWithdraw:false,canSpend:false};},
+    status(){return{enabled,apiUrl,binary,home,network:'eip155:8453',allowedCommands:[...ALLOWED_COMMANDS],canWithdraw:false,canSpend:false};},
     call,
     address(){return call(['address']);},
     legalStatus(){return call(['legal','status']);},
