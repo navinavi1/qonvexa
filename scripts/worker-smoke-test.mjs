@@ -27,7 +27,17 @@ const env = {
   AUTONOMOS_X402_ENABLED: 'false',
   AUTONOMOS_OWNER_WALLET: '0x1f674bf085f6fed36fa198287d51edf0fe0bb9e2'
 };
-const logger = { info() {}, warn() {}, error() {}, log() {} };
+// A worker that catches its own ReferenceError and logs it is indistinguishable from one
+// that worked, which is how this test missed a defect it was written to catch:
+// hardenedMoneyRefresh() wraps its whole body in try/catch and reports failures through
+// logger.warn, so `owner is not defined` produced a clean pass and simply no report file.
+// Anything that reads like a programming error in a worker's own log is now a failure.
+const swallowed = [];
+const watch = (...args) => {
+  const text = args.map(x => (x instanceof Error ? x.stack || x.message : String(x))).join(' ');
+  if (/is not defined|is not a function|Cannot read propert|undefined is not|is not iterable/.test(text)) swallowed.push(text.slice(0, 200));
+};
+const logger = { info: watch, warn: watch, error: watch, log: watch };
 
 // A worker that cannot reach the network must not be the thing under test, so fetch is
 // stubbed to a plain refusal rather than left to hit the sandbox proxy.
@@ -76,6 +86,9 @@ for (const [name, modulePath, method] of workers) {
     }
   } finally {
     worker.stop?.();
+  }
+  if (swallowed.length) {
+    assert.fail(`${name}.${method}() swallowed a programming error: ${swallowed[0]}`);
   }
   checked++;
 }
