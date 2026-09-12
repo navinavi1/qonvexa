@@ -342,6 +342,14 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
           ...state,
           status:config.killSwitch ? 'emergency_stopped' : config.enabled ? (cycleRunning ? 'working' : 'running') : 'stopped',
           cycleRunning, activeJobCount:activeJobs.size,
+          // Derived here, not carried over from state. state.earnedSpendBudgetUsd is only
+          // assigned inside cycle(), so before the first cycle of a process — every restart,
+          // and the whole time the runtime is paused or emergency-stopped — the key was
+          // absent from this response. The dashboard tile reads it through usd(), which maps
+          // undefined to $0.00, so the one number that says whether the agents may spend
+          // anything read "nothing" while the ledger said otherwise. It is a pure function
+          // of the ledger this method has already loaded.
+          earnedSpendBudgetUsd:computeEarnedSpendBudgetUsd(ledger,config),
           queueDepth:Number(state.lastCycleSummary?.candidates||0),
           taskAgents:taskAgents.summary(),
           activeJobs:[...activeJobs.values()].map(job=>({id:job.id,source:job.source||'',externalId:job.externalId||'',title:job.title||'',productId:job.productId||'',workerId:job.workerId||'',startedAt:job.startedAt||'',etaAt:job.etaAt||'',estimatedMinutes:Number(job.estimatedMinutes||0),deadline:job.deadline||'',budgetUsd:Number(job.budgetUsd||0),currency:job.currency||'',claimMode:job.claimMode||'',escrowed:Boolean(job.escrowed)})),
