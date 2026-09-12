@@ -123,12 +123,17 @@ export class TaskmarketWorker{
   // of truth for the owner/agent split rather than trusting the platform's own totals.
   recordPayout(job,{transactionId,amountUsd}){
     if(!transactionId||!(Number(amountUsd)>0))return false;
-    appendUniqueLedgerEntry(this.store,ledgerEntry({
+    // Report what the ledger actually did. Discarding appendUniqueLedgerEntry's result and
+    // returning true regardless meant a replayed settlement looked like fresh revenue to
+    // every caller, even though the ledger had correctly refused to double-count it.
+    const recorded=appendUniqueLedgerEntry(this.store,ledgerEntry({
       id:'taskmarket_'+transactionId,type:'revenue',jobId:job.id,externalId:job.taskId,
       externalTransactionId:String(transactionId),source:'taskmarket.dev',
       amountUsd:Number(amountUsd),feeUsd:0,currency:'USDC',network:'eip155:8453',status:'settled'
     }));
+    // Closing the job stays idempotent: a replay of a payout we already booked must still
+    // leave the job paid, it just is not new money.
     this.save(job.id,{status:'paid',paidAt:now(),receivedUsd:Number(amountUsd)});
-    return true;
+    return recorded;
   }
 }

@@ -1266,8 +1266,20 @@ async refreshTreasury(){
   function optimizeOffers(signals){const changes=[];for(const product of MACHINE_PRODUCTS){const tags=new Set(product.tags.map(x=>String(x).toLowerCase()));const comps=signals.filter(s=>Number(s.budgetUsd)>0&&(s.tags||[]).some?.(t=>tags.has(String(t).toLowerCase()))).map(s=>Number(s.budgetUsd)).filter(Number.isFinite);if(comps.length<5)continue;const marketMedian=median(comps);const current=Number(offers[product.id]?.priceUsd??product.priceUsd);const floor=Math.max(.001,product.priceUsd*.5),ceiling=Math.max(floor,product.priceUsd*4),target=Math.max(floor,Math.min(ceiling,marketMedian*.75)),maxStep=Math.max(.001,current*.1),next=round(Math.max(floor,Math.min(ceiling,current+Math.max(-maxStep,Math.min(maxStep,target-current)))));if(Math.abs(next-current)<.0005)continue;offers[product.id]={...(offers[product.id]||{}),priceUsd:next,updatedAt:new Date().toISOString(),basis:'market_median',sampleSize:comps.length};changes.push({productId:product.id,from:current,to:next,marketMedian,samples:comps.length});}if(changes.length){store.writeJson('offers.json',offers);for(const c of changes)event('price_optimized',c);}return{mode:'bounded_market_pricing',changes,at:new Date().toISOString()};}
   function boundedEvolution(signals){const bySource={};for(const s of signals)bySource[s.source]=(bySource[s.source]||0)+1;return{mode:'market_feedback',sources:bySource,at:new Date().toISOString()};}
   function marketFloor(){ return effectiveJobFloor(); }
+  // Every reason explainCandidacy can emit must land in a named bucket. Eight of them used
+  // to fall through to 'other', whose owner-facing text is "no discovered job currently
+  // passes the complete claim preflight" -- true, useless, and indistinguishable from a
+  // market with nothing in it. A job held by a retry backoff, a market whose lifecycle is
+  // not auto-ready, and auto-claim being switched off are three different situations with
+  // three different answers, and the panel showed one sentence for all of them.
+  // blocker-coverage-test asserts this stays exhaustive as new reasons are added.
   function blockerBucket(reason=''){
     const r=String(reason);
+    if(/demo_or_test_opportunity/.test(r))return 'test_listing';
+    if(/auto_claim_disabled_in_policy/.test(r))return 'auto_claim_off';
+    if(/marketplace_lifecycle_not_auto_ready/.test(r))return 'lifecycle_not_ready';
+    if(/retry_limit_reached/.test(r))return 'retry_exhausted';
+    if(/retry_backoff|still_in_backoff|_cooldown/.test(r))return 'retry_backoff';
     if(/budget_below|below_floor|payout_ceiling/.test(r))return 'below_payout';
     if(/not_escrowed/.test(r))return 'no_escrow';
     if(/crypto_only_payout|required.*payout|payout_blocked/.test(r))return 'payout_route';
@@ -1276,6 +1288,7 @@ async refreshTreasury(){
     if(/capability_not|missing_/.test(r))return 'capability_missing';
     if(/registry_blocked:.*(?:graveyard|permanent|finished)|duplicate/.test(r))return 'duplicate_permanent';
     if(/registry_blocked:.*(?:system_blocked|capability_hold|manual_attention)/.test(r))return 'system_blocked';
+    if(/registry_blocked/.test(r))return 'registry_hold';
     if(/economics_blocked|estimated_model_cost/.test(r))return 'economics_failed';
     if(/auth|credential|api_key/.test(r))return 'auth_missing';
     if(/status_not_open|expired|closed/.test(r))return 'expired_closed';
@@ -1369,6 +1382,12 @@ async refreshTreasury(){
       auth_missing:'A marketplace credential is missing, so its jobs cannot be applied for. The per-source breakdown names which market.',
       expired_closed:'The latest jobs are already closed or expired.',
       unpriced:'Current signals do not expose a usable payout.',
+      test_listing:'These are demo or test listings the market published, not paid work.',
+      auto_claim_off:'Auto-claim is switched off in policy, so nothing is claimed even when it qualifies.',
+      lifecycle_not_ready:'This market is not verified end to end (claim, deliver, settle, payout), so claiming would risk work we cannot get paid for.',
+      retry_backoff:'A recent attempt failed and these jobs are waiting out a backoff before the next try.',
+      retry_exhausted:'These jobs used every execution attempt allowed and will not be retried automatically.',
+      registry_hold:'The job registry is holding these until a prior state clears.',
       other:'No discovered job currently passes the complete claim preflight.'
     };
     let code='waiting_for_eligible_job',severity='warning',headline='Not earning yet',detail='No discovered job currently passes the complete claim preflight.',action='Keep discovery running; inspect the primary blocker below.';
