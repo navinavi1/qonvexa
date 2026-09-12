@@ -10,19 +10,29 @@ import { composioExecute, composioSearch } from './composio-tool.js';
 import { ArtifactStore } from './artifact-store.js';
 import { freeWebSearch, freeWebScrape } from './free-web-tool.js';
 
-// Conservative fixed per-call cost estimates (USD) used ONLY for pre-spend policy checks
-// exposes per-call pricing in the response), just a deliberately-cautious ceiling so the
-// zeroSpendMode / allowExternalSpending / earned-budget gates in policy-engine.js and
-// profit-engine.js actually see a non-zero number for tool usage instead of treating every
+// Fixed per-call cost estimates (USD) used ONLY for pre-spend policy checks: no provider
+// exposes per-call pricing in its response, so these feed the zeroSpendMode /
+// allowExternalSpending / earned-budget gates in policy-engine.js and profit-engine.js.
+//
+// They must be cautious but not fictional. The E2B figures were $0.03 and $0.02, which is
+// where they did real damage: a billing period with 699 sandboxes invoiced $0.09, i.e.
+// $0.000129 per sandbox, so every shell call was charged against the earned-spend gate at
+// roughly 230x its true price. With no revenue the gate is already near zero, and at $0.03
+// a call the executors' `if(!(limit>0)) return` short-circuits fired before any work began.
+// The agent priced itself out of working. Below is the measured cost with ~4x headroom.
+//
+// Re-derive rather than adjust by feel: divide an E2B invoice by that period's sandbox
+// count (console.e2b.dev -> Usage). Composio bills $0.0003 per tool call and the Hobby tier
+// includes 100,000 a month, so its real marginal cost is zero until that ceiling.
 export const TOOL_COST_ESTIMATES_USD = Object.freeze({
   web_search: 0,
   web_scrape: 0,
-  browser_action: Number(process.env.AUTONOMOS_E2B_SHELL_COST_USD || 0.03),
-  browser_read: Number(process.env.AUTONOMOS_E2B_SHELL_COST_USD || 0.03),
-  run_python: Number(process.env.AUTONOMOS_E2B_SANDBOX_COST_USD || 0.02),
-  run_shell: Number(process.env.AUTONOMOS_E2B_SHELL_COST_USD || 0.03),
-  app_tool_search: Number(process.env.AUTONOMOS_COMPOSIO_SEARCH_COST_USD || 0.001),
-  app_action: Number(process.env.AUTONOMOS_COMPOSIO_TOOL_COST_USD || 0.01),
+  browser_action: Number(process.env.AUTONOMOS_E2B_SHELL_COST_USD || 0.0005),
+  browser_read: Number(process.env.AUTONOMOS_E2B_SHELL_COST_USD || 0.0005),
+  run_python: Number(process.env.AUTONOMOS_E2B_SANDBOX_COST_USD || 0.0005),
+  run_shell: Number(process.env.AUTONOMOS_E2B_SHELL_COST_USD || 0.0005),
+  app_tool_search: Number(process.env.AUTONOMOS_COMPOSIO_SEARCH_COST_USD || 0.0003),
+  app_action: Number(process.env.AUTONOMOS_COMPOSIO_TOOL_COST_USD || 0.0003),
   coderabbit_review: 0,
   store_artifact: Number(process.env.AUTONOMOS_S3_PUT_COST_USD || 0.001),
   deploy_webhook: 0,

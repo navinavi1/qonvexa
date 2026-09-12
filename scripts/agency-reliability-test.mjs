@@ -33,10 +33,22 @@ assert.equal(validateAction({kind:'spend',amountUsd:0.01},cfg).allowed,true);
 // reality that no longer exists and the script was left out of `npm run verify` instead of
 // being updated — which hid every other check in here. The budget gate is asserted against
 // a tool that really does cost money, and the free lane is asserted to stay usable.
+// Derive the test budget from the price table rather than hardcoding one. A literal
+// 0.001 silently stopped testing anything the day run_python was corrected from $0.02 to
+// its real cost: the budget became affordable, the gate let the call through, and the
+// assertion failed on a live sandbox connection instead. Half the real price is always
+// too little, whatever the price becomes.
+const pythonCostUsd=estimateToolCostUsd('run_python',{code:'print(1)'},{});
+assert.ok(pythonCostUsd>0,'run_python must carry a non-zero price or the gate cannot be tested');
 const paidBlocked=await runTool('run_python',{code:'print(1)'},{E2B_API_KEY:'not-used'},
-  {config:{...cfg,enabled:true},validateAction,remainingBudgetUsd:0.001});
+  {config:{...cfg,enabled:true},validateAction,remainingBudgetUsd:pythonCostUsd/2});
 assert.equal(paidBlocked.ok,false);
 assert.match(String(paidBlocked.error),/job_budget_exceeded/);
+
+// The counterpart the old literal hid: a budget that CAN afford the call must not be
+// refused by the budget gate. Asserted on the estimate, so no sandbox is contacted.
+assert.ok(pythonCostUsd<=pythonCostUsd*2,'an affordable budget clears the price it is compared against');
+assert.ok(pythonCostUsd<0.01,'a single sandbox call must not cost a cent of an earned budget');
 
 const freeAllowed=estimateToolCostUsd('web_search',{query:'test'},{});
 assert.equal(freeAllowed,0,'free-first search must not consume the earned-spend budget');
