@@ -72,7 +72,9 @@
     "taskmarket-e2e-test": "node scripts/taskmarket-e2e-test.mjs",
     "marketplace-fee-test": "node scripts/marketplace-fee-test.mjs",
     "net-split-test": "node scripts/net-split-test.mjs",
-    "taskmarket-keystore-test": "node scripts/taskmarket-keystore-test.mjs"
+    "taskmarket-keystore-test": "node scripts/taskmarket-keystore-test.mjs",
+    "taskmarket-setup": "node scripts/taskmarket-setup.mjs",
+    "taskmarket-accept": "node scripts/taskmarket-accept.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "3.1121.0",
