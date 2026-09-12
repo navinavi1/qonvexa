@@ -18,6 +18,22 @@ export function canonicalOpportunity(raw={}){
  const cost=amount(raw.estimatedExecutionCost),fee=amount(raw.marketplaceFees??0),failureCost=amount(raw.expectedFailureCost??0);
  return{...raw,id:crypto.createHash('sha256').update(source+':'+externalId).digest('hex').slice(0,24),externalId,source,marketplace:source,title:String(raw.title||''),description,url:String(raw.url||raw.URL||''),workType,payout,payoutUsd,currency,paymentRail:raw.paymentRail||'unknown',cryptoConvertible:raw.cryptoConvertible===true,escrow:raw.escrowed===true||raw.escrow===true,buyerFunded:raw.buyerFunded===true,deadline:raw.deadline||'',requiredSkills:raw.requiredSkills||raw.skills||[],requiredTools:raw.requiredTools||[],requiredCapabilities:raw.requiredCapabilities||[],competitive:raw.competitive===true,estimatedWinProbability:probability,estimatedExecutionCost:cost,expectedNetProfit:payoutUsd!==null&&probability!==null&&cost!==null&&fee!==null&&failureCost!==null?payoutUsd*probability-cost-fee-failureCost:null,claimRoute:raw.claimRoute||null,applicationRoute:raw.applicationRoute||null,deliveryRoute:raw.deliveryRoute||null,payoutRoute:raw.payoutRoute||null,humanGate:raw.humanGate||false,fresh:raw.fresh===true||Date.parse(raw.observedAt||raw.lastSeenAt||'')>Date.now()-48*3600000,createdAt:raw.createdAt||'',expiresAt:raw.expiresAt||raw.deadline||'',rawEvidence:raw.rawEvidence||{url:raw.url||'',observedAt:raw.observedAt||raw.lastSeenAt||''}};
 }
+// expectedNetProfit stays null unless estimatedExecutionCost is a number, and nothing in
+// the system ever set that field: it was read in canonicalOpportunity and written by no
+// one. So every opportunity failed the execution-phase profitability check on a missing
+// input rather than on its economics, and businessSnapshot reported eligible:0 with
+// PROFITABILITY_UNVERIFIED_OR_NEGATIVE as the top blocker on every job it had ever seen.
+//
+// The number it wanted already existed one module over: classifyOpportunity computes
+// estimatedModelCostUsd for exactly this opportunity. Pricing is therefore a join, not a
+// new estimate -- pass the capability that was classified for this op and nothing else.
+export function priceOpportunity(op,capability,{marketplaceFeeUsd=null}={}){
+  const executionCost=amount(capability?.estimatedModelCostUsd);
+  if(executionCost===null)return op;
+  return canonicalOpportunity({...op,estimatedExecutionCost:executionCost,
+    ...(marketplaceFeeUsd===null?{}:{marketplaceFees:marketplaceFeeUsd})});
+}
+
 export function eligibility(op,env=process.env,{phase='execution'}={}){
  const reasons=[];if(isRetiredMarket(op))reasons.push('DO_NOT_RESTORE');
  if(!['REAL_MARKET_JOB','REAL_DIRECT_PAID_PROJECT','GITHUB_BOUNTY'].includes(op.workType))reasons.push(op.workType);

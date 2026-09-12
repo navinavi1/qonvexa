@@ -82,6 +82,19 @@
       "reason": "Previous legacy set retired by owner final brief",
       "ownerApproved": true,
       "neverRestore": true
+    },
+    {
+      "id": "algora",
+      "aliases": [
+        "algora.io",
+        "api.docs.algora.io",
+        "console.algora.io"
+      ],
+      "type": "market",
+      "retiredAt": "2026-09-12",
+      "reason": "Verified dead as a bounty board: algora.io now presents as recruiting, /bounties returns 404, and /algora leads to employer onboarding. Owner confirmed from the live site.",
+      "ownerApproved": true,
+      "neverRestore": true
     }
   ],
   "tools": [],

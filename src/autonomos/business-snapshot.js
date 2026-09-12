@@ -1,7 +1,9 @@
 import { receiptIdentity, isCryptoRevenue } from './financial-ledger.js';
 import fs from 'node:fs';
 import path from 'node:path';
-import { canonicalOpportunity, eligibility } from './canonical-opportunity.js';
+import { canonicalOpportunity, eligibility, priceOpportunity } from './canonical-opportunity.js';
+import { classifyOpportunity } from './capabilities.js';
+import { unifiedCapabilityContext } from './capability-registry.js';
 import { isRetiredMarket } from './retired-markets.js';
 import { retiredResources } from './retired-resources.js';
 import { readNdjsonCached } from './ndjson-cache.js';
@@ -11,6 +13,7 @@ export function businessSnapshot(storageDir,env=process.env){
  const hunter=read('global-work-hunter.json'),actions=read('global-lead-actioner.json').actions||{},tf=read('taskforce-worker.json'),agrenting=read('agrenting-worker.json');
  const counts={discovered:0,routable:0,eligible:0,applications:0,claimed:0,accepted:0,executing:0,qa:0,delivered:0,revisions:0,clientAccepted:0,payoutPending:0,paid:0},blockers={},sources={};
  let pendingPayoutUsd=0;
+ const capabilityContext=unifiedCapabilityContext(env);
  const jobs=new Map(),add=(key,op,a)=>{if(!isRetiredMarket(op))jobs.set(op.marketplace+':'+op.externalId,{op,a});};
  for(const lead of Object.values(hunter.leads||{})){
   const a=actions[lead.id]||{},route=a.commentId?'GITHUB_APPLICATION':a.gmailMessageId?'DIRECT_CLIENT_EMAIL':a.applicationRoute||null;
@@ -26,7 +29,12 @@ export function businessSnapshot(storageDir,env=process.env){
  for(const {op,a}of jobs.values()){
   counts.discovered++;const source=sources[op.source]??={discovered:0,applications:0,accepted:0,delivered:0};source.discovered++;
   if(op.claimRoute||op.applicationRoute)counts.routable++;
-  const status=String(a.status||'').toLowerCase(),e=eligibility(op,env);
+  // Price the opportunity before judging it. Unpriced, every job failed on a missing
+  // estimatedExecutionCost and this panel reported eligible:0 forever, with a blocker
+  // that described the gap in our own data rather than anything about the job.
+  const capability=classifyOpportunity({...op,budgetUsd:op.payoutUsd},capabilityContext);
+  const priced=priceOpportunity(op,capability);
+  const status=String(a.status||'').toLowerCase(),e=eligibility(priced,env);
   if(e.eligible&&!/archived|expired|rejected|closed|paid|settled/.test(status))counts.eligible++;
   for(const reason of e.reasons)blockers[reason]=(blockers[reason]||0)+1;
   if(a.applied){counts.applications++;source.applications++;}
