@@ -29,3 +29,30 @@ export function receiptIdentity(row){
  if(row.network&&row.rail==='crypto')return 'chain:'+row.network+':'+id;
  return 'market:'+String(row.source||'unknown')+':'+id;
 }
+
+// Which settlement currencies are crypto by definition. Same set the payout router uses to
+// decide whether a job can be paid into one of the owner's wallets at all.
+const CRYPTO_CURRENCIES=new Set(['USDC','USDT','DAI','ETH','BTC','SOL','WETH','WBTC']);
+// Chain identifiers as the various writers actually spell them. x402 uses CAIP-2
+// ('eip155:8453'), treasury.js the same, the TaskForce worker writes plain 'solana', and
+// the payout router speaks in names like 'base' and 'arbitrum'.
+const CRYPTO_NETWORKS=new Set(['ethereum','mainnet','base','arbitrum','optimism','polygon','matic','solana','sol','spl','bitcoin']);
+
+// Did this revenue arrive in one of the owner's crypto wallets?
+//
+// The dashboard tile "Надійшло у крипто" asked `rail === 'crypto' || /^eip155:/.test(network)`.
+// Only inbound-receipt.js writes rail 'crypto' and only x402 writes an eip155 network, so
+// every other crypto rail was reported as zero. The TaskForce worker settles USDC on Solana
+// into the Phantom wallet and writes rail 'taskforce_solana_wallet' with network 'solana':
+// real money in the owner's wallet, counted as $0. Fiat rails must still be excluded —
+// agrenting escrow and the Stripe card checkout are both USD with no chain.
+export function isCryptoRevenue(row={}){
+  const rail=String(row.rail||'').toLowerCase();
+  if(rail==='crypto')return true;
+  const network=String(row.network||'').toLowerCase();
+  if(/^(?:eip155|solana|bip122|cosmos):/.test(network))return true;
+  if(CRYPTO_NETWORKS.has(network))return true;
+  // A USDC or SOL receipt is on-chain whatever the rail is called. USD is not, which is
+  // what keeps card and escrow settlements out.
+  return CRYPTO_CURRENCIES.has(String(row.currency||'').toUpperCase());
+}
