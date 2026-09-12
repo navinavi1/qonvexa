@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { canonicalOpportunity, eligibility, priceOpportunity } from '../src/autonomos/canonical-opportunity.js';
 import { classifyOpportunity } from '../src/autonomos/capabilities.js';
 import { isRetiredMarket } from '../src/autonomos/retired-markets.js';
+import { marketplaceFeePercent } from '../src/autonomos/marketplace-fees.js';
 
 let checks=0;
 const ok=(c,l)=>{assert.ok(c,l);checks++;};
@@ -20,7 +21,13 @@ eq(eligibility(raw,env).reasons,['PROFITABILITY_UNVERIFIED_OR_NEGATIVE'],'and is
 // 2. Pricing it from its own capability classification clears the gate.
 const p=priced(raw);
 ok(p.estimatedExecutionCost>0,'execution cost is now a real number');
-ok(p.expectedNetProfit>39,'a $40 job nets over $39 once priced, got '+p.expectedNetProfit);
+// Net is the payout less the marketplace's cut and our execution cost. This used to assert
+// >39, which only held while every marketplace fee evaluated to zero.
+const feePercent=marketplaceFeePercent('m',{}).percent;
+const expectedNet=40-(40*feePercent/100)-p.estimatedExecutionCost;
+ok(Math.abs(p.expectedNetProfit-expectedNet)<0.01,
+  'net is payout minus the '+feePercent+'% fee minus execution cost, expected '+expectedNet.toFixed(4)+' got '+p.expectedNetProfit);
+ok(p.expectedNetProfit<40,'net is always below gross once a fee applies');
 eq(eligibility(p,env).eligible,true,'priced job passes the execution gate');
 
 // 3. Pricing must not whitewash a job that genuinely loses money.

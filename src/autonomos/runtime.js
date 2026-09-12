@@ -2,6 +2,7 @@ import { resourceSnapshot } from './resource-control.js';
 import { recoverFreeCapability } from './free-tool-recovery.js';
 import { unifiedCapabilityContext, refreshCapabilities } from './capability-registry.js';
 import { isRetiredMarket } from './retired-markets.js';
+import { withMarketplaceFee, estimatedFeeUsd } from './marketplace-fees.js';
 import { executionDiagnostics, logExecutionEvent } from './execution-diagnostics.js';
 import { createJobBudget } from './job-budget.js';
 import { OWNER_MINIMUM_PAYOUT_USD } from './payout-floor.js';
@@ -592,7 +593,7 @@ async refreshTreasury(){
         }
         const cap=classifyOpportunity(opportunity,capabilityContext());
         const outcome=estimateOutcomeProbability(opportunity,cap,jobHistory);
-        const feeUsd=Number(opportunity.budgetUsd||0)*Number(opportunity.feePercent||0)/100;
+        const feeUsd=estimatedFeeUsd(withMarketplaceFee(opportunity,env),env);
         const econ=evaluateOpportunity({expectedRevenueUsd:Number(opportunity.budgetUsd||0),successProbability:outcome.probability,modelCostUsd:cap.estimatedModelCostUsd,marketplaceFeeUsd:feeUsd,computeCostUsd:0},cycleConfig);
         const payoutRoute=selectPayoutRoute({currency:opportunity.currency,marketplace:opportunity.source,supportedMethods:inferPayoutMethods(opportunity),amountUsd:Number(opportunity.budgetUsd||0)},env);
         const row={...opportunity,capability:cap,outcome,economics:econ,payoutRoute};
@@ -879,7 +880,7 @@ async refreshTreasury(){
     }
     const jobHistory=store.readNdjson('jobs.ndjson',4000);
     const outcome=estimateOutcomeProbability(inputOp,cap,jobHistory);
-    const feeUsd=Number(inputOp.budgetUsd||0)*Number(inputOp.feePercent||0)/100;
+    const feeUsd=estimatedFeeUsd(withMarketplaceFee(inputOp,env),env);
     const ledger=store.readNdjson('ledger.ndjson',-1);
     const availableSpendUsd=computeEarnedSpendBudgetUsd(ledger,config);
     const cycleConfig={...config,availableSpendUsd};
@@ -1516,7 +1517,7 @@ async refreshTreasury(){
       const normalized=discovery.signals.filter(isActionableEarningSignal).map(opportunity=>{
         const cap=classifyOpportunity(opportunity,capabilityContext());
         const outcome=estimateOutcomeProbability(opportunity,cap,jobHistory);
-        const feeUsd=Number(opportunity.budgetUsd||0)*Number(opportunity.feePercent||0)/100;
+        const feeUsd=estimatedFeeUsd(withMarketplaceFee(opportunity,env),env);
         const econ=evaluateOpportunity({expectedRevenueUsd:Number(opportunity.budgetUsd||0),successProbability:outcome.probability,modelCostUsd:cap.estimatedModelCostUsd,marketplaceFeeUsd:feeUsd,computeCostUsd:0},cycleConfig);
         const payoutRoute=selectPayoutRoute({currency:opportunity.currency,marketplace:opportunity.source,supportedMethods:inferPayoutMethods(opportunity),amountUsd:Number(opportunity.budgetUsd||0)},env);
         const acceptanceContract=buildAcceptanceContract({...opportunity,capability:cap});

@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import { isRetiredMarket } from './retired-markets.js';
 import { minimumJobPayoutUsd } from './payout-floor.js';
+import { marketplaceFeePercent } from './marketplace-fees.js';
 const USD=new Set(['USD','USDC','USDT','DAI']);
 const amount=v=>v===null||v===undefined||v===''||typeof v==='boolean'||!Number.isFinite(Number(v))||Number(v)<0?null:Number(v);
 export function canonicalOpportunity(raw={}){
@@ -27,11 +28,15 @@ export function canonicalOpportunity(raw={}){
 // The number it wanted already existed one module over: classifyOpportunity computes
 // estimatedModelCostUsd for exactly this opportunity. Pricing is therefore a join, not a
 // new estimate -- pass the capability that was classified for this op and nothing else.
-export function priceOpportunity(op,capability,{marketplaceFeeUsd=null}={}){
+export function priceOpportunity(op,capability,{marketplaceFeeUsd=null,env=process.env}={}){
   const executionCost=amount(capability?.estimatedModelCostUsd);
   if(executionCost===null)return op;
-  return canonicalOpportunity({...op,estimatedExecutionCost:executionCost,
-    ...(marketplaceFeeUsd===null?{}:{marketplaceFees:marketplaceFeeUsd})});
+  // The marketplace's cut belongs in expectedNetProfit. feePercent was read in four places
+  // and written by none, so every fee evaluated to zero and a $40 job looked like $40 net.
+  const payout=amount(op?.payoutUsd);
+  const fee=marketplaceFeeUsd!==null?Number(marketplaceFeeUsd)
+    :payout===null?0:Math.round(payout*marketplaceFeePercent(op?.source,env).percent)/100;
+  return canonicalOpportunity({...op,estimatedExecutionCost:executionCost,marketplaceFees:fee});
 }
 
 export function eligibility(op,env=process.env,{phase='execution'}={}){
