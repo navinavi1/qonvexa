@@ -78,4 +78,39 @@ eq(Math.round(canonicalOpportunity(feeJob).expectedNetProfit*100)/100,
    'canonicalOpportunity weights the marketplace cut by the chance of being paid');
 ok(canonicalOpportunity(feeJob).expectedNetProfit>0,'a $1,000 task with a 7.5% cut is not a loss');
 
+
+// 9. The skill label decides the QA verification tools, the code-review path, and the key
+// under which previously-QA-passed procedures are recalled for the next job. Design and
+// media categories were filed under code-analysis, so each lane was learning from the
+// other's work. Code jobs that merely mention video, images or ffmpeg must stay code.
+{
+  const ctx={llmEnabled:true,hasGithubPrTool:true,hasShellTool:true,hasBrowserTool:true,
+    hasDesignMediaTool:true,hasAppTool:true,hasArtifactTool:true,hasWebSearchTool:true,
+    strictCapabilityProof:true,connectedApps:['github','figma','canva']};
+  const skillOf=(category,title)=>classifyOpportunity({title,category,description:title,budgetUsd:50},ctx);
+  for(const [category,title] of [['graphic-design','Design a logo and brand identity'],
+      ['video','Short-form video editing for TikTok'],['audio','Clean up podcast audio'],
+      ['ui-ux','Redesign our checkout screen'],['','Create a logo for my coffee shop']]){
+    const cap=skillOf(category,title);
+    eq(cap.skill,'design-media',(category||'uncategorised')+' is design work');
+    ok(cap.executable,'and is still executable with the production toolset');
+  }
+  // Moving these categories off code-analysis removed the tool requirement they had only by
+  // accident: code-analysis implies a sandbox shell, design-media implied nothing, so a logo
+  // job briefly read as doable with a language model alone. Design work needs design tooling
+  // in its own right, and must say so.
+  {
+    const bare={llmEnabled:true,hasWebSearchTool:true,strictCapabilityProof:true,connectedApps:[]};
+    const cap=classifyOpportunity({title:'Design a logo and brand identity',category:'graphic-design',
+      description:'Design a logo and brand identity',budgetUsd:50},bare);
+    ok(!cap.executable,'design work is not executable on a language model alone');
+    ok((cap.missingTools||[]).includes('design_media_tool'),'and it names the tool it needs');
+  }
+
+  for(const [category,title] of [['development','Fix the video player bug in our React app'],
+      ['development','Optimise image loading in our Next.js site'],
+      ['development','Write an ffmpeg wrapper script in Python'],['website','Build a landing page']])
+    eq(skillOf(category,title).skill,'code-analysis',title+' is code work, whatever it mentions');
+}
+
 console.log('opportunity-pricing-test OK ('+checks+' checks)');

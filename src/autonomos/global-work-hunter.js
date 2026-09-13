@@ -268,7 +268,28 @@ export class GlobalWorkHunter {
   archiveLead(id,reason,row={}){if(!id)return;this.state.ignored[id]={id,reason,source:row.source||'',title:String(row.title||'').slice(0,180),url:String(row.url||''),archivedAt:new Date().toISOString()};delete this.state.leads[id];if(Object.keys(this.state.ignored).length>10000){const oldest=Object.entries(this.state.ignored).sort((a,b)=>Date.parse(a[1].archivedAt||0)-Date.parse(b[1].archivedAt||0));for(const [key] of oldest.slice(0,1000))delete this.state.ignored[key];}}
   pruneLeads(){const cutoff=Date.now()-14*24*60*60_000;for(const [key,row] of Object.entries(this.state.leads)){if(Date.parse(String(row.lastSeenAt||row.firstSeenAt||0))<cutoff)this.archiveLead(key,'stale_14_days',row);}const rows=Object.entries(this.state.leads).sort((a,b)=>Date.parse(b[1].firstSeenAt||0)-Date.parse(a[1].firstSeenAt||0));for(const [key,row] of rows.slice(5000))this.archiveLead(key,'feed_capacity_archive',row);}
   event(type,detail={}){const row={at:new Date().toISOString(),type,...detail};this.state.events.unshift(row);if(this.state.events.length>500)this.state.events.length=500;this.persist();try{this.logger.info?.('[GlobalWorkHunter] '+JSON.stringify(row));}catch{}}
-  persist(){try{const feed=Object.values(this.state.leads).sort((a,b)=>Date.parse(b.firstSeenAt||b.lastSeenAt||0)-Date.parse(a.firstSeenAt||a.lastSeenAt||0));fs.writeFileSync(this.stateFile+'.tmp',JSON.stringify(this.state,null,2),{mode:0o600});fs.renameSync(this.stateFile+'.tmp',this.stateFile);fs.writeFileSync(this.feedFile,JSON.stringify({generatedAt:new Date().toISOString(),count:feed.length,items:feed},null,2),{mode:0o600});fs.writeFileSync(this.archiveFile,JSON.stringify({generatedAt:new Date().toISOString(),count:Object.keys(this.state.ignored).length,items:Object.values(this.state.ignored).sort((a,b)=>Date.parse(b.archivedAt||0)-Date.parse(a.archivedAt||0))},null,2),{mode:0o600});}catch{}}
+  // persist() rewrote all three files on every scan. Two of them -- the feed and the archive
+  // -- are derived views for display, rebuilt from the same leads, and the live logs report
+  // newLeads:0 on nearly every scan, so those bytes were almost always identical to what was
+  // already on disk. Measured at production scale (5,000 leads, 9,000 archived): 280ms of
+  // blocked event loop and 26MB written, every twenty to thirty seconds, on the one thread
+  // that also serves HTTP and runs fifteen workers. Hashing the rendered view costs a few
+  // milliseconds and skips the write when it would change nothing. The state file is the
+  // durable record and is always written.
+  persist(){try{const feed=Object.values(this.state.leads).sort((a,b)=>Date.parse(b.firstSeenAt||b.lastSeenAt||0)-Date.parse(a.firstSeenAt||a.lastSeenAt||0));fs.writeFileSync(this.stateFile+'.tmp',JSON.stringify(this.state,null,2),{mode:0o600});fs.renameSync(this.stateFile+'.tmp',this.stateFile);this.publishIfChanged(this.feedFile,{count:feed.length,items:feed});this.publishIfChanged(this.archiveFile,{count:Object.keys(this.state.ignored).length,items:Object.values(this.state.ignored).sort((a,b)=>Date.parse(b.archivedAt||0)-Date.parse(a.archivedAt||0))});}catch{}}
+
+  // generatedAt is excluded from the comparison on purpose: a timestamp that changes every
+  // scan would defeat the check and put us straight back to rewriting megabytes of identical
+  // rows. It is still written, so a reader can see when the view was last rebuilt.
+  publishIfChanged(file,view){
+    this.publishedDigests||={};
+    const body=JSON.stringify(view);
+    const digest=crypto.createHash('sha1').update(body).digest('hex');
+    if(this.publishedDigests[file]===digest&&fs.existsSync(file))return false;
+    fs.writeFileSync(file,JSON.stringify({generatedAt:new Date().toISOString(),...view},null,2),{mode:0o600});
+    this.publishedDigests[file]=digest;
+    return true;
+  }
   read(file,fallback){try{return JSON.parse(fs.readFileSync(file,'utf8'));}catch{return structuredClone(fallback);}}
   writeSecret(file,value){const tmp=`${file}.${process.pid}.${Date.now()}.tmp`;fs.writeFileSync(tmp,JSON.stringify(value,null,2),{mode:0o600});try{fs.chmodSync(tmp,0o600);}catch{}fs.renameSync(tmp,file);try{fs.chmodSync(file,0o600);}catch{}}
 }
