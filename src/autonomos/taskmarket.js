@@ -36,6 +36,26 @@ export function parseCliJson(stdout){
 //
 // os.homedir() reads $HOME on POSIX, so pointing HOME at the persistent disk for this child
 // process alone keeps the wallet across deploys without moving HOME for the whole service.
+// Where the CLI itself lives. Installing it globally during the build looked tidy and does
+// not survive: the install is wrapped so a failed native build cannot redden the deploy, so
+// when @xmtp/node-sdk fails to compile the lane is simply inert with nothing to show for it
+// — which is exactly what happened. Installed onto the mounted disk instead, it is put there
+// once, outlives every deploy, and never sits on the build's critical path at all.
+export function taskmarketCliRoot(env=process.env){
+  const home=taskmarketHome(env);
+  return home?path.join(home,'cli'):'';
+}
+export function taskmarketBinary(env=process.env){
+  const explicit=String(env.AUTONOMOS_TASKMARKET_BIN||'').trim();
+  if(explicit)return explicit;
+  const root=taskmarketCliRoot(env);
+  if(root){
+    const local=path.join(root,'node_modules','.bin','taskmarket');
+    try{if(fs.existsSync(local))return local;}catch{}
+  }
+  return 'taskmarket';
+}
+
 export function taskmarketHome(env=process.env){
   const explicit=String(env.AUTONOMOS_TASKMARKET_HOME||'').trim();
   if(explicit)return explicit;
@@ -45,7 +65,7 @@ export function taskmarketHome(env=process.env){
 
 export function createTaskmarketClient({env=process.env,exec=run,logger=null}={}){
   const enabled=/^(1|true|yes|on)$/i.test(String(env.AUTONOMOS_TASKMARKET_ENABLED||'false'));
-  const binary=String(env.AUTONOMOS_TASKMARKET_BIN||'taskmarket');
+  const binary=taskmarketBinary(env);
   const apiUrl=String(env.TASKMARKET_API_URL||'https://api.taskmarket.dev').replace(/\/$/,'');
   const timeoutMs=Math.max(5000,Number(env.AUTONOMOS_TASKMARKET_TIMEOUT_MS||60000));
   const home=taskmarketHome(env);

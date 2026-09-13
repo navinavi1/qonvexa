@@ -62,7 +62,7 @@
     "mega-pass-73-test": "node scripts/mega-pass-73-test.mjs",
     "long-final-regression-test": "node scripts/long-final-regression-test.mjs",
     "taskmarket-test": "node scripts/taskmarket-test.mjs",
-    "taskmarket-install": "npm install -g @lucid-agents/taskmarket@latest",
+    "taskmarket-install": "node scripts/taskmarket-install.mjs",
     "security-research-test": "node scripts/security-research-test.mjs",
     "security-seed": "node scripts/security-seed.mjs",
     "probe-churn-test": "node scripts/probe-churn-test.mjs",

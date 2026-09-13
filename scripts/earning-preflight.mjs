@@ -143,7 +143,8 @@ if (taskmarketOn) {
   let binary = false;
   try {
     const { execFileSync } = await import('node:child_process');
-    execFileSync(String(env.AUTONOMOS_TASKMARKET_BIN || 'taskmarket'), ['--version'], { stdio: 'ignore', timeout: 15000 });
+    const { taskmarketBinary } = await import('../src/autonomos/taskmarket.js');
+    execFileSync(taskmarketBinary(env), ['--version'], { stdio: 'ignore', timeout: 15000 });
     binary = true;
   } catch {}
   check('WORK', 'Taskmarket CLI installed', binary,

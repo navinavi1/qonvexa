@@ -12,10 +12,10 @@
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { taskmarketHome, createTaskmarketClient } from '../src/autonomos/taskmarket.js';
+import { taskmarketHome, taskmarketBinary, createTaskmarketClient } from '../src/autonomos/taskmarket.js';
 
 const env = process.env;
-const binary = String(env.AUTONOMOS_TASKMARKET_BIN || 'taskmarket');
+const binary = taskmarketBinary(env);
 const home = taskmarketHome(env);
 const line = '-'.repeat(72);
 

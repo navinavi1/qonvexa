@@ -4,7 +4,7 @@ services:
     runtime: node
     plan: starter
     region: oregon
-    buildCommand: npm ci --include=dev && npm run verify && npm prune --omit=dev && (npm install -g @lucid-agents/taskmarket@latest || echo 'taskmarket CLI install failed; the Taskmarket lane stays inert and earning-preflight will say so')
+    buildCommand: npm ci --include=dev && npm run verify && npm prune --omit=dev
     startCommand: npm start
     healthCheckPath: /health
     maxShutdownDelaySeconds: 30

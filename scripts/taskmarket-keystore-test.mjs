@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { createTaskmarketClient, taskmarketHome } from '../src/autonomos/taskmarket.js';
+import { createTaskmarketClient, taskmarketHome, taskmarketBinary, taskmarketCliRoot } from '../src/autonomos/taskmarket.js';
 
 const root=fs.mkdtempSync(path.join(os.tmpdir(),'tm-keystore-'));
 let checks=0;
@@ -58,6 +58,22 @@ eq(spawned,0,'and no process is spawned, so no disposable key is ever created');
 // 5. The refusal surface is unchanged: money-out stays impossible.
 eq((await client.call(['withdraw','1'])).blocked,true,'withdraw is still refused');
 eq((await client.call(['wallet','set-withdrawal-address','0xa'])).blocked,true,'set-withdrawal-address is still refused');
+
+// 6. The CLI is found on the mounted disk, so a deploy cannot take it away. A global install
+//    during the build is wrapped against failure, which means a failed native compile leaves
+//    the lane inert with nothing to show for it -- which is what happened in production.
+{
+  const diskEnv={STORAGE_DIR:path.join(root,'disk2')};
+  eq(taskmarketBinary(diskEnv),'taskmarket','with nothing installed it falls back to PATH');
+  const onDisk=path.join(taskmarketCliRoot(diskEnv),'node_modules','.bin','taskmarket');
+  fs.mkdirSync(path.dirname(onDisk),{recursive:true});
+  fs.writeFileSync(onDisk,'#!/bin/sh\necho ok\n',{mode:0o755});
+  eq(taskmarketBinary(diskEnv),onDisk,'once installed on the disk it is preferred over PATH');
+  ok(taskmarketBinary(diskEnv).startsWith(path.join(root,'disk2')),'and that path is on the mounted disk');
+  eq(taskmarketBinary({...diskEnv,AUTONOMOS_TASKMARKET_BIN:'/explicit/tm'}),'/explicit/tm','an explicit binary still wins');
+  eq(taskmarketCliRoot({}),'','no persistent location means no CLI root, rather than a container path');
+}
+
 
 fs.rmSync(root,{recursive:true,force:true});
 console.log('taskmarket-keystore-test OK ('+checks+' checks)');
