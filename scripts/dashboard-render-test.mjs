@@ -38,14 +38,19 @@ const login=await fetch(B+'/api/admin/login',{method:'POST',headers:{'content-ty
 const cookie=(login.headers.getSetCookie?.()||[]).map(c=>c.split(';')[0]).join('; ');
 const snapshot=(await jsonOf(B+'/api/admin/autonomos',{headers:{cookie}})).body;
 
-const html=fs.readFileSync('/home/user/qonvexa/public/admin.html','utf8');
+// Absolute paths to the author's own checkout. They resolved here and nowhere else, so
+// verify passed locally and died with ENOENT inside the deploy build, where the repo sits
+// at /opt/render/project/src -- a red deploy caused entirely by the test, not the code.
+// Resolve against this file instead, so the test travels with the repository.
+const publicDir=path.join(import.meta.dirname,'..','public');
+const html=fs.readFileSync(path.join(publicDir,'admin.html'),'utf8');
 const dom=new JSDOM(html,{url:B,runScripts:'outside-only',pretendToBeVisual:true});
 const {window}=dom;
 // The script runs inside the jsdom window, not this process, so give that window its own
 // fetch stub rather than reassigning read-only globals here.
 window.fetch=async()=>({ok:true,status:200,json:async()=>({}),text:async()=>''});
 
-const script=fs.readFileSync('/home/user/qonvexa/public/admin.js','utf8');
+const script=fs.readFileSync(path.join(publicDir,'admin.js'),'utf8');
 const errors=[];
 window.addEventListener('error',e=>errors.push(String(e.message)));
 try{ window.eval(script); }catch(e){ errors.push('load: '+e.message); }
@@ -92,6 +97,26 @@ ok(defined.has('autonomos-missing'),'what is not configured is still shown, besi
 ok(defined.has('autonomos-market-radar'),'the panel explaining why it is not earning is kept');
 ok(defined.has('autonomos-job-queue'),'the work pipeline is kept');
 ok(defined.has('autonomos-wallet'),'the wallet panel is kept');
+
+
+// A test that reads a path which exists on one developer's machine passes there and takes
+// the whole deploy build down with ENOENT everywhere else -- and the build is the only
+// thing standing between a bad commit and production, so it is the worst possible place
+// to hide a machine-specific path. This file did exactly that. Nothing under scripts/ may
+// read an absolute path again: repo files resolve from import.meta.dirname, scratch space
+// comes from os.tmpdir(). (src/ is exempt: /home/user there is the E2B sandbox's own
+// filesystem, a real remote path, not this checkout.)
+const scriptsDir=path.join(import.meta.dirname);
+const machinePaths=[];
+for(const file of fs.readdirSync(scriptsDir).filter(f=>/\.(mjs|js)$/.test(f))){
+  const body=fs.readFileSync(path.join(scriptsDir,file),'utf8');
+  for(const match of body.matchAll(/readFileSync\(\s*(['"`])(\/[^'"`]*)\1/g)){
+    const target=match[2];
+    if(target.startsWith('/tmp/')||target.startsWith('/dev/'))continue;
+    machinePaths.push(file+' -> '+target);
+  }
+}
+eq(machinePaths.length,0,'no script reads an absolute path that only exists on one machine: '+machinePaths.join(', '));
 
 stop();
 console.log('dashboard-render-test OK ('+checks+' checks, '+tiles.length+' tiles, live server, no JS errors)');

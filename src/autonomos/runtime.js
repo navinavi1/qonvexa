@@ -793,7 +793,15 @@ async refreshTreasury(){
     }
     if(!isActionableEarningSignal(op))reasons.push('source_not_in_auto_claim_allowlist');
     const lifecycle=marketplaceLifecycleTruth(op.source);
-    if(!preCommittedOrder&&!lifecycle.autoReady&&!lifecycle.competitive)reasons.push(`marketplace_lifecycle_not_auto_ready:${lifecycle.reason||lifecycle.payout||'incomplete'}`);
+    // marketplaceLifecycleTruth() returns {discover,claim,execute,deliver,settle,payout,
+    // autoReady} and has never returned a `competitive` field -- `competitive` lives on the
+    // opportunity, not on the lifecycle. So this read was always undefined and the term was
+    // dead: a guard that looked like it made an exception for competitive markets and made
+    // none. Dropping it changes no behaviour; it just stops the code claiming a rule it does
+    // not have. Competitive listings are not given a pass here on purpose: bidding on a
+    // market whose payout we have never verified end to end spends real work for a payout
+    // that may not exist, and the proposal lane below is where they belong.
+    if(!preCommittedOrder&&!lifecycle.autoReady)reasons.push(`marketplace_lifecycle_not_auto_ready:${lifecycle.reason||lifecycle.payout||'incomplete'}`);
     if(/credentials_required|needs_credentials/.test(String(op.claimMode||'')))reasons.push('connector_credentials_missing');
     
     if(!preCommittedOrder&&config.rejectDemoAndTestJobs&&isDemoOrTestOpportunity(op))reasons.push('demo_or_test_opportunity');

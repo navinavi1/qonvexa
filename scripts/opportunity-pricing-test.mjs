@@ -3,6 +3,7 @@ import { canonicalOpportunity, eligibility, priceOpportunity } from '../src/auto
 import { classifyOpportunity } from '../src/autonomos/capabilities.js';
 import { isRetiredMarket } from '../src/autonomos/retired-markets.js';
 import { marketplaceFeePercent } from '../src/autonomos/marketplace-fees.js';
+import { evaluateOpportunity } from '../src/autonomos/profit-engine.js';
 
 let checks=0;
 const ok=(c,l)=>{assert.ok(c,l);checks++;};
@@ -51,5 +52,30 @@ eq(priceOpportunity(raw,{}).expectedNetProfit,null,'a capability without a cost 
 for(const source of ['algora.io','algora','api.docs.algora.io'])
   ok(isRetiredMarket({source}),source+' is retired');
 ok(!isRetiredMarket({source:'github.com'}),'live markets stay live');
+
+
+// 8. A marketplace's cut comes out of the payout, so it is only paid when we are paid.
+// Charged at face value against probability-weighted revenue, the payout cancelled out of
+// the comparison entirely and the whole profitability test degenerated into
+// "win probability > fee percentage" -- refusing a $10,000 contract on a 15% market for
+// "non_positive_profit" while allowing a $10 one on a 7.5% market. Profit must scale with
+// the size of the job.
+const econCfg={minMarginPercent:20,zeroSpendMode:false,earnedFundsOnly:true,availableSpendUsd:50};
+const priceAt=(payoutUsd,feePercent)=>evaluateOpportunity({expectedRevenueUsd:payoutUsd,
+  successProbability:0.13,modelCostUsd:0.0045,marketplaceFeeUsd:payoutUsd*feePercent/100},econCfg);
+
+const big=priceAt(10000,15),small=priceAt(10,15);
+ok(big.allowed,'a $10,000 job on a 15% market is profitable work, not a loss');
+ok(big.expectedProfitUsd>small.expectedProfitUsd*100,'expected profit scales with the size of the job');
+ok(priceAt(100,7.5).expectedProfitUsd>priceAt(100,15).expectedProfitUsd,'a cheaper market is worth more, all else equal');
+
+// The same arithmetic, in the other place it is written.
+const feeJob={title:'Paid task',description:'Deliver a document.',source:'taskmarket.dev',externalId:'fee-1',
+  payoutUsd:1000,currency:'USDC',competitive:true,estimatedWinProbability:0.13,
+  estimatedExecutionCost:0.0045,marketplaceFees:75,expectedFailureCost:0};
+eq(Math.round(canonicalOpportunity(feeJob).expectedNetProfit*100)/100,
+   Math.round((1000*0.13-0.0045-75*0.13)*100)/100,
+   'canonicalOpportunity weights the marketplace cut by the chance of being paid');
+ok(canonicalOpportunity(feeJob).expectedNetProfit>0,'a $1,000 task with a 7.5% cut is not a loss');
 
 console.log('opportunity-pricing-test OK ('+checks+' checks)');

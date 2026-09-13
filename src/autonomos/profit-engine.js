@@ -16,7 +16,16 @@ export function evaluateOpportunity(input = {}, config = {}) {
   const completionReserve=survival&&baseOutOfPocket>0 ? Math.min(reserveByPayout,Math.max(0.002,reserveByWork)) : 0;
   const reservedOutOfPocket=baseOutOfPocket+completionReserve;
 
-  const totalCost = compute + api + model + externalAgent + marketplace + network + failure;
+  // A marketplace's cut is deducted FROM the payout: it is charged when, and only when, we
+  // are paid. Charging it in full against a probability-weighted revenue compared
+  // p*revenue against feePercent*revenue -- and the payout cancels out of that comparison
+  // entirely, so the whole test collapsed to "is the win probability above the fee
+  // percentage". At the fleet's own 13% win estimate that refused every job on any market
+  // charging 15%, a $10,000 contract included, reporting "non_positive_profit" for work
+  // whose real expected value was hundreds of dollars. Out-of-pocket execution costs stay
+  // unweighted: those are spent doing the work, whether or not the work gets paid for.
+  const expectedMarketplaceFee = marketplace * probability;
+  const totalCost = compute + api + model + externalAgent + expectedMarketplaceFee + network + failure;
   const expectedRevenue = revenue * probability;
   const expectedProfit = expectedRevenue - totalCost;
   const marginPercent = expectedRevenue > 0 ? (expectedProfit / expectedRevenue) * 100 : 0;
@@ -36,7 +45,7 @@ export function evaluateOpportunity(input = {}, config = {}) {
 
   return {
     expectedRevenueUsd: round(expectedRevenue), expectedCostUsd: round(totalCost), estimatedExecutionSpendUsd: round(baseOutOfPocket),
-    completionReserveUsd: round(completionReserve), outOfPocketCostUsd: round(reservedOutOfPocket), marketplaceFeesUsd: round(marketplace),
+    completionReserveUsd: round(completionReserve), outOfPocketCostUsd: round(reservedOutOfPocket), marketplaceFeesUsd: round(expectedMarketplaceFee),
     expectedProfitUsd: round(expectedProfit), marginPercent: round(marginPercent), allowed,
     reason: allowed
       ? survival && completionReserve>0 ? 'positive_unit_economics_with_finish_reserve' : 'positive_unit_economics'
