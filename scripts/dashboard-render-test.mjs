@@ -118,5 +118,19 @@ for(const file of fs.readdirSync(scriptsDir).filter(f=>/\.(mjs|js)$/.test(f))){
 }
 eq(machinePaths.length,0,'no script reads an absolute path that only exists on one machine: '+machinePaths.join(', '));
 
+// AutonomOS writes two derived views -- the global work feed and the daily money report --
+// as files in the directory express.static serves to the whole internet. The money report
+// carries gross revenue, fees, costs, net profit and the owner/agent split. Anyone who
+// guessed the filename could read the owner's books. Only the admin page ever loads them.
+for(const name of ['autonomos-money-report.json','autonomos-global-feed.json']){
+  fs.writeFileSync(path.join(publicDir,name),JSON.stringify({today:{grossRevenueUsd:1234.56}}));
+  try{
+    eq((await fetch(B+'/'+name)).status,401,name+' is not readable without logging in');
+    const mine=await fetch(B+'/'+name,{headers:{cookie}});
+    eq(mine.status,200,name+' is still readable by the owner');
+    eq((await mine.json())?.today?.grossRevenueUsd,1234.56,'and still carries the real figures');
+  } finally { try{fs.rmSync(path.join(publicDir,name));}catch{} }
+}
+
 stop();
 console.log('dashboard-render-test OK ('+checks+' checks, '+tiles.length+' tiles, live server, no JS errors)');

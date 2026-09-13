@@ -3,3 +3,8 @@ node_modules/
 data/
 *.log
 .DS_Store
+
+# Runtime-generated operational views. They carry revenue and pipeline figures and are
+# written into public/ at runtime; they must never be committed or shipped in the image.
+public/autonomos-global-feed.json
+public/autonomos-money-report.json

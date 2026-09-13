@@ -33,7 +33,7 @@ function ensureGlobalFeedPanel(){
   renderGlobalFeed();
 }
 
-async function loadGlobalFeed(){if(typeof document==='undefined')return;ensureGlobalFeedPanel();try{const r=await fetch(`/autonomos-global-feed.json?t=${Date.now()}`,{cache:'no-store'});if(r.ok)globalFeedData=await r.json();}catch{}renderGlobalFeed();}
+async function loadGlobalFeed(){if(typeof document==='undefined')return;ensureGlobalFeedPanel();try{const r=await fetch(`/autonomos-global-feed.json?t=${Date.now()}`,{cache:"no-store",credentials:"same-origin"});if(r.ok)globalFeedData=await r.json();}catch{}renderGlobalFeed();}
 function renderGlobalFeed(){
   if(typeof document==='undefined'||!document?.getElementById)return;
   const body=document.getElementById('global-feed-body');if(!body)return;

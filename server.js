@@ -858,6 +858,21 @@ app.use((req, res, next) => {
 // This prevents /admin, /robots.txt and /sitemap.xml from being intercepted
 // by express.static before their dedicated handlers run.
 app.get('/autonomos/artifacts/:id/:name',(req,res)=>serveLocalArtifact(req,res));
+
+// AutonomOS writes two derived views as files -- the global work feed and the daily money
+// report -- into the very directory express.static serves to the whole internet with no
+// authentication. The money report carries gross revenue, fees, costs, net profit and the
+// owner/agent split; the feed carries the entire job pipeline. Anyone who guessed the
+// filename could read the owner's books at qonvexa.co/autonomos-money-report.json. Only the
+// admin page ever loads either of them, so they go behind the same login as everything else.
+// Registered ahead of express.static so the static handler never gets the chance to serve
+// them: a 401 here is the whole point.
+app.get(/^\/autonomos-(?:global-feed|money-report)\.json$/, requireAdmin, (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  res.sendFile(path.join(publicDir, path.basename(req.path)), err => {
+    if (err) res.status(404).json({ error: 'Not generated yet.' });
+  });
+});
 app.use(express.static(publicDir, {
   extensions: ['html'],
   index: false,
