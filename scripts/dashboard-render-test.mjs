@@ -14,14 +14,35 @@ import { spawn } from 'node:child_process';
 const PORT=3991+Math.floor(Math.random()*40);
 const B='http://127.0.0.1:'+PORT;
 const storage=fs.mkdtempSync(path.join(os.tmpdir(),'dash-render-'));
+// The child gets an explicit environment, never a spread of this one. Inheriting the build
+// environment is what broke the deploy: render.yaml sets LAUNCH_MODE=live, this test forces
+// SITE_URL to http://127.0.0.1:<port>, and in live mode server.js refuses to start unless
+// SITE_URL is https -- so it threw at module load, the health check never answered, and the
+// build went red on a machine where nothing was actually wrong with the code. Locally
+// LAUNCH_MODE is unset, so it passed here and only here. Listing the variables makes the
+// test depend on what it declares instead of on wherever it happens to run.
 const server=spawn(process.execPath,['server.js'],{
   cwd:path.join(import.meta.dirname,'..'),
-  env:{...process.env,PORT:String(PORT),STORAGE_DIR:storage,NODE_ENV:'production',
-    ADMIN_USERNAME:'render-probe',ADMIN_PASSWORD:'render-probe-password',
+  env:{
+    PATH:process.env.PATH||'',
+    PORT:String(PORT),
+    STORAGE_DIR:storage,
+    NODE_ENV:'production',
+    LAUNCH_MODE:'staging',
+    ADMIN_USERNAME:'render-probe',
+    ADMIN_PASSWORD:'render-probe-password',
     ADMIN_SESSION_SECRET:'render-probe-secret-0123456789abcdef0123456789',
     IP_HASH_SALT:'render-probe-salt-0123456789abcdef',
-    SITE_URL:B,AUTONOMOS_ENABLED:'false',npm_lifecycle_event:''},
+    SITE_URL:B,
+    AUTONOMOS_ENABLED:'false',
+    npm_lifecycle_event:''
+  },
   stdio:['ignore','pipe','pipe']});
+// And keep what it says. Throwing "the server did not start" while discarding the reason it
+// printed is how a one-line configuration mismatch turned into a blind build failure.
+let serverOutput='';
+server.stdout.on('data',chunk=>{serverOutput+=chunk;});
+server.stderr.on('data',chunk=>{serverOutput+=chunk;});
 const stop=()=>{try{server.kill('SIGKILL');}catch{}try{fs.rmSync(storage,{recursive:true,force:true});}catch{}};
 process.on('exit',stop);
 
@@ -31,7 +52,7 @@ for(let i=0;i<120;i++){
   await new Promise(r=>setTimeout(r,250));
   try{const r=await fetch(B+'/health');if(r.ok){up=true;break;}}catch{}
 }
-if(!up){stop();throw new Error('the server did not start, so nothing here could be verified');}
+if(!up){stop();throw new Error('the server did not start, so nothing here could be verified. It said:\n'+(serverOutput.trim()||'(nothing)'));}
 
 const login=await fetch(B+'/api/admin/login',{method:'POST',headers:{'content-type':'application/json'},
   body:JSON.stringify({username:'render-probe',password:'render-probe-password'})});
@@ -117,6 +138,18 @@ for(const file of fs.readdirSync(scriptsDir).filter(f=>/\.(mjs|js)$/.test(f))){
   }
 }
 eq(machinePaths.length,0,'no script reads an absolute path that only exists on one machine: '+machinePaths.join(', '));
+
+// The same lesson, one level up. A test that boots the server and hands it a spread of the
+// ambient environment is not testing the server, it is testing whatever machine it happens
+// to run on -- and the build machine sets LAUNCH_MODE=live, which made server.js refuse to
+// start and took a deploy down over nothing. Every test that spawns the server declares its
+// environment explicitly.
+const inherited=[];
+for(const file of fs.readdirSync(scriptsDir).filter(f=>/\.m?js$/.test(f))){
+  const body=fs.readFileSync(path.join(scriptsDir,file),'utf8');
+  if(/spawn\([^)]*server\.js/.test(body)&&/env\s*:\s*\{[^}]*\.\.\.process\.env/.test(body))inherited.push(file);
+}
+eq(inherited.length,0,'no test boots the server on an inherited environment: '+inherited.join(', '));
 
 // AutonomOS writes two derived views -- the global work feed and the daily money report --
 // as files in the directory express.static serves to the whole internet. The money report
