@@ -7,6 +7,7 @@ import { classifyOpportunity, capabilityCatalog } from '../src/autonomos/capabil
 import { evaluateOpportunity } from '../src/autonomos/profit-engine.js';
 import { normalizeConfig } from '../src/autonomos/policy-engine.js';
 import { marketplaceFeePercent } from '../src/autonomos/marketplace-fees.js';
+import { createAutonomOS } from '../src/autonomos/runtime.js';
 
 // Walks one real job through every gate between "seen" and "claimable", so a gate that
 // refuses everything is named here rather than discovered months later on a dashboard that
@@ -72,5 +73,30 @@ const usd=canonicalOpportunity({...raw,externalId:'j2',currency:'USD',payoutUsd:
 const usdc=canonicalOpportunity({...raw,externalId:'j3',currency:'USDC',payoutUsd:40});
 eq(usd.currency,'USD','a fiat job keeps its currency');
 eq(usdc.currency,'USDC','a crypto job keeps its currency');
+
+
+// The auto-claim lane needs a market at FULL_AUTO_READY. Only NativeMarketWorker records
+// all eight evidence kinds that state requires, and its one built-in connector is
+// freelancer.com, switched on by a single variable that appeared in three lines of source
+// and in no place an owner reads. A switch nobody can find is the same as no switch.
+{
+  const storage=fs.mkdtempSync(path.join(os.tmpdir(),'missing-'));
+  const root=path.join(storage,'autonomos'); fs.mkdirSync(root,{recursive:true});
+  fs.writeFileSync(path.join(root,'global-work-hunter.json'),JSON.stringify({leads:{
+    a:{id:'a',marketId:'freelancer.com'},b:{id:'b',marketId:'freelancer.com'},c:{id:'c',marketId:'remotive'}}}));
+  const build=extra=>createAutonomOS({storageDir:storage,siteUrl:'http://127.0.0.1:1',
+    ownerWallet:'0x'+'1'.repeat(40),logger:{info(){},warn(){},error(){},debug(){}},
+    env:{STORAGE_DIR:storage,AUTONOMOS_ENABLED:'false',npm_lifecycle_event:'',...extra}});
+
+  const off=(await build({}).snapshot()).missing||[];
+  const row=off.find(x=>/freelancer/i.test(String(x.item)));
+  ok(row,'the dashboard names the switch that opens the only end-to-end market');
+  ok(/FREELANCER_OAUTH_TOKEN/.test(row.detail),'and names the variable exactly');
+  ok(/\b2\b/.test(row.detail),'and says how many leads are waiting on it');
+
+  const on=(await build({FREELANCER_OAUTH_TOKEN:"token"}).snapshot()).missing||[];
+  ok(!on.some(x=>/freelancer/i.test(String(x.item))),'and stops asking once it is set');
+  fs.rmSync(storage,{recursive:true,force:true});
+}
 
 console.log('earning-path-test OK ('+checks+' checks, seen -> executable -> priced -> affordable)');

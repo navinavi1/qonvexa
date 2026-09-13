@@ -9,6 +9,10 @@ import { freeWebSearch } from './free-web-tool.js';
 import { safeError } from './util.js';
 
 const AGGREGATOR_HOST=/(^|\.)(indeed\.com|ziprecruiter\.com|dailyremote\.com|remoterocketship\.com|remoteleads\.io|euremotejobs\.com|weworkremotely\.com|nodesk\.co)$/i;
+// Marketplaces that only accept an application from a logged-in native account. No amount
+// of page fetching or searching produces an email route for these, so the answer is known
+// from the URL alone and costs nothing to give.
+const NATIVE_ACCOUNT_MARKETPLACE=/(^|\.)(freelancer\.com|guru\.com|workana\.com|contra\.com|peopleperhour\.com|truelancer\.com|upwork\.com)$/i;
 const MAX_FETCH_BYTES=1_500_000;
 const TEXTUAL_SKILLS=new Set(['translation','copywriting','web-research','data-transform','document-generation','code-analysis','app-automation','general-digital']);
 const MEDIA_TERM=/\b(?:logo design|podcast cover|cover art|illustration|brand identity|graphic design|figma design|canva design|video edit(?:ing)?|motion graphics|3d render(?:ing)?)\b/ig;
@@ -30,6 +34,23 @@ export class SearchFirstLeadActioner extends BrowserlessLeadActioner{
 
   async inspectAndActBrowserless(lead){
     const id=String(lead?.id||''),host=hostname(lead?.url);if(!id||!host)return;
+
+    // This decision used to be made 39 lines and two network round trips further down, after
+    // fetching the job page and, when that failed, running a free web search for an
+    // application route that cannot exist. freelancer.com does not answer a datacenter IP at
+    // all, so in production the fetch timed out, the search timed out after it, and the throw
+    // landed in the catch below -- which reschedules on a short exponential backoff instead of
+    // the 24h "needs an account" disposition this host has always deserved. The result, live
+    // in the logs: the same handful of hosts dialled over and over, every cycle, spending the
+    // daily HTTP and search allowance on a question whose answer was in the URL. It is free to
+    // answer here, before anything is spent.
+    if(NATIVE_ACCOUNT_MARKETPLACE.test(host)){
+      this.setAction(id,{status:'native_marketplace_auth_required',host,title:lead.title,url:lead.url,category:lead.category,
+        reason:'Verified native account and application workflow required',
+        nextRetryAt:new Date(Date.now()+86400000).toISOString()});
+      this.event('lead_native_marketplace_account_required',{id,host});
+      return;
+    }
     this.setAction(id,{status:'inspecting_direct',host,title:lead.title,url:lead.url,category:lead.category,lastAttemptAt:now(),attempts:Number(this.state.actions?.[id]?.attempts||0)+1,error:''});
     try{
       let page={ok:false,html:'',text:'',finalUrl:String(lead.url||''),error:''};
@@ -79,7 +100,6 @@ export class SearchFirstLeadActioner extends BrowserlessLeadActioner{
         this.setAction(id,{status:'github_application_blocked',reason:githubApply.error,failure:githubApply.failure,nextRetryAt:githubApply.retryAt||new Date(Date.now()+3600000).toISOString()});return;
       }
 
-      if(/(^|\.)(freelancer\.com|guru\.com|workana\.com|contra\.com|peopleperhour\.com|truelancer\.com|upwork\.com)$/.test(host)){this.setAction(id,{status:'native_marketplace_auth_required',reason:'Verified native account and application workflow required',payout,skill:capability.skill,nextRetryAt:new Date(Date.now()+86400000).toISOString()});return;}
       let routes=[...discoverEmailRoutes(page.html,page.finalUrl||lead.url)];
       const candidateUrls=[...discoverApplyLinks(page.html,page.finalUrl||lead.url),...(searchFallback.urls||[])];
       for(const url of unique(candidateUrls).filter(url=>hostname(url)!==host||!AGGREGATOR_HOST.test(host)).slice(0,6)){

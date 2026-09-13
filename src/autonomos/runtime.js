@@ -1506,6 +1506,20 @@ async refreshTreasury(){
       const lifecycle=marketplaceLifecycleWithCashout(c.id);
       if(lifecycle.workAutoReady&&!lifecycle.cashoutReady)missing.push({item:`${c.name} cash-out`,status:'cashout_action',detail:lifecycle.cashoutReason||'Marketplace work is autonomous, but final owner-wallet cash-out is not verified.'});
     }
+
+    // A market only reaches FULL_AUTO_READY -- the state the auto-claim lane requires -- once
+    // all eight evidence kinds are recorded, and the ONLY component that records all eight is
+    // NativeMarketWorker. Its one built-in connector is freelancer.com, wired to the fleet's
+    // own leads and gated on a single variable. So the switch that opens the only lane with
+    // real volume was named in three lines of source and nowhere an owner would ever look:
+    // not here, not in preflight, not in render.yaml. Silence is not a configuration choice.
+    if(!String(env.FREELANCER_OAUTH_TOKEN||'').trim()){
+      let leads=0;
+      try{leads=Object.values(store.readJson('global-work-hunter.json',{}).leads||{})
+        .filter(lead=>String(lead?.marketId||lead?.source||'')==='freelancer.com').length;}catch{}
+      missing.push({item:'Freelancer.com native lane',status:'external_setup',
+        detail:`Set FREELANCER_OAUTH_TOKEN to let agents bid, deliver and be paid through the built-in connector. It is the only market wired end to end, and the fleet is currently holding ${leads} of its leads with no route to act on them.`});
+    }
     return missing;
   }
   function safeConfig(value){const{allowExternalSpending,maxPaidProcurementUsd,...rest}=value;return{...rest,allowExternalSpending:Boolean(allowExternalSpending),maxPaidProcurementUsd:Number(maxPaidProcurementUsd||0),ownerWallet:wallet,privateKeysStored:false,
