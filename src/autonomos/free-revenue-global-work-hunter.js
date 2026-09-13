@@ -1,4 +1,6 @@
 import { githubAvailable, githubRequest, githubSearchJson } from './github-transport.js';
+// Public feeds are still someone else's server: read what we budgeted for, not what they send.
+import { readBodyCapped } from './bounded-body.js';
 import { RevenueGlobalWorkHunter } from './revenue-global-work-hunter.js';
 
 const SOURCE_CONFIG = [
@@ -79,9 +81,9 @@ async function loadGithubBounties(env={}){
   return out.slice(0,160).filter(validRow);
 }
 
-async function getJson(url){const response=await fetch(url,{headers:{accept:'application/json','user-agent':'AutonomOS-FreeRevenueHunter/1.0 (+https://qonvexa.co)'},signal:AbortSignal.timeout(20_000)});if(!response.ok)throw new Error(`http_${response.status}`);return response.json();}
-async function getText(url){const response=await fetch(url,{headers:{accept:'application/rss+xml,application/xml,text/xml;q=0.9,*/*;q=0.5','user-agent':'AutonomOS-FreeRevenueHunter/1.0 (+https://qonvexa.co)'},signal:AbortSignal.timeout(20_000)});if(!response.ok)throw new Error(`http_${response.status}`);return response.text();}
-async function getHtml(url){const response=await fetch(url,{redirect:'follow',headers:{accept:'text/html,application/xhtml+xml','user-agent':'Mozilla/5.0 (compatible; AutonomOS-FreeRevenueHunter/1.0; +https://qonvexa.co)'},signal:AbortSignal.timeout(20_000)});if(!response.ok)throw new Error(`http_${response.status}`);return String(await response.text()).slice(0,2_000_000);}
+async function getJson(url){const response=await fetch(url,{headers:{accept:'application/json','user-agent':'AutonomOS-FreeRevenueHunter/1.0 (+https://qonvexa.co)'},signal:AbortSignal.timeout(20_000)});if(!response.ok)throw new Error(`http_${response.status}`);const body=await readBodyCapped(response,8_000_000);try{return JSON.parse(body.text);}catch{throw new Error('unparsable_json_body');}}
+async function getText(url){const response=await fetch(url,{headers:{accept:'application/rss+xml,application/xml,text/xml;q=0.9,*/*;q=0.5','user-agent':'AutonomOS-FreeRevenueHunter/1.0 (+https://qonvexa.co)'},signal:AbortSignal.timeout(20_000)});if(!response.ok)throw new Error(`http_${response.status}`);return (await readBodyCapped(response,8_000_000)).text;}
+async function getHtml(url){const response=await fetch(url,{redirect:'follow',headers:{accept:'text/html,application/xhtml+xml','user-agent':'Mozilla/5.0 (compatible; AutonomOS-FreeRevenueHunter/1.0; +https://qonvexa.co)'},signal:AbortSignal.timeout(20_000)});if(!response.ok)throw new Error(`http_${response.status}`);return (await readBodyCapped(response,2_000_000)).text;}
 function validRow(row){return /^https?:\/\//i.test(String(row?.url||''))&&String(row?.title||'').trim().length>2;}
 function xmlValue(item,tag){const match=String(item||'').match(new RegExp(`<${tag}[^>]*>([\\s\\S]*?)<\\/${tag}>`,'i'));return decodeXml(String(match?.[1]||'').replace(/^<!\[CDATA\[|\]\]>$/g,''));}
 function extractTitle(chunk){const text=String(chunk||'').replace(/\s+/g,' ').trim();const parts=text.split(/(?:Funded|Fixed Price|Hourly|\$\d|€\d|£\d)/i).map(x=>x.trim()).filter(x=>x.length>=8&&x.length<=220);return parts.at(-1)?.slice(-180)||'';}

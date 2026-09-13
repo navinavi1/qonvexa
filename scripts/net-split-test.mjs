@@ -73,4 +73,24 @@ const fresh=()=>{const root=fs.mkdtempSync(path.join(os.tmpdir(),'net-split-'));
   fs.rmSync(root,{recursive:true,force:true});
 }
 
+
+// The lock has to cover the decision, not only the write. It used to cover only the write,
+// so two writers could both read "not present" and both then append the same payment. The
+// check is what must be inside; assert on where it runs, because a dedup test alone passes
+// either way in a single process.
+{
+  const store=new AutonomOSStore(fs.mkdtempSync(path.join(os.tmpdir(),'ledger-lock-')));
+  let readsInsideLock=0, depth=0;
+  const realLock=store.withLock.bind(store), realRead=store.readNdjson.bind(store);
+  store.withLock=(name,fn)=>realLock(name,()=>{depth++;try{return fn();}finally{depth--;}});
+  store.readNdjson=(name,limit)=>{if(name==='ledger.ndjson'&&depth>0)readsInsideLock++;return realRead(name,limit);};
+
+  const row=id=>ledgerEntry({id,type:'revenue',source:'taskmarket.dev',amountUsd:10,
+    externalTransactionId:'0x'+'a'.repeat(64),network:'eip155:8453',status:'settled'});
+  assert.equal(appendUniqueLedgerEntry(store,row('first')),true,'a new receipt is booked');
+  assert.ok(readsInsideLock>0,'the duplicate check runs while the lock is held');
+  assert.equal(appendUniqueLedgerEntry(store,row('second')),false,'the same receipt is refused under a different id');
+  assert.equal(store.readNdjson('ledger.ndjson',-1).length,1,'and the journal holds exactly one row');
+}
+
 console.log('net-split-test OK ('+checks+' checks)');

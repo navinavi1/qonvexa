@@ -1,4 +1,5 @@
 import { isRetiredMarket } from './retired-markets.js';
+import { readBodyCapped } from './bounded-body.js';
 import { gmailMessageIdentity } from './gmail-mailbox.js';
 import { GlobalLeadActioner } from './global-lead-actioner.js';
 import { classifyOpportunity } from './capabilities.js';
@@ -205,7 +206,7 @@ async function fetchPage(url){
   if(!response.ok)return{ok:false,error:`http_${response.status}`};
   const len=Number(response.headers.get('content-length')||0);if(len>MAX_PAGE_BYTES)return{ok:false,error:'page_too_large'};
   const type=String(response.headers.get('content-type')||'');if(type&&!/text|html|xhtml/i.test(type))return{ok:false,error:`unsupported_content_type:${type.slice(0,80)}`};
-  const html=(await response.text()).slice(0,MAX_PAGE_BYTES);
+  const html=(await readBodyCapped(response,MAX_PAGE_BYTES)).text;
   return{ok:true,html,text:stripHtml(html).slice(0,40_000),finalUrl:String(response.url||url)};
 }
 function stripHtml(value){return decodeEntities(String(value||'').replace(/<script\b[\s\S]*?<\/script>/gi,' ').replace(/<style\b[\s\S]*?<\/style>/gi,' ').replace(/<[^>]+>/g,' ').replace(/\s+/g,' ')).trim();}

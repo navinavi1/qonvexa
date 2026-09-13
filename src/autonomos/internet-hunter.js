@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { readBodyCapped } from './bounded-body.js';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { freeWebSearch } from './free-web-tool.js';
@@ -226,7 +227,7 @@ export class InternetHunter {
   async probeKnownPages(){
     for(const id of ['claw-work','seekclaw','a2afans']){
       const p=this.state.platforms[id];if(!p?.url)continue;
-      try{const r=await fetch(p.url,{headers:{accept:'text/html','user-agent':'AutonomOS-InternetHunter/2.0'},signal:AbortSignal.timeout(12000)});const text=await r.text();this.upsertPlatform({...p,lastProbeOk:r.ok,lastProbeAt:new Date().toISOString(),pageCryptoEvidence:CRYPTO.test(text),pageWorkEvidence:WORK.test(text),pageHumanGate:HUMAN_ONLY.test(text)},{source:'live_probe'});}catch{}
+      try{const r=await fetch(p.url,{headers:{accept:'text/html','user-agent':'AutonomOS-InternetHunter/2.0'},signal:AbortSignal.timeout(12000)});const text=(await readBodyCapped(r,1_000_000)).text;this.upsertPlatform({...p,lastProbeOk:r.ok,lastProbeAt:new Date().toISOString(),pageCryptoEvidence:CRYPTO.test(text),pageWorkEvidence:WORK.test(text),pageHumanGate:HUMAN_ONLY.test(text)},{source:'live_probe'});}catch{}
     }
   }
   upsertPlatform(platform,{source=''}={}){

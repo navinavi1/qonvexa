@@ -1,4 +1,5 @@
 import { isRetiredMarket } from './retired-markets.js';
+import { readBodyCapped } from './bounded-body.js';
 import { githubApplication, parseGithubIssue, issueApi } from './github-application.js';
 import { githubAvailable, githubRequest } from './github-transport.js';
 import path from 'node:path';
@@ -180,7 +181,7 @@ function significantTitleTerms(value){return [...new Set(String(value||'').toLow
 
 async function fetchPage(url){
   let response;try{response=await fetch(String(url),{redirect:'follow',headers:{accept:'text/html,application/xhtml+xml,text/plain;q=0.8','user-agent':'Mozilla/5.0 (compatible; AutonomOS-WorkHunter/15; +https://qonvexa.co)'},signal:AbortSignal.timeout(12_000)});}catch(error){return{ok:false,error:`fetch_network:${safeError(error)}`,html:'',text:'',finalUrl:String(url||'')};}
-  if(!response.ok)return{ok:false,error:`http_${response.status}`,html:'',text:'',finalUrl:String(response.url||url)};const len=Number(response.headers.get('content-length')||0);if(len>MAX_FETCH_BYTES)return{ok:false,error:'page_too_large',html:'',text:'',finalUrl:String(response.url||url)};const type=String(response.headers.get('content-type')||'');if(type&&!/text|html|xhtml/i.test(type))return{ok:false,error:`unsupported_content_type:${type.slice(0,70)}`,html:'',text:'',finalUrl:String(response.url||url)};const html=(await response.text()).slice(0,MAX_FETCH_BYTES);return{ok:true,html,text:stripHtml(html).slice(0,35_000),finalUrl:String(response.url||url),error:''};
+  if(!response.ok)return{ok:false,error:`http_${response.status}`,html:'',text:'',finalUrl:String(response.url||url)};const len=Number(response.headers.get('content-length')||0);if(len>MAX_FETCH_BYTES)return{ok:false,error:'page_too_large',html:'',text:'',finalUrl:String(response.url||url)};const type=String(response.headers.get('content-type')||'');if(type&&!/text|html|xhtml/i.test(type))return{ok:false,error:`unsupported_content_type:${type.slice(0,70)}`,html:'',text:'',finalUrl:String(response.url||url)};const html=(await readBodyCapped(response,MAX_FETCH_BYTES)).text;return{ok:true,html,text:stripHtml(html).slice(0,35_000),finalUrl:String(response.url||url),error:''};
 }
 function rankRoutes(rows){const map=new Map();for(const row of rows||[]){const email=String(row?.email||'').toLowerCase();if(!email)continue;const prev=map.get(email);if(!prev||Number(row?.score||0)>Number(prev?.score||0))map.set(email,row);}return[...map.values()].sort((a,b)=>Number(b.score||0)-Number(a.score||0));}
 function cleanTitle(value){return String(value||'').replace(/["']/g,' ').replace(/\s+/g,' ').trim().slice(0,180);}

@@ -4,6 +4,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { discoverEmailRoutes, discoverApplyLinks, buildEmailArgs } from '../src/autonomos/browserless-lead-actioner.js';
 import { SearchFirstLeadActioner } from '../src/autonomos/search-first-lead-actioner.js';
+import http from 'node:http';
+import { readBodyCapped } from '../src/autonomos/bounded-body.js';
 
 const html=`
 <html><body>
@@ -43,5 +45,31 @@ try{
   assert.equal(action?.status,'native_marketplace_auth_required','and says exactly why');
   assert.ok(Date.parse(action.nextRetryAt)-Date.now()>20*60*60_000,'and waits a day, not a short backoff');
 }finally{globalThis.fetch=realFetch;fs.rmSync(storage,{recursive:true,force:true});}
+
+
+// Four call sites fetched third-party pages, checked content-length, and then did
+// `(await response.text()).slice(0, MAX)`. A chunked response carries no content-length, so
+// the check passes and the whole body is buffered before a byte is discarded -- on a 512MB
+// instance running fifteen workers on one thread, that is an OOM kill for the entire fleet,
+// decided by whatever the far end feels like sending. The cap has to bound what is read.
+{
+  const server=http.createServer((req,res)=>{
+    res.writeHead(200,{'content-type':'text/html'});          // deliberately no content-length
+    const chunk='<p>'+'x'.repeat(64*1024)+'</p>';
+    let sent=0;
+    const pump=()=>{ if(sent>64*1024*1024){res.end();return;} sent+=chunk.length;
+      if(res.write(chunk))setImmediate(pump); else res.once('drain',pump); };
+    pump();
+  });
+  await new Promise(r=>server.listen(0,'127.0.0.1',r));
+  try{
+    const before=process.memoryUsage().heapUsed;
+    const {text,truncated}=await readBodyCapped(await fetch('http://127.0.0.1:'+server.address().port+'/'),1_500_000);
+    const grewMb=(process.memoryUsage().heapUsed-before)/1048576;
+    assert.equal(text.length,1_500_000,'exactly the budget is kept');
+    assert.equal(truncated,true,'and the caller is told the page was longer');
+    assert.ok(grewMb<40,'memory is bounded by the cap, not the far end (grew '+grewMb.toFixed(1)+'MB against a 64MB stream)');
+  } finally { server.close(); }
+}
 
 console.log('BROWSERLESS ACTIONER: direct application routing PASS');

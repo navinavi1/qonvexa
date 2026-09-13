@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { readBodyCapped } from './bounded-body.js';
 import { operationBody, schemaProperties } from './native-market-adapter.js';
 import { NativeMarketAdapter } from './native-market-adapter.js';
 import { DynamicMarketRegistry } from './dynamic-market-registry.js';
@@ -132,7 +133,7 @@ function findArray(data){if(Array.isArray(data))return data;if(!data||typeof dat
 function pick(obj,keys){for(const k of keys)if(obj?.[k]!==undefined&&obj?.[k]!==null)return obj[k];return'';}
 function normalizeSeed(seed){try{const u=new URL(/^https?:\/\//i.test(String(seed))?String(seed):`https://${String(seed)}`);return publicHost(u.hostname)?u.toString():'';}catch{return'';}}
 function publicHost(host){const h=String(host||'').toLowerCase();return Boolean(h)&&h!=='localhost'&&!/^127\.|^10\.|^192\.168\.|^169\.254\.|^172\.(1[6-9]|2\d|3[01])\./.test(h)&&!h.endsWith('.local');}
-async function getText(url){const r=await fetch(url,{redirect:'follow',headers:{accept:'text/html,text/plain,application/json;q=0.8','user-agent':'AutonomOS-MarketExpansion/1.0'},signal:AbortSignal.timeout(15_000)});if(!r.ok)throw new Error(`http_${r.status}`);const len=Number(r.headers.get('content-length')||0);if(len>MAX_BODY)throw new Error('page_too_large');return{ok:true,text:(await r.text()).slice(0,MAX_BODY),url:String(r.url||url)};}
+async function getText(url){const r=await fetch(url,{redirect:'follow',headers:{accept:'text/html,text/plain,application/json;q=0.8','user-agent':'AutonomOS-MarketExpansion/1.0'},signal:AbortSignal.timeout(15_000)});if(!r.ok)throw new Error(`http_${r.status}`);const len=Number(r.headers.get('content-length')||0);if(len>MAX_BODY)throw new Error('page_too_large');return{ok:true,text:(await readBodyCapped(r,MAX_BODY)).text,url:String(r.url||url)};}
 async function getJson(url){const r=await fetch(url,{redirect:'follow',headers:{accept:'application/json','user-agent':'AutonomOS-MarketExpansion/1.0'},signal:AbortSignal.timeout(12_000)});if(!r.ok)return null;const len=Number(r.headers.get('content-length')||0);if(len>MAX_BODY)return null;return r.json().catch(()=>null);}
 function extractLinks(text,base){const out=[];for(const m of String(text||'').matchAll(/href=["']([^"']+)["']/gi)){try{out.push(new URL(m[1],base).toString());}catch{}}return out;}
 async function safeJson(r){try{return await r.json();}catch{return{};}}

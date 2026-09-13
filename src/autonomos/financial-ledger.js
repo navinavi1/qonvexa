@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 export function ledgerEntry({id='',type,jobId='',externalId='',externalTransactionId='',registryIdentity='',source='',grossUsd=0,amountUsd=null,feeUsd=0,apiCostUsd=0,networkFeeUsd=0,currency='USD',rail='',network='',txId='',status='recorded',estimated=false,note='',allocation=null,testnet=false,productId='',displayAmountUsd=null}={}){
   const kind=String(type||'').toLowerCase();
   const canonicalAmount=amountUsd===null||amountUsd===undefined?Number(grossUsd||0):Number(amountUsd||0);
@@ -17,9 +18,24 @@ function round6(value){return Math.round((Number(value||0)+Number.EPSILON)*1e6)/
 // -1 explicitly reads the full journal; a limit of 0 means no rows in this store.
 export function appendUniqueLedgerEntry(store, record) {
   if (!record?.id) throw new Error('ledger_id_required');
-  if (store.readNdjson('ledger.ndjson', -1).some(row => row.id === record.id || record.type==='revenue'&&row.type==='revenue'&&receiptIdentity(record)&&receiptIdentity(record)===receiptIdentity(row))) return false;
-  store.append('ledger.ndjson', record);
-  return true;
+  // store.append() takes a cross-process lock on the journal, so the WRITE was protected
+  // while the decision to write was not: the duplicate check ran outside the lock, and two
+  // writers could both read "not present" and both then take the lock and append. The lock
+  // looked like it made this safe and did not. Everything that matters here -- deciding and
+  // writing -- now happens inside one lock. fs.appendFileSync is called directly because the
+  // lock is a file, not a mutex, and is not reentrant: store.append() would block on the
+  // lock this call already holds and time out after five seconds.
+  return store.withLock('ledger.ndjson', () => {
+    // Hoisted out of the row loop. It was recomputed for the record on every comparison, so
+    // the cost of booking one payment grew with the length of the whole journal.
+    const identity = record.type === 'revenue' ? receiptIdentity(record) : '';
+    const duplicate = store.readNdjson('ledger.ndjson', -1).some(row =>
+      row.id === record.id ||
+      (identity && row.type === 'revenue' && identity === receiptIdentity(row)));
+    if (duplicate) return false;
+    fs.appendFileSync(store.file('ledger.ndjson'), `${JSON.stringify(record)}\n`, { mode: 0o600 });
+    return true;
+  });
 }
 
 // Marketplace-local numeric receipt IDs are not globally unique. Chain hashes are.
