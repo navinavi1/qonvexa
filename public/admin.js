@@ -183,28 +183,17 @@ function renderAutonomOS(){
   if(badge){badge.textContent=pretty(status);badge.className=`autonomos-badge ${esc(status)}`}
   const treasuryUsdc=Number(a.treasury?.usdc||0);
   setText('#auto-treasury',a.treasury?.ok?`${treasuryUsdc.toFixed(4)}`:'—');
-  setText('#auto-revenue24',usd(a.metrics?.revenue24hUsd));
-  setText('#auto-cost24',usd(a.metrics?.cost24hUsd));
-  setText('#auto-net24',usd(a.metrics?.net24hUsd));
-  setText('#auto-net7',usd(a.metrics?.net7dUsd));
   setText('#auto-net',usd(a.metrics?.netProfitUsd));
   { const diag=el('#auto-net-diag'); if(diag){ const n=Number(a.metrics?.costEntriesCount||0); const last=a.metrics?.lastCostEntryAt; diag.textContent=n?`${n} cost entries${formatDate(last)?` · last ${formatDate(last)}`:''}`:'no cost entries recorded yet'; } }
   const registry=a.runtime?.jobRegistry||a.jobRegistry||{};
   const registrySummary=registry.summary||{};
   setText('#auto-ready',String(registrySummary.ready??0));
-  setText('#auto-new',String(registrySummary.new??0));
-  setText('#auto-retry',String(registrySummary.retry??0));
   setText('#auto-policy-hold',String(registrySummary.policyHold??0));
-  setText('#auto-system-blocked',String(registrySummary.systemBlocked??0));
-  setText('#auto-graveyard',String(registrySummary.graveyard??0));
   setText('#auto-agents',String(a.runtime?.taskAgents?.active??0));
-  setText('#auto-children',String(a.runtime?.queueDepth??0));
   setText('#auto-opportunities',String(a.metrics?.opportunitiesFound??0));
   setText('#auto-claimed',String(a.metrics?.claimedJobs??0));
   setText('#auto-delivered',String(registrySummary.delivered??a.metrics?.deliveredJobs??0));
   setText('#auto-paid',String(registrySummary.paid??a.metrics?.paidJobs??0));
-  setText('#auto-jobs',String(a.metrics?.completedJobs??0));
-  setText('#auto-cycles',String(a.runtime?.cycles??0));
   renderAutonomosJobQueue(a);
   const funnel=el('#autonomos-funnel');
   if(funnel){const f=a.runtime?.marketFunnel||{};funnel.innerHTML=[['Raw jobs',f.rawSignals],['Priced',f.pricedJobs??f.paidJobs],['≥ Floor',f.aboveFloor],['Executable',f.executable],['Profitable',f.profitable],['Claimable',f.claimable],['Ready',f.ready??registrySummary.ready]].map(([label,value])=>`<span><b>${Number(value||0)}</b>${esc(label)}</span>`).join('')}
@@ -214,44 +203,10 @@ function renderAutonomOS(){
   if(startButton){startButton.disabled=['running','working'].includes(status);startButton.textContent=['running','working'].includes(status)?'✓ Running':'▶ Start 24/7';}
   if(stopButton)stopButton.disabled=!['running','working'].includes(status);
   const llmState=a.runtime?.llm||{};
-  setText('#autonomos-llm',!llmState.enabled?'LLM · not configured':llmState.available===false?'LLM · circuit open':`LLM · ${llmState.model||'ready'}`);
 
-  const activeJobs=el('#autonomos-active-jobs');
-  if(activeJobs){
-    const rows=a.runtime?.activeJobs||[];
-    activeJobs.innerHTML=rows.map(j=>{const eta=j.etaAt?formatDate(j.etaAt):'estimating';const deadline=j.deadline?formatDate(j.deadline):'none';const progress=jobProgress(j);return `<article class="autonomos-event autonomos-live-job"><div class="event-row"><b>${esc(j.title||j.externalId||j.productId||j.id)}</b><span class="status s-in_progress">${progress}% · executing</span></div><div class="autonomos-progress"><i style="width:${progress}%"></i></div><p>${esc(pretty(j.source||'internal'))} · ${j.budgetUsd?`${usd(j.budgetUsd)} ${esc(j.currency||'')}`:'internal'} · ${esc(pretty(j.claimMode||''))}${j.escrowed?' · escrow':''}</p><p>Agent ${esc(j.workerId||'dynamic')} · started ${esc(formatDate(j.startedAt))} · ETA ${esc(eta)} · deadline ${esc(deadline)}</p></article>`}).join('')||emptyCard('No task is executing right now.');
-  }
-  const taskAgents=el('#autonomos-task-agents');
-  if(taskAgents){
-    const liveJobIds=new Set((a.runtime?.activeJobs||[]).map(x=>String(x.id)));
-    const rows=[...(a.taskAgents||[]).filter(x=>x.status==='active'&&liveJobIds.has(String(x.jobId))),...(a.business?.workforce?.squads||[]).filter(x=>x.status==='active')].slice(0,24);
-    taskAgents.innerHTML=rows.map(x=>`<article class="autonomos-event"><div class="event-row"><b>${esc(pretty(x.role))}</b><span class="status s-in_progress">${esc(pretty(x.phase||'active'))}</span></div><p>${esc(x.jobId)} · ${esc(x.specialization||'task execution')} · ${Number(x.stepIds?.length||1)} planned step${Number(x.stepIds?.length||1)===1?'':'s'}</p></article>`).join('')||emptyCard('No workers are running. Specialists appear only after a real job is accepted and disappear when it closes.');
-  }
 
   const radar=el('#autonomos-market-radar');
   if(radar){ const m=a.runtime?.marketSummary||{}; const f=a.runtime?.marketFunnel||{}; const cp=a.runtime?.commissioningProof||{}; const er=a.runtime?.earningReadiness||{}; const health=a.runtime?.connectorHealth||{}; const defs=new Map((a.connectors||[]).map(x=>[x.id,x])); const yieldBySource=new Map((a.runtime?.marketplaceYield||[]).map(x=>[x.source,x])); const blockers=Object.entries(f.blockers||{}).sort((a,b)=>b[1]-a[1]);const erClass=er.severity==='critical'?'s-error':er.severity==='ready'?'s-ready':er.severity==='working'?'s-in_progress':'s-warning';radar.innerHTML=`<article class="autonomos-event"><div class="event-row"><b>Why AutonomOS is / is not earning now</b><span class="status ${erClass}">${esc(pretty(er.code||'waiting_for_scan'))}</span></div><p><b>${esc(er.headline||'Waiting for first market scan')}</b></p><p>${esc(er.detail||'Mission Control will name the single primary operational reason after the next cycle.')}</p>${er.action?`<p class="job-fail-reason">Next: ${esc(er.action)}</p>`:''}${er.primaryBlocker?`<p class="job-fail-reason">Primary blocker: ${esc(pretty(er.primaryBlocker))} · ${Number(er.primaryBlockerCount||0)} job(s)</p>`:''}${Array.isArray(er.fullAutoSources)&&er.fullAutoSources.length?`<p>FULL AUTO sources: ${er.fullAutoSources.map(esc).join(' · ')}</p>`:''}</article><article class="autonomos-event"><div class="event-row"><b>Latest scan funnel</b><span class="status ${Number(f.ready||0)>0?'s-ready':'s-warning'}">${Number(f.ready||0)} ready</span></div><p>${Number(f.rawSignals??m.observed??0)} raw jobs → ${Number(f.pricedJobs??f.paidJobs??m.paidJobs??0)} priced → ${Number(f.aboveFloor||0)} ≥ floor → ${Number(f.executable??m.executable??0)} executable → ${Number(f.profitable??m.profitable??0)} profitable → ${Number(f.claimable||0)} claimable → ${Number(f.ready||0)} ready</p>${blockers.length?`<p class="job-fail-reason">Top blockers: ${blockers.slice(0,5).map(([k,v])=>`${esc(pretty(k))} ${Number(v)}`).join(' · ')}</p>`:''}</article><article class="autonomos-event"><div class="event-row"><b>Commissioning proof</b><span class="status ${String(cp.status||'').startsWith('proved_')?'s-ready':cp.ready>0?'s-ready':'s-warning'}">${esc(pretty(cp.status||'waiting_for_job'))}</span></div><p>Crypto canary floor ${usd(cp.floorUsd||0.5)} · ${Number(cp.eligibleSeen||0)} eligible seen · ${Number(cp.ready||0)} ready · ${Number(cp.delivered||0)} delivered · ${Number(cp.paid||0)} marketplace paid · ${Number(cp.ownerWalletPaid||0)} owner-wallet paid · ${Number(cp.withdrawalPending||0)} withdrawal pending</p>${cp.lastPayoutTruth?`<p class="job-fail-reason">Last payout: ${esc(pretty(cp.lastPayoutTruth.fundsLocation||'unknown'))} · ${cp.lastPayoutTruth.ownerWalletReached?'owner wallet reached':cp.lastPayoutTruth.withdrawalRequired?'withdrawal required':'custody unverified'}${cp.lastPayoutTruth.address?` · ${esc(String(cp.lastPayoutTruth.address).slice(0,22))}`:''}</p>`:''}${Object.keys(cp.blockers||{}).length?`<p class="job-fail-reason">Canary blockers: ${Object.entries(cp.blockers).sort((a,b)=>b[1]-a[1]).slice(0,4).map(([k,v])=>`${esc(pretty(k))} ${Number(v)}`).join(' · ')}</p>`:''}</article>`+Object.entries(health).filter(([name])=>Boolean(name)).map(([name,h])=>{const def=defs.get(name)||{};const y=yieldBySource.get(name)||{};const disabled=Boolean(h?.disabled)||/discovery_only|watch/i.test(String(h?.mode||def.mode||''));const configuredStatus=String(def.status||'');const lifecycle=def.lifecycle||a.runtime?.marketplaceLifecycle?.[name]||null;const lifecycleIncomplete=lifecycle&&lifecycle.discover===true&&lifecycle.autoReady===false;const baseStatus=!h?.ok?'Unavailable':disabled?'Watch only':configuredStatus==='certification_check_required'?'Certification required':configuredStatus==='needs_credentials'||def.missing?.length?'Needs credentials':configuredStatus==='connect_required'?'Connect required':configuredStatus==='discovery_ready_claim_gated'||lifecycleIncomplete?'Discovery only':lifecycle?.fullAutoReady?'FULL AUTO':lifecycle?.workAutoReady?'Auto work · cashout action':'Ready';const statusLabel=baseStatus;const cls=statusLabel==='FULL AUTO'||statusLabel==='Ready'?'ready':statusLabel==='Unavailable'?'needs_credentials':'optional';const cashout=lifecycle?.cashoutState?` · cashout ${esc(pretty(lifecycle.cashoutState))}`:'';return `<article class="autonomos-event"><div class="event-row"><b>${esc(def.name||pretty(name))}</b><span class="connector-${cls}">${esc(statusLabel)}</span></div><p>${esc(def.kind||'market')} · ${esc(h?.mode||def.mode||'')} · ${Number(y.signals??h?.count??0)} signals · ${Number(y.ready||0)} ready · ${Number(y.paidCount||0)} paid · net ${usd(y.netUsd||0)}${cashout}</p>${lifecycle?.cashoutReason&&statusLabel==='Auto work · cashout action'?`<p class="job-fail-reason">${esc(pretty(lifecycle.cashoutReason))}</p>`:''}</article>`}).join(''); }
-  const marketJobs=el('#autonomos-market-jobs');
-  if(marketJobs){
-    const raw=(a.jobs||[]).filter(j=>j.source&&j.source!=='x402'&&j.source!=='admin_preview');
-    // raw is newest-first. One real job can have many rows (claiming, execution_failed,
-    // retried, qa_failed...) — showing raw rows let a handful of repeatedly-retried jobs
-    // (e.g. 3 megaprojects retried every cycle) flood all 12 visible slots and crowd out
-    // every other job's price/status. Keep one row per unique job: its latest status, plus
-    // how long it's been running (first-seen -> latest/now).
-    const latestByKey=new Map(); const firstSeenByKey=new Map();
-    for(const j of raw){
-      const key=String(j.id||`${j.source}:${j.externalId}`);
-      if(!latestByKey.has(key))latestByKey.set(key,j); // newest-first -> first hit is latest
-      firstSeenByKey.set(key,j); // last hit (iterating newest->oldest) ends up oldest
-    }
-    const deduped=[...latestByKey.entries()].slice(0,12).map(([key,j])=>{
-      const startedAt=Date.parse(firstSeenByKey.get(key)?.at||firstSeenByKey.get(key)?.startedAt||j.at||j.startedAt||0);
-      const endedAt=/delivered|settled|paid|failed|rejected|expired|cancelled|manual_attention/i.test(String(j.status||''))?Date.parse(j.at||j.startedAt||0):Date.now();
-      const durationMs=startedAt&&endedAt?Math.max(0,endedAt-startedAt):0;
-      return {j,durationLabel:durationMs?formatDuration(durationMs):''};
-    });
-    marketJobs.innerHTML=deduped.map(({j,durationLabel})=>`<article class="autonomos-event"><div class="event-row"><b>${esc(j.title||j.externalId||j.id)}</b><span class="status ${String(j.status||'').includes('fail')?'s-error':'s-ready'}">${esc(pretty(j.status||'unknown'))}</span></div><p>${esc(pretty(j.source))} · ${j.budgetUsd!==undefined?usd(j.budgetUsd):''} ${esc(j.currency||'')}${durationLabel?` · <span class="job-duration">${durationLabel}</span>`:''}${j.reason?` · <span class="job-fail-reason">${esc(j.reason)}</span>`:''}${j.error?` · <span class="job-fail-reason">${esc(j.error)}</span>`:''}</p></article>`).join('')||emptyCard('No marketplace jobs claimed yet. Discovery can be active while claims remain zero.');
-  }
 
   const candidacy=el('#autonomos-candidacy');
   if(candidacy){
@@ -269,23 +224,7 @@ function renderAutonomOS(){
 
   // runtime.incidents is sent on every snapshot (runtime.js buildIncidents) and had no
   // renderer, so the "Needs attention" panel was permanently blank.
-  const incidents=el('#autonomos-incidents');
-  if(incidents){
-    const rows=Array.isArray(a.runtime?.incidents)?a.runtime.incidents:[];
-    incidents.innerHTML=rows.slice(0,20).map(x=>{
-      const severity=String(x.severity||'').toLowerCase();
-      const cls=severity==='critical'?'s-error':severity==='warning'?'s-warning':'s-ready';
-      return `<article class="autonomos-event"><div class="event-row"><b>${esc(pretty(x.code||x.title||'incident'))}</b><span class="status ${cls}">${esc(pretty(severity||'info'))}</span></div><p>${esc(x.detail||x.message||'')}</p>${x.action?`<p class="job-fail-reason">Next: ${esc(x.action)}</p>`:''}</article>`;
-    }).join('')||emptyCard('Nothing needs your attention.');
-  }
 
-  const pendingClaims=el('#autonomos-pending-claims');
-  if(pendingClaims){
-    // Sent at the top level of the snapshot (runtime.js), not inside `runtime`. Reading it
-  // from the wrong level meant money awaiting a manual claim was never shown.
-  const claims=a.pendingHumanClaims||a.runtime?.pendingHumanClaims||[];
-    pendingClaims.innerHTML=claims.slice(0,20).map(c=>`<article class="autonomos-event"><div class="event-row"><b>${esc(c.title||c.listingId||'Pending payout claim')}</b><span class="status s-ready">Needs your claim</span></div><p>Submitted ${esc(formatDate(c.submittedAt))} · <a href="${esc(c.claimUrl)}" target="_blank" rel="noopener">${esc(c.claimUrl)}</a></p></article>`).join('')||emptyCard('No pending payout claims.');
-  }
 
   const wallet=el('#autonomos-wallet');
   if(wallet){
@@ -333,24 +272,14 @@ function renderAutonomOS(){
     }
   }
 
-  const agentGrid=el('#autonomos-agent-grid');
-  if(agentGrid) agentGrid.innerHTML=(a.agents||[]).map(agent=>`<article class="autonomos-agent"><div class="autonomos-agent-top"><b title="${esc(agent.name)}">${esc(agent.name)}</b><i class="agent-dot ${esc(agent.status)}" title="${esc(agent.status)}"></i></div><p>${esc(agent.purpose)}</p><small>${esc(pretty(agent.swarm))} · ${Number(agent.tasksCompleted||0)} tasks · ${usd(agent.revenueUsd)}</small></article>`).join('')||emptyCard('No agents loaded.');
 
-  const products=el('#autonomos-products');
-  if(products) products.innerHTML=(a.products||[]).map(product=>`<article class="autonomos-product"><div class="autonomos-product-head"><b>${esc(product.name)}</b><span class="autonomos-price">$${Number(product.priceUsd||0).toFixed(3)}</span></div><p>${esc(product.description)}</p><p class="autonomos-code">${esc(product.path)}</p><p>Payment: <span class="connector-${esc(product.payment?.configured?'ready':'needs_configuration')}">${esc(pretty(product.payment?.mode||'disabled'))}</span></p></article>`).join('')||emptyCard('No machine products.');
 
-  const infrastructure=el('#autonomos-infrastructure');
-  if(infrastructure) infrastructure.innerHTML=(a.infrastructure||[]).map(c=>{const label=c.configured?'Ready':c.optional?'Optional':'Needs setup';const cls=c.configured?'ready':c.optional?'optional':'needs_configuration';return `<article class="autonomos-connector"><div class="autonomos-connector-head"><b>${esc(c.name)}</b><span class="connector-${esc(cls)}">${label}</span></div>${c.missing?.length?`<p>${c.optional?'Optional when needed':'Needs'}: <span class="autonomos-code">${esc(c.missing.join(', '))}</span></p>`:'<p>Configured for runtime use.</p>'}</article>`}).join('')||emptyCard('Infrastructure status unavailable.');
 
-  const connectors=el('#autonomos-connectors');
-  if(connectors) connectors.innerHTML=(a.connectors||[]).map(c=>{const l=c.lifecycle||{};let truthLabel='';if(l.discover!==undefined)truthLabel=l.fullAutoReady?'FULL AUTO':l.workAutoReady?'AUTO WORK · CASHOUT ACTION':'DISCOVERY ONLY';const marketLifecycle=l.discover!==undefined?`<p>Lifecycle: discover ${l.discover?'✓':'—'} · claim/bid ${l.claim?'✓':'—'} · execute ${l.execute?'✓':'—'} · deliver ${l.deliver?'✓':'—'} · settle ${l.settle?'✓':'—'} · <b>${esc(truthLabel)}</b>${l.reason?` · ${esc(pretty(l.reason))}`:''}</p>${l.cashoutState?`<p>Cashout: ${esc(pretty(l.cashoutState))}${l.cashoutReason?` · ${esc(pretty(l.cashoutReason))}`:''}</p>`:''}`:'';const visualStatus=l.discover!==undefined?(l.fullAutoReady?'ready':l.workAutoReady?'optional':'optional'):c.status;const visibleStatus=l.discover!==undefined?truthLabel:pretty(c.status);return `<article class="autonomos-connector"><div class="autonomos-connector-head"><b>${esc(c.name)}</b><span class="connector-${esc(visualStatus)}">${esc(visibleStatus)}</span></div><p>${esc(c.description)}</p>${marketLifecycle}${c.missing?.length?`<p>Needs: <span class="autonomos-code">${esc(c.missing.join(', '))}</span></p>`:''}</article>`}).join('')||emptyCard('No connectors.');
 
 
   const missing=el('#autonomos-missing');
   if(missing) missing.innerHTML=(a.missing||[]).map(item=>`<article class="autonomos-event"><div class="event-row"><b>${esc(item.item)}</b><span class="connector-needs_credentials">${esc(pretty(item.status))}</span></div><p>${esc(item.detail)}</p></article>`).join('')||'<p class="empty-state">All configured.</p>';
 
-  const events=el('#autonomos-events');
-  if(events) events.innerHTML=(a.events||[]).slice(0,120).map(x=>`<article class="activity-item"><i></i><div><b>${esc(pretty(x.type))}</b><p>${esc(autonomosEventSummary(x))}</p></div><small>${esc(formatDate(x.at))}</small></article>`).join('')||emptyCard('AutonomOS has not produced events yet.');
 }
 function renderAutonomosJobQueue(a){
   const body=el('#autonomos-job-queue');if(!body)return;
@@ -454,6 +383,9 @@ el('#autonomos-refresh-wallet')?.addEventListener('click',()=>autonomosCommand('
 el('#autonomos-config-form')?.addEventListener('submit',async e=>{
   e.preventDefault();const f=e.currentTarget;const status=el('#autonomos-config-status');status.textContent='Saving…';
   const raw=Object.fromEntries(new FormData(f).entries());
+  // reservePercent and growthPercent are derived server-side from the owner/agent split;
+  // sending them back only invited the round trip that made them look editable.
+  delete raw.reservePercent; delete raw.growthPercent;
   const payload={...raw,autoReplication:f.elements.autoReplication.checked,autoClaimJobs:f.elements.autoClaimJobs.checked,autoCompetitiveSubmissions:f.elements.autoCompetitiveSubmissions.checked,commissioningMode:f.elements.commissioningMode.checked,cryptoOnlyEarnings:f.elements.cryptoOnlyEarnings.checked,requireEscrowForAutoClaim:f.elements.requireEscrowForAutoClaim.checked,rejectDemoAndTestJobs:f.elements.rejectDemoAndTestJobs.checked,zeroSpendMode:f.elements.zeroSpendMode.checked,earnedFundsOnly:f.elements.earnedFundsOnly.checked,allowExternalSpending:f.elements.allowExternalSpending.checked};
   // Only coerce fields the form actually submitted. experimentPercent,
   // maxApiCostPercentOfPayout and commissioningMinPayoutUsd have no inputs, so
@@ -461,7 +393,7 @@ el('#autonomos-config-form')?.addEventListener('submit',async e=>{
   // normalizeConfig read Number(null) as a valid 0 — every save quietly zeroed them.
   // clawlancerMinJobPayoutUsd/dealworkMinJobPayoutUsd are not accepted by updateConfig
   // at all and were silently discarded while the UI reported success.
-  for(const key of ['heartbeatSeconds','fastClaimPollSeconds','minMarginPercent','reservePercent','growthPercent','maxChildren','maxJobsPerCycle','minJobPayoutUsd','seedSpendBudgetUsd','maxPaidProcurementUsd']){
+  for(const key of ['heartbeatSeconds','fastClaimPollSeconds','minMarginPercent','maxChildren','maxJobsPerCycle','minJobPayoutUsd','seedSpendBudgetUsd','maxPaidProcurementUsd']){
     if(!(key in raw)||String(raw[key]).trim()==='')  { delete payload[key]; continue; }
     const value=Number(raw[key]);
     if(Number.isFinite(value))payload[key]=value; else delete payload[key];

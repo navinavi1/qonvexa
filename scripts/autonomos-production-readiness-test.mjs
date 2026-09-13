@@ -21,9 +21,14 @@ assert.match(runtime,/autonomousReady:fullAutoSources\.length>0/,'live self-test
 assert.match(runtime,/\['needs_credentials','needs_configuration','connect_required'\]/,'missing setup must include explicit connect-required sources such as workprotocol');
 assert.match(runtime,/status:'cashout_action'/,'missing setup must surface autonomous-work sources whose final cash-out is not verified');
 
-assert.match(admin,/FULL AUTO/,'dashboard must expose FULL AUTO truth');
-assert.match(admin,/AUTO WORK · CASHOUT ACTION/,'dashboard must distinguish work automation from final cash-out automation');
-assert.match(admin,/DISCOVERY ONLY/,'dashboard must expose discovery-only connectors truthfully');
+// These three pinned badge text in a connector panel that no longer exists: three rows
+// reading DISCOVERY ONLY on every refresh beside eleven reading Ready, none of which ever
+// changed. The rule behind them -- never present a readiness that has not been proven --
+// belongs at the source that computes it, so that is where it is asserted.
+assert.doesNotMatch(admin,/autonomos-connectors|autonomos-infrastructure/,'the constant-valued connector and readiness panels stay removed');
+assert.match(runtime,/workAutoReady=Boolean\(base\.autoReady\)/,'work automation is still derived from proven lifecycle evidence');
+assert.match(runtime,/fullAutoReady:workAutoReady&&cashoutReady/,'full automation still requires work AND a verified cash-out, never one standing in for the other');
+assert.match(runtime,/cashoutState:cashoutReady\?'verified_owner_destination':'unverified'/,'an unverified cash-out is reported as unverified rather than omitted');
 assert.doesNotMatch(connectors,/AutonomOS\/(?:1\.0|2\.0|3\.0|7\.0|7\.4)/,'connector HTTP user-agent strings must not advertise stale AutonomOS generations');
 
 console.log('AutonomOS production readiness audit PASS');

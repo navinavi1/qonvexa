@@ -138,7 +138,13 @@ assert.equal(registry.blockReason(dispatchOp),null,'matching durable worker call
   assert.match(runtimeSource,/autonomousReady:fullAutoSources\.length>0/,'live self-test autonomousReady must mean the full work-to-owner-wallet lifecycle, not merely claimable work');
   const adminSource=fs.readFileSync(path.join(process.cwd(),'public/admin.js'),'utf8');
   assert.match(adminSource,/Why AutonomOS is \/ is not earning now/,'Mission Control must display the primary earning diagnosis');
-  assert.match(adminSource,/FULL AUTO.*AUTO WORK · CASHOUT ACTION.*DISCOVERY ONLY/s,'connector UI must show lifecycle truth instead of a generic Ready badge');
+  // The connector panel this guarded is gone. It rendered three rows that read DISCOVERY
+  // ONLY on every refresh, forever, beside eleven infrastructure rows that read Ready -- a
+  // wall of constants. What the rule was protecting is that the dashboard must not claim a
+  // readiness it has not proven, so that is what is asserted now, at the source of truth.
+  assert.doesNotMatch(adminSource,/autonomos-connectors|autonomos-infrastructure/,'the constant-valued connector and readiness panels stay removed');
+  assert.match(runtimeSource,/cashoutReady=Boolean\(proof\?\.verified&&proof\.ownerWalletReached/,'cashout readiness still requires a verified payout that reached the owner wallet');
+  assert.match(runtimeSource,/autoReady:row\.status==='FULL_AUTO_READY'/,'a market is auto-ready only on proven end-to-end evidence, never on a credential');
 }
 
 const passportBuy=classifyOpportunity({title:'Buy MANIFEST via Passport Connect',description:'Use Passport Connect to buy MANIFEST and return proof.'},{llmEnabled:true,hasWebSearchTool:true});

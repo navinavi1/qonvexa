@@ -435,16 +435,6 @@ app.post('/api/admin/autonomos/treasury/fund', requireAdmin, requireSameSiteMuta
   res.json(result);
 });
 
-app.get('/api/admin/autonomos/product-preview/:productId', requireAdmin,
-  rateLimit({ windowMs: 5 * 60 * 1000, max: 20 }),
-  async (req, res) => {
-    try {
-      res.json(await autonomos.previewProduct(clean(req.params.productId, 80), { url:clean(req.query.url || '', 1000) }));
-    } catch (error) {
-      res.status(Number(error?.status || 500)).json({ error:clean(error?.code || error?.message || 'Preview failed.', 300) });
-    }
-  }
-);
 
 app.patch('/api/admin/settings', requireAdmin, requireSameSiteMutation, (req, res) => {
   const current = readAdminSettings();

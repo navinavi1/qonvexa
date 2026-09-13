@@ -120,29 +120,20 @@
           </div>
         </div>
 <div class="autonomos-stat-grid autonomos-v7-metrics">
-          <article class="autonomos-stat"><small>READY NOW</small><strong id="auto-ready">0</strong><span>qualified & executable</span></article>
-          <article class="autonomos-stat"><small>NEW</small><strong id="auto-new">0</strong><span>first-seen job versions</span></article>
+          <!-- Six tiles, one per stage of the only thing that matters: work found, work
+               ready, work running, work delivered, work paid, money kept. There were twenty,
+               five of which restated the same money over different windows and four of which
+               were internal queue states no owner acts on. -->
+          <article class="autonomos-stat"><small>FOUND</small><strong id="auto-opportunities">0</strong><span>opportunities seen</span></article>
+          <article class="autonomos-stat"><small>READY NOW</small><strong id="auto-ready">0</strong><span>qualified &amp; executable</span></article>
           <article class="autonomos-stat"><small>ACTIVE</small><strong id="auto-agents">0</strong><span>task agents working now</span></article>
-          <article class="autonomos-stat"><small>24H REVENUE</small><strong id="auto-revenue24">$0.00</strong><span>settled revenue</span></article>
-          <article class="autonomos-stat"><small>24H COST</small><strong id="auto-cost24">$0.00</strong><span>model + tools</span></article>
-          <article class="autonomos-stat"><small>NET 24H</small><strong id="auto-net24">$0.00</strong><span>revenue − cost</span></article>
-          <article class="autonomos-stat"><small>NET 7D</small><strong id="auto-net7">$0.00</strong><span>7 day result</span></article>
-          <article class="autonomos-stat"><small>LIFETIME NET</small><strong id="auto-net">$0.00</strong><span id="auto-net-diag">all time</span></article>
           <article class="autonomos-stat"><small>DELIVERED</small><strong id="auto-delivered">0</strong><span>submitted work</span></article>
           <article class="autonomos-stat"><small>PAID</small><strong id="auto-paid">0</strong><span>settled payouts</span></article>
-          <article class="autonomos-stat"><small>RETRY</small><strong id="auto-retry">0</strong><span>temporary failures only</span></article>
-          <article class="autonomos-stat"><small>POLICY HOLD</small><strong id="auto-policy-hold">0</strong><span>reversible filter / economics holds</span></article>
-          <article class="autonomos-stat"><small>SYSTEM BLOCKED</small><strong id="auto-system-blocked">0</strong><span>our capability / execution holds</span></article>
-          <article class="autonomos-stat"><small>GRAVEYARD</small><strong id="auto-graveyard">0</strong><span>external final failures only</span></article>
-          <!-- These six were written by renderAutonomOS() on every refresh and never shown:
-               nothing in admin.js ever removed the hidden attribute. -->
+          <article class="autonomos-stat"><small>NET</small><strong id="auto-net">$0.00</strong><span id="auto-net-diag">all time</span></article>
           <div class="autonomos-metric-row">
             <span class="autonomos-metric"><i>Treasury USDC</i><b id="auto-treasury">—</b></span>
-            <span class="autonomos-metric"><i>Task agents</i><b id="auto-children">0</b></span>
-            <span class="autonomos-metric"><i>Opportunities seen</i><b id="auto-opportunities">0</b></span>
             <span class="autonomos-metric"><i>Claimed</i><b id="auto-claimed">0</b></span>
-            <span class="autonomos-metric"><i>Jobs</i><b id="auto-jobs">0</b></span>
-            <span class="autonomos-metric"><i>Cycles</i><b id="auto-cycles">0</b></span>
+            <span class="autonomos-metric"><i>Held by policy</i><b id="auto-policy-hold">0</b></span>
           </div>
         </div>
 
@@ -167,26 +158,15 @@
           <div class="autonomos-job-table-wrap"><table class="autonomos-job-table"><thead><tr><th>Job</th><th>Market</th><th>Payout</th><th>Mode</th><th>Status</th><th>Seen / deadline</th><th>Reason</th></tr></thead><tbody id="autonomos-job-queue"></tbody></table></div>
         </section>
 
-        <div class="autonomos-two-col autonomos-operator-row">
-          <section class="admin-panel autonomos-panel">
-            <div class="admin-panel-head"><div><small>LIVE EXECUTION</small><h2>Jobs being worked now</h2></div></div>
-            <div id="autonomos-active-jobs" class="autonomos-event-list"></div>
-          </section>
-          <section class="admin-panel autonomos-panel">
-            <div class="admin-panel-head"><div><small>AGENT FLEET</small><h2>Who is doing what</h2></div></div>
-            <div id="autonomos-task-agents" class="autonomos-event-list"></div>
-          </section>
-        </div>
-
-        <div class="autonomos-two-col">
+        
           <section class="admin-panel autonomos-panel">
             <div class="admin-panel-head"><div><small>MARKET HEALTH & YIELD</small><h2>Marketplace control</h2></div></div>
             <div id="autonomos-market-radar" class="autonomos-event-list autonomos-scroll-list"></div>
+            <!-- What is not configured belongs beside what is blocking, not in a separate
+                 panel the owner has to find. -->
+            <div id="autonomos-missing" class="autonomos-event-list"></div>
           </section>
-          <section class="admin-panel autonomos-panel">
-            <div class="admin-panel-head"><div><small>RECENT OUTCOMES</small><h2>Claim / execution / delivery</h2></div></div>
-            <div id="autonomos-market-jobs" class="autonomos-event-list autonomos-scroll-list"></div>
-          </section>
+
         </div>
 <div class="autonomos-two-col">
           <section class="admin-panel autonomos-panel">
@@ -194,12 +174,7 @@
             <div id="autonomos-wallet" class="autonomos-wallet"></div><div id="autonomos-allocations" class="allocation-grid"></div>
             <p class="settings-note">Display-only payout layer. Private keys and seed phrases are never stored in AutonomOS.</p>
           </section>
-          <section class="admin-panel autonomos-panel">
-            <div class="admin-panel-head"><div><small>ACTION CENTER</small><h2>Needs attention</h2></div></div>
-            <div id="autonomos-incidents" class="autonomos-event-list"></div>
-            <div id="autonomos-pending-claims" class="autonomos-event-list"></div>
-            <div id="autonomos-missing" class="autonomos-event-list"></div>
-          </section>
+
         </div>
 
         <details class="admin-panel autonomos-panel autonomos-disclosure">
@@ -211,7 +186,7 @@
               <label>Heartbeat, sec<input name="heartbeatSeconds" type="number" min="20" max="3600"></label><label>Fast poll, sec<input name="fastClaimPollSeconds" type="number" min="5" max="3600"></label><label>Minimum margin, %<input name="minMarginPercent" type="number" min="0" max="95" step="1"></label>
               <label>Global min payout, $<input name="minJobPayoutUsd" type="number" min="5" max="100000" step="0.01"></label>
               <label>Max workers<input name="maxChildren" type="number" min="1" max="100"></label><label>Jobs / cycle<input name="maxJobsPerCycle" type="number" min="1" max="50"></label><label>Max paid tool call, $<input name="maxPaidProcurementUsd" type="number" min="0" max="100000" step="0.01"></label>
-              <label>Seed budget, $<input name="seedSpendBudgetUsd" type="number" min="0" max="100000" step="0.5"></label><label>Reserve, %<input name="reservePercent" type="number" min="0" max="100"></label><label>Growth, %<input name="growthPercent" type="number" min="0" max="100"></label>
+              <label>Seed budget, $<input name="seedSpendBudgetUsd" type="number" min="0" max="100000" step="0.5"></label><label class="derived-field">Reserve, %<input name="reservePercent" type="number" readonly tabindex="-1"><small class="derived-note">derived from the owner share — typing here changed nothing</small></label><label class="derived-field">Growth, %<input name="growthPercent" type="number" readonly tabindex="-1"><small class="derived-note">derived from the agent share — typing here changed nothing</small></label>
             </div>
             <div class="autonomos-form-grid autonomos-policy-checks">
               <label class="autonomos-check"><input name="zeroSpendMode" type="checkbox"><span>Zero-spend mode</span></label><label class="autonomos-check"><input name="earnedFundsOnly" type="checkbox"><span>Earned-funds-only</span></label><label class="autonomos-check"><input name="allowExternalSpending" type="checkbox"><span>Allow external spending</span></label>
@@ -232,19 +207,9 @@
           </div>
         </details>
 
-        <div class="autonomos-two-col">
-          <details class="admin-panel autonomos-panel autonomos-disclosure" open><summary><span><small>MARKET RAILS</small><b>Connectors & watch lanes</b></span><span>Inspect →</span></summary><div id="autonomos-connectors" class="autonomos-connector-list autonomos-scroll-list"></div></details>
-          <details class="admin-panel autonomos-panel autonomos-disclosure"><summary><span><small>INFRASTRUCTURE</small><b>Execution readiness</b></span><span>Inspect →</span></summary><div id="autonomos-infrastructure" class="autonomos-connector-list"></div></details>
-        </div>
 
-        <details class="admin-panel autonomos-panel autonomos-disclosure">
-          <summary><span><small>CONTROL PLANE</small><b>Permanent agents</b></span><span id="autonomos-llm" class="autonomos-mini-badge"></span></summary><div id="autonomos-agent-grid" class="autonomos-agent-grid"></div>
-        </details>
-        <details class="admin-panel autonomos-panel autonomos-disclosure"><summary><span><small>SELLER PRODUCTS</small><b>Services agents can sell</b></span><span>Inspect →</span></summary><div id="autonomos-products" class="autonomos-product-list"></div></details>
+        
 
-        <section class="admin-panel autonomos-panel">
-          <div class="admin-panel-head"><div><small>LIVE EVENT STREAM</small><h2>System timeline</h2></div></div><div id="autonomos-events" class="activity-list"></div>
-        </section>
         <!-- Populated by renderAutonomOS(); the hidden attribute was never cleared. -->
         <div id="autonomos-candidacy"></div>
       </section>

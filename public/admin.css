@@ -77,3 +77,10 @@
 .env-locked{opacity:.62}
 .env-locked input:disabled,.env-locked select:disabled{cursor:not-allowed}
 .env-lock-note{display:block;margin-top:.35rem;font-size:.72rem;line-height:1.35;color:#f0b429}
+
+/* reservePercent and growthPercent are computed from the owner/agent split
+   (reservePercent=ownerRevenuePercent, growthPercent=agentTreasuryPercent*0.7). They were
+   rendered as editable number inputs, so a typed value was accepted, saved and silently
+   overwritten on the next read. Shown as readings now, not controls. */
+.derived-field input[readonly]{opacity:.6;cursor:default;background:rgba(255,255,255,.02)}
+.derived-note{display:block;margin-top:.3rem;font-size:.7rem;color:#8fa3bf}

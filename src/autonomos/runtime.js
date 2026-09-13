@@ -556,7 +556,6 @@ async refreshTreasury(){
       const product=currentProduct(productId); if(!product)return res.status(404).json({error:'Unknown product.'});
       return x402.protect({req,res,product,handler:async()=>executeTrackedProduct(product,Object.fromEntries(Object.entries(req.query||{}).map(([k,v])=>[k,String(v??'')])),{paid:true,source:'x402'})});
     },
-    async previewProduct(productId,query){const product=currentProduct(productId);if(!product)throw Object.assign(new Error('Unknown product.'),{status:404});return executeTrackedProduct(product,query,{paid:false,source:'admin_preview'});},
     catalog(){return{name:'AutonomOS Machine Services',version:'15.0.0',ownerWallet:wallet,payment:x402.status(),products:currentProducts().map(p=>({...p,url:new URL(p.path,siteUrl).toString()}))};}
   };
 
