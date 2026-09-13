@@ -1290,6 +1290,13 @@ async refreshTreasury(){
     if(/registry_blocked:.*(?:graveyard|permanent|finished)|duplicate/.test(r))return 'duplicate_permanent';
     if(/registry_blocked:.*(?:system_blocked|capability_hold|manual_attention)/.test(r))return 'system_blocked';
     if(/registry_blocked/.test(r))return 'registry_hold';
+    // A job refused because spending is switched off has not failed its economics -- it
+    // passed them. A $25 job costing $0.0045 to run, at 85% margin, was being reported as
+    // "fails the profit/cost gate" while the owner's own AUTONOMOS_ZERO_SPEND_MODE was what
+    // refused it. Naming the switch is the difference between a market problem to wait out
+    // and a setting to change.
+    if(/zero_spend_mode/.test(r))return 'spending_switched_off';
+    if(/earned_funds_cap/.test(r))return 'earned_budget_exhausted';
     if(/economics_blocked|estimated_model_cost/.test(r))return 'economics_failed';
     if(/auth|credential|api_key/.test(r))return 'auth_missing';
     if(/status_not_open|expired|closed/.test(r))return 'expired_closed';
@@ -1367,7 +1374,9 @@ async refreshTreasury(){
     const map={
       below_payout:'All currently executable-looking jobs are below the configured payout floor.',
       capability_missing:'Current paid jobs require capabilities or connected tools that are not available.',
-      economics_failed:'Current jobs fail the profit/cost gate.',
+      spending_switched_off:'These jobs are profitable and refused anyway: AUTONOMOS_ZERO_SPEND_MODE forbids spending anything at all, and executing any job costs a fraction of a cent. Turn it off and keep AUTONOMOS_EARNED_FUNDS_ONLY on to stay inside what the agents have earned.',
+      earned_budget_exhausted:'These jobs cost more to run than the agents have earned so far. The budget grows with revenue.',
+      economics_failed:'Current jobs fail the profit/cost gate on their own numbers.',
       no_escrow:'Current jobs are not verified as escrow/funded for safe automatic claim.',
       // Name the setting and the consequence. "Does not satisfy the payout policy" reads as
       // a market problem the owner should wait out, when it is usually a deliberate
