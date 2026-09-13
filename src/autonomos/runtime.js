@@ -12,7 +12,7 @@ import fs from 'node:fs';
 import crypto from 'node:crypto';
 import { CORE_AGENTS, buildAgentState } from './agents.js';
 import { AutonomOSStore } from './store.js';
-import { normalizeConfig, DEFAULT_AUTONOMOS_CONFIG, validateAction, isDemoOrTestOpportunity } from './policy-engine.js';
+import { normalizeConfig, DEFAULT_AUTONOMOS_CONFIG, validateAction, isDemoOrTestOpportunity, envForcedConfig } from './policy-engine.js';
 import { evaluateOpportunity, allocateRevenue, computeEarnedSpendBudgetUsd } from './profit-engine.js';
 import { readTreasuryBalances, isEvmAddress } from './treasury.js';
 import { MACHINE_PRODUCTS, executeProduct } from './products.js';
@@ -1501,7 +1501,15 @@ async refreshTreasury(){
     }
     return missing;
   }
-  function safeConfig(value){const{allowExternalSpending,maxPaidProcurementUsd,...rest}=value;return{...rest,allowExternalSpending:Boolean(allowExternalSpending),maxPaidProcurementUsd:Number(maxPaidProcurementUsd||0),ownerWallet:wallet,privateKeysStored:false};}
+  function safeConfig(value){const{allowExternalSpending,maxPaidProcurementUsd,...rest}=value;return{...rest,allowExternalSpending:Boolean(allowExternalSpending),maxPaidProcurementUsd:Number(maxPaidProcurementUsd||0),ownerWallet:wallet,privateKeysStored:false,
+    // Which switches the environment is holding shut. Without this the admin form renders a
+    // checkbox that saves one value and runs as another: unticking Zero-spend mode stored
+    // false and executed as true, so the control looked live and did nothing.
+    //
+    // Read from process.env deliberately, because normalizeConfig reads process.env and not
+    // the env this runtime was constructed with. Reporting from a different source than the
+    // one that actually decides would put a second, subtler lie where the first one was.
+    envForced:envForcedConfig(process.env)};}
 
     async function recoverStartup(){if(config.enabled&&!config.killSwitch)await recoverInFlightJobs();event('runtime_recovery_completed',{});}
   function schedule(){clearTimer();if(!config.enabled||config.killSwitch)return;timer=setInterval(()=>cycle('heartbeat').catch(()=>{}),config.heartbeatSeconds*1000);timer.unref?.();setTimeout(()=>cycle('startup').catch(()=>{}),1200).unref?.();if(config.autoClaimJobs){fastTimer=setInterval(()=>fastClaimCycle().catch(()=>{}),config.fastClaimPollSeconds*1000);fastTimer.unref?.();}}

@@ -306,7 +306,32 @@ function renderAutonomOS(){
   }
 
   const form=el('#autonomos-config-form');
-  if(form){for(const [k,v] of Object.entries(a.config||{})){if(form.elements[k]){if(form.elements[k].type==='checkbox')form.elements[k].checked=Boolean(v);else form.elements[k].value=v??''}}}
+  if(form){
+    const forced=a.config?.envForced||{};
+    for(const [k,v] of Object.entries(a.config||{})){
+      const field=form.elements[k];
+      if(!field||typeof field.type!=='string')continue;
+      if(field.type==='checkbox')field.checked=Boolean(v);else field.value=v??'';
+      // A field an environment variable overrules is not editable here: saving it stores a
+      // value that normalizeConfig immediately overwrites. Unticking Zero-spend mode did
+      // exactly that -- stored false, ran as true -- so the control looked live and changed
+      // nothing. Lock it and name the variable that actually decides.
+      const hold=forced[k];
+      const label=field.closest('label')||field.parentElement;
+      field.disabled=Boolean(hold);
+      if(label){
+        label.classList.toggle('env-locked',Boolean(hold));
+        const existing=label.querySelector('.env-lock-note');
+        if(existing)existing.remove();
+        if(hold){
+          const note=document.createElement('small');
+          note.className='env-lock-note';
+          note.textContent=`set by ${hold.variable}=${hold.value} — change it in Render, not here`;
+          label.appendChild(note);
+        }
+      }
+    }
+  }
 
   const agentGrid=el('#autonomos-agent-grid');
   if(agentGrid) agentGrid.innerHTML=(a.agents||[]).map(agent=>`<article class="autonomos-agent"><div class="autonomos-agent-top"><b title="${esc(agent.name)}">${esc(agent.name)}</b><i class="agent-dot ${esc(agent.status)}" title="${esc(agent.status)}"></i></div><p>${esc(agent.purpose)}</p><small>${esc(pretty(agent.swarm))} · ${Number(agent.tasksCompleted||0)} tasks · ${usd(agent.revenueUsd)}</small></article>`).join('')||emptyCard('No agents loaded.');

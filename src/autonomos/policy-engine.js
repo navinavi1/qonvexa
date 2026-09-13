@@ -5,3 +5,36 @@ export function normalizeConfig(raw={}){const env=process.env;const known=Object
 export function validateAction(action={},config={}){if(config.killSwitch)return{allowed:false,reason:'emergency_stop'};if(!config.enabled)return{allowed:false,reason:'runtime_stopped'};if(action.kind==='spend'){const amount=Number(action.amountUsd||0);if(config.zeroSpendMode)return{allowed:false,reason:'zero_spend_mode'};if(!config.earnedFundsOnly&&!config.allowExternalSpending)return{allowed:false,reason:'external_spending_disabled'};if(!Number.isFinite(amount)||amount<=0)return{allowed:false,reason:'invalid_amount'};if(amount>Number(config.maxPaidProcurementUsd||0))return{allowed:false,reason:'above_spend_limit'};}if(action.kind==='wallet_export'||action.kind==='private_key_access')return{allowed:false,reason:'secret_access_forbidden'};return{allowed:true,reason:'policy_pass'};}
 export function isDemoOrTestOpportunity(op={}){const raw=op?.raw&&typeof op.raw==='object'?op.raw:{};if([raw.is_demo,raw.isDemo,raw.demo,raw.is_test,raw.isTest,raw.sandbox].some(v=>v===true||String(v).toLowerCase()==='true'))return true;const envMarker=String(op?.environment||op?.env||op?.networkType||op?.mode||raw.environment||raw.env||raw.network_type||raw.mode||'').toLowerCase();if(['demo','test','testing','sandbox','testnet','devnet'].includes(envMarker))return true;const status=String(op?.status||raw.status||'').toLowerCase();if(['demo','test','testing','sandbox','sample'].includes(status))return true;const tags=[...(Array.isArray(op?.tags)?op.tags:[]),...(Array.isArray(raw.tags)?raw.tags:[])].map(x=>String(x).toLowerCase());if(tags.some(x=>['demo','test','sandbox','sample','testnet','devnet'].includes(x)))return true;const text=(String(op?.title||'')+' '+String(op?.description||'')).toLowerCase();return /\b(?:demo only|test task|sample task|sandbox task|testnet only|devnet only)\b/.test(text);}
 function boolEnv(env,key,set){if(env[key]!==undefined)set(/^(1|true|yes|on)$/i.test(String(env[key])));}function numEnv(env,key,set){if(env[key]!==undefined){const n=Number(env[key]);if(Number.isFinite(n))set(n);}}function clampNumber(v,min,max,fallback){const n=Number(v);return Number.isFinite(n)?Math.min(max,Math.max(min,n)):fallback;}
+
+// Every setting an environment variable can overrule. The admin form saves a value and
+// normalizeConfig then silently overwrites it from the environment, so unticking "Zero-spend
+// mode" appeared to work, stored false, and ran as true regardless -- a control that looks
+// live and does nothing. The dashboard needs to say which switches the environment holds.
+export const ENV_OVERRIDABLE_CONFIG = Object.freeze({
+  zeroSpendMode:'AUTONOMOS_ZERO_SPEND_MODE',
+  earnedFundsOnly:'AUTONOMOS_EARNED_FUNDS_ONLY',
+  maxPaidProcurementUsd:'AUTONOMOS_MAX_PAID_PROCUREMENT_USD',
+  survivalMode:'AUTONOMOS_SURVIVAL_MODE',
+  cryptoOnlyEarnings:'AUTONOMOS_CRYPTO_ONLY_EARNINGS',
+  completionReservePercentOfPayout:'AUTONOMOS_COMPLETION_RESERVE_PERCENT',
+  noAbandonAcceptedJobs:'AUTONOMOS_NO_ABANDON_ACCEPTED_JOBS',
+  emergencyFinishMode:'AUTONOMOS_EMERGENCY_FINISH_MODE',
+  skillAcquisitionMode:'AUTONOMOS_SKILL_ACQUISITION_MODE',
+  commissioningMode:'AUTONOMOS_COMMISSIONING_MODE',
+  autoCompetitiveSubmissions:'AUTONOMOS_AUTO_COMPETITIVE_SUBMISSIONS',
+  maxChildren:'AUTONOMOS_MAX_CHILDREN',
+  maxConcurrentJobs:'AUTONOMOS_MAX_CONCURRENT_JOBS',
+  maxJobsPerCycle:'AUTONOMOS_MAX_JOBS_PER_CYCLE',
+  heartbeatSeconds:'AUTONOMOS_HEARTBEAT_SECONDS',
+  fastClaimPollSeconds:'AUTONOMOS_FAST_CLAIM_POLL_SECONDS'
+});
+
+// Which of those are actually being forced right now, and to what.
+export function envForcedConfig(env = process.env) {
+  const forced = {};
+  for (const [field, key] of Object.entries(ENV_OVERRIDABLE_CONFIG)) {
+    if (env[key] === undefined || String(env[key]).trim() === '') continue;
+    forced[field] = { variable: key, value: String(env[key]) };
+  }
+  return forced;
+}

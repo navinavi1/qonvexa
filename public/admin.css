@@ -71,3 +71,9 @@
 .autonomos-metric{display:flex;flex-direction:column;gap:.15rem;padding:.5rem .75rem;border:1px solid rgba(120,140,255,.22);border-radius:10px;min-width:7.5rem}
 .autonomos-metric i{font-style:normal;font-size:.72rem;letter-spacing:.06em;text-transform:uppercase;opacity:.7}
 .autonomos-metric b{font-size:1.05rem;font-variant-numeric:tabular-nums}
+
+/* A setting the environment holds shut. The checkbox used to save a value the runtime then
+   overwrote, so it had to look live; now it reads as locked and names what decides it. */
+.env-locked{opacity:.62}
+.env-locked input:disabled,.env-locked select:disabled{cursor:not-allowed}
+.env-lock-note{display:block;margin-top:.35rem;font-size:.72rem;line-height:1.35;color:#f0b429}
