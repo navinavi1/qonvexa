@@ -7,10 +7,15 @@ const run=(cmd,args,opts)=>new Promise(resolve=>execFile(cmd,args,opts,(error,st
 // (task create/accept/rate/bid/update, refund-expired, evaluator verdicts) and every
 // route that moves money out (withdraw, set-withdrawal-address) is deliberately absent:
 // this client cannot be made to spend or withdraw, whatever a task description asks for.
-export const ALLOWED_COMMANDS=Object.freeze(['address','legal','inbox','stats','identity','task list','task get','task claim','task submit','task my-submissions','wallet balance','wallet publish-key']);
+// 'legal status' reads the policy bundle. 'legal accept' SIGNS it, binding the owner to
+// Taskmarket's Terms, Privacy Policy, Risk Disclosure and Acceptable Use Policy. This list
+// carried a bare 'legal', which let both through: the agent could have signed on the
+// owner's behalf. The worker never called accept, but "it does not today" is not a control.
+// Only the read is allowed here; signing is forbidden below and belongs to the owner.
+export const ALLOWED_COMMANDS=Object.freeze(['address','legal status','inbox','stats','identity','task list','task get','task claim','task submit','task my-submissions','wallet balance','wallet publish-key']);
 // Never reachable from code. The owner runs these by hand; set-withdrawal-address in
 // particular is one-shot and irreversible, so an agent must not be able to reach it.
-export const FORBIDDEN_COMMANDS=Object.freeze(['wallet set-withdrawal-address','withdraw','wallet withdraw-dreams','task create','task accept','task accept-submissions','task rate','task bid','task auction-accept','task update','task cancel','task refund-expired','task evaluate','task appeal','task resolve-dispute','task assign-evaluator','task reject-submission','task reject-all-submissions','task select-worker','task select-winner','task evaluator-timeout','task invite','task uninvite','task pitch','task proof']);
+export const FORBIDDEN_COMMANDS=Object.freeze(['legal accept','wallet set-withdrawal-address','withdraw','wallet withdraw-dreams','task create','task accept','task accept-submissions','task rate','task bid','task auction-accept','task update','task cancel','task refund-expired','task evaluate','task appeal','task resolve-dispute','task assign-evaluator','task reject-submission','task reject-all-submissions','task select-worker','task select-winner','task evaluator-timeout','task invite','task uninvite','task pitch','task proof']);
 
 export function commandAllowed(argv){
   const joined=argv.map(part=>String(part)).join(' ');

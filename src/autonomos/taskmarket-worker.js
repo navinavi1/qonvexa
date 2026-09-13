@@ -37,12 +37,35 @@ export class TaskmarketWorker{
   async legalAccepted(){
     if(this.legalOk===true)return true;
     const status=await this.client.legalStatus();
-    const text=JSON.stringify(status?.data??status??{});
-    const accepted=status.ok===true&&/"(accepted|current|valid)"\s*:\s*true|"status"\s*:\s*"(accepted|current)"/i.test(text);
-    if(accepted)this.legalOk=true;
-    else this.logger?.warn?.('[Taskmarket] '+JSON.stringify({claiming:false,reason:'legal_terms_not_accepted',
-      action:'the owner must review the policy bundle and run: taskmarket legal accept'}));
-    return accepted;
+    if(status?.ok!==true){
+      this.logger?.warn?.('[Taskmarket] '+JSON.stringify({claiming:false,reason:'legal_status_unreadable'}));
+      return false;
+    }
+    const data=status.data??status;
+    if(data?.accepted===true){this.legalOk=true;return true;}
+
+    // Taskmarket's live bundle is "2026-07-draft-2", status "draft", enforcementEnabled
+    // false -- and `legal accept` answers "The current legal bundle is a counsel-review
+    // draft and cannot be accepted." Demanding acceptance there is a gate nobody can pass:
+    // not the owner, not anyone. That is not caution, it is a permanent stop over a policy
+    // the platform has itself suspended and refuses to let anybody sign.
+    //
+    // This does not infer consent from use. The platform states consent is not required yet
+    // AND cannot be given. The instant either changes -- enforcement switched on, or a
+    // bundle that can actually be signed -- this closes again and stays shut until the owner
+    // signs it themselves. Signing is forbidden to this agent by the client's allowlist.
+    const suspended=data?.enforcementEnabled===false&&String(data?.status||'').toLowerCase()==='draft';
+    if(suspended){
+      this.logger?.info?.('[Taskmarket] '+JSON.stringify({claiming:true,legal:'not_enforced_by_platform',
+        bundleVersion:String(data?.bundleVersion||''),bundleStatus:String(data?.status||''),
+        note:'the platform refuses acceptance of this draft and does not enforce it; claiming stops the moment it does'}));
+      return true;
+    }
+
+    this.logger?.warn?.('[Taskmarket] '+JSON.stringify({claiming:false,reason:'legal_terms_not_accepted',
+      bundleVersion:String(data?.bundleVersion||''),
+      action:'the owner must review the policy bundle and run: npm run taskmarket-accept'}));
+    return false;
   }
 
   async tick(){

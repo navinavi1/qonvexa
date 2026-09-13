@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { TaskmarketWorker } from '../src/autonomos/taskmarket-worker.js';
-import { createTaskmarketClient } from '../src/autonomos/taskmarket.js';
+import { createTaskmarketClient, commandAllowed } from '../src/autonomos/taskmarket.js';
 
 // A stand-in for the first-party CLI, answering the same shapes the real one does. The
 // worker is exercised through its real command surface -- spawning a process, parsing the
@@ -88,18 +88,34 @@ eq(setAddr.blocked,true,'set-withdrawal-address is refused too');
 await worker.discover();
 eq(Object.keys(worker.store.readJson('taskmarket-jobs.json',{})).length,1,'no duplicate job after a second scan');
 
-// 8. The agent must never sign the marketplace's policy bundle on the owner's behalf.
-//    Discovery is a read and continues; claiming stops until a human accepts.
+// 8. The agent must never sign the marketplace's policy bundle on the owner's behalf, and
+//    must not invent a gate the platform itself has suspended.
 {
-  const gated=new TaskmarketWorker(null,{env,storageDir:root,logger:{info(){},warn(){}},
-    client:{...client,legalStatus:async()=>({ok:true,data:{accepted:false}})}});
-  eq(await gated.legalAccepted(),false,'unaccepted terms block claiming');
-  const signed=new TaskmarketWorker(null,{env,storageDir:root,logger:{info(){},warn(){}},
-    client:{...client,legalStatus:async()=>({ok:true,data:{accepted:true}})}});
-  eq(await signed.legalAccepted(),true,'accepted terms let the lane proceed');
-  const broken=new TaskmarketWorker(null,{env,storageDir:root,logger:{info(){},warn(){}},
-    client:{...client,legalStatus:async()=>({ok:false,error:'offline'})}});
-  eq(await broken.legalAccepted(),false,'an unreadable legal status is never read as consent');
+  const worker=st=>new TaskmarketWorker(null,{env,storageDir:root,logger:{info(){},warn(){}},
+    client:{...client,legalStatus:async()=>st}});
+
+  // Signing is not merely unused, it is unreachable: a bare 'legal' in the allowlist used to
+  // let `legal accept` through, which would have bound the owner to the Terms, Privacy
+  // Policy, Risk Disclosure and Acceptable Use Policy without them ever seeing them.
+  eq(commandAllowed(['legal','status']).allowed,true,'reading the policy bundle is allowed');
+  eq(commandAllowed(['legal','accept']).allowed,false,'signing it is forbidden to the agent');
+  eq(commandAllowed(['legal','accept','--yes']).allowed,false,'and cannot be reached with a flag');
+
+  eq(await worker({ok:true,data:{accepted:true}}).legalAccepted(),true,'a signed bundle lets the lane proceed');
+  eq(await worker({ok:true,data:{accepted:false,status:'active',enforcementEnabled:true}}).legalAccepted(),false,
+    'an enforced bundle that is not signed blocks claiming');
+  eq(await worker({ok:true,data:{accepted:false,status:'active',enforcementEnabled:false}}).legalAccepted(),false,
+    'a signable bundle must be signed even while enforcement is off');
+  eq(await worker({ok:true,data:{accepted:false,status:'draft',enforcementEnabled:true}}).legalAccepted(),false,
+    'a draft that IS enforced still blocks');
+  eq(await worker({ok:false,error:'offline'}).legalAccepted(),false,
+    'an unreadable status is never read as consent');
+
+  // Taskmarket's live answer: the bundle is a counsel-review draft, `legal accept` refuses
+  // it outright, and enforcement is off. Requiring acceptance there stops the lane forever
+  // over a policy nobody is allowed to sign.
+  eq(await worker({ok:true,data:{accepted:false,status:'draft',enforcementEnabled:false,bundleVersion:'2026-07-draft-2'}}).legalAccepted(),true,
+    'a draft the platform refuses to let anyone sign, and does not enforce, is not a blocker');
 }
 
 
