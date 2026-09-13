@@ -59,6 +59,29 @@ async function requestCore(endpoint, { method = 'GET', body, env = process.env, 
   return finish({ ok: response.ok && status >= 200 && status < 300 && data.successful !== false, status, value: data.data ?? data.body ?? data, error: response.ok ? '' : 'github_proxy_failed' },response.headers);
 }
 
+// Two transports, two result shapes: githubRequest resolves to {ok,value,status} and has no
+// .json(); fetch resolves to a Response with .json() and no .value. Callers wrote
+// `r.value || await r.json()` to cover both, which works only while value is truthy and
+// dies on "r.json is not a function" the moment an authenticated search comes back empty.
+// That shipped twice, in the bounty hunter and the market scout, and failed silently in
+// production on every query with no hits. One helper so there is no third time.
+export async function githubSearchJson(url, { env = process.env, headers = {}, timeoutMs = 20_000, fetchImpl = fetch } = {}) {
+  const target = url instanceof URL ? url : new URL(String(url));
+  if (githubAvailable(env)) {
+    const result = await githubRequest(target.pathname + target.search, { env, fetchImpl });
+    if (!result.ok) throw new Error(`github_search_http_${result.status}`);
+    // An ok response with no value is an empty result set, never a reason to reach for a
+    // method this object does not have.
+    return result.value || {};
+  }
+  const response = await fetchImpl(target, {
+    headers: { accept: 'application/vnd.github+json', ...headers },
+    signal: AbortSignal.timeout(timeoutMs)
+  });
+  if (!response.ok) throw new Error(`github_search_http_${response.status}`);
+  return response.json();
+}
+
 export async function githubPages(endpoint, options = {}) {
   const rows = [];
   for (let page = 1; page <= 20; page++) {

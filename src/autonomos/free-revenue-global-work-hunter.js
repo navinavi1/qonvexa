@@ -1,4 +1,4 @@
-import { githubAvailable, githubRequest } from './github-transport.js';
+import { githubAvailable, githubRequest, githubSearchJson } from './github-transport.js';
 import { RevenueGlobalWorkHunter } from './revenue-global-work-hunter.js';
 
 const SOURCE_CONFIG = [
@@ -75,14 +75,7 @@ async function loadRemotive(){const data=await getJson('https://remotive.com/api
 async function loadWwr(){const xml=await getText('https://weworkremotely.com/remote-jobs.rss');const items=[...xml.matchAll(/<item\b[\s\S]*?<\/item>/gi)].map(match=>match[0]);return items.slice(0,250).map(item=>({title:xmlValue(item,'title'),url:xmlValue(item,'link'),score:1,snippet:cleanHtml(`${xmlValue(item,'description')} ${xmlValue(item,'category')}`).slice(0,6000)})).filter(validRow);}
 async function loadGithubBounties(env={}){
   const queries=['is:issue is:open bounty','is:issue is:open "paid" reward','is:issue is:open USDC bounty','is:issue is:open USDT bounty','is:issue is:open label:"💎 Bounty"'];const out=[],seen=new Set();
-  for(const query of queries){const headers={accept:'application/vnd.github+json','user-agent':'AutonomOS-FreeRevenueHunter/1.0'};const token=String(env.GITHUB_TOKEN||'').trim();if(token)headers.authorization=`Bearer ${token}`;const u=new URL('https://api.github.com/search/issues');u.searchParams.set('q',query);u.searchParams.set('sort','updated');u.searchParams.set('order','desc');u.searchParams.set('per_page','30');const viaTransport=githubAvailable(env);const r=viaTransport?await githubRequest(u.pathname+u.search,{env}):await fetch(u,{headers,signal:AbortSignal.timeout(20_000)});if(!r.ok)throw new Error(`github_issues_http_${r.status}`);
-    // githubRequest resolves to {ok,value,status} and has no .json(); fetch resolves to a
-    // Response that has one and no .value. `r.value||await r.json()` read as a tidy way to
-    // cover both, but it falls through to .json() whenever the transport returns an ok
-    // response with an empty value — a search with no hits — and dies on "r.json is not a
-    // function". With a token configured that is the only branch taken, so this source has
-    // been failing on every empty query and reporting a type error instead of zero results.
-    const data=viaTransport?(r.value||{}):await r.json();for(const issue of Array.isArray(data?.items)?data.items:[]){const url=String(issue?.html_url||'');if(!url||seen.has(url)||issue?.pull_request)continue;seen.add(url);const labels=(issue?.labels||[]).map(x=>typeof x==='string'?x:String(x?.name||'')).join(' ');const body=String(issue?.body||'');const text=`${issue?.title||''} ${labels} ${body}`;if(!/(?:\$\s?\d|\b\d+(?:\.\d+)?\s?(?:USD|USDC|USDT|DAI|ETH|SOL|BTC)\b)/i.test(text))continue;out.push({title:String(issue?.title||'GitHub paid bounty'),url,score:1,snippet:cleanHtml(`GitHub issue bounty ${labels} ${body}`).slice(0,6000)});}}
+  for(const query of queries){const headers={accept:'application/vnd.github+json','user-agent':'AutonomOS-FreeRevenueHunter/1.0'};const token=String(env.GITHUB_TOKEN||'').trim();if(token)headers.authorization=`Bearer ${token}`;const u=new URL('https://api.github.com/search/issues');u.searchParams.set('q',query);u.searchParams.set('sort','updated');u.searchParams.set('order','desc');u.searchParams.set('per_page','30');const data=await githubSearchJson(u,{env,headers});for(const issue of Array.isArray(data?.items)?data.items:[]){const url=String(issue?.html_url||'');if(!url||seen.has(url)||issue?.pull_request)continue;seen.add(url);const labels=(issue?.labels||[]).map(x=>typeof x==='string'?x:String(x?.name||'')).join(' ');const body=String(issue?.body||'');const text=`${issue?.title||''} ${labels} ${body}`;if(!/(?:\$\s?\d|\b\d+(?:\.\d+)?\s?(?:USD|USDC|USDT|DAI|ETH|SOL|BTC)\b)/i.test(text))continue;out.push({title:String(issue?.title||'GitHub paid bounty'),url,score:1,snippet:cleanHtml(`GitHub issue bounty ${labels} ${body}`).slice(0,6000)});}}
   return out.slice(0,160).filter(validRow);
 }
 

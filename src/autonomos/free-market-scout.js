@@ -1,4 +1,4 @@
-import { githubAvailable, githubRequest } from './github-transport.js';
+import { githubAvailable, githubRequest, githubSearchJson } from './github-transport.js';
 import { isRetiredMarket } from './retired-markets.js';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -56,7 +56,7 @@ export class FreeMarketScout{
   persist(){const tmp=`${this.file}.${process.pid}.${Date.now()}.tmp`;fs.writeFileSync(tmp,JSON.stringify(this.state,null,2),{mode:0o600});fs.renameSync(tmp,this.file);}
 }
 
-async function githubRepoSearch(query,env){const headers={accept:'application/vnd.github+json','user-agent':'AutonomOS-FreeMarketScout/1.0'};const token=String(env.GITHUB_TOKEN||'').trim();if(token)headers.authorization=`Bearer ${token}`;const u=new URL('https://api.github.com/search/repositories');u.searchParams.set('q',query);u.searchParams.set('sort','updated');u.searchParams.set('order','desc');u.searchParams.set('per_page','20');const r=githubAvailable(env)?await githubRequest(u.pathname+u.search,{env}):await fetch(u,{headers,signal:AbortSignal.timeout(15000)});if(!r.ok)throw new Error(`github_search_http_${r.status}`);const data=r.value||await r.json();return Array.isArray(data?.items)?data.items:[];}
+async function githubRepoSearch(query,env){const headers={accept:'application/vnd.github+json','user-agent':'AutonomOS-FreeMarketScout/1.0'};const token=String(env.GITHUB_TOKEN||'').trim();if(token)headers.authorization=`Bearer ${token}`;const u=new URL('https://api.github.com/search/repositories');u.searchParams.set('q',query);u.searchParams.set('sort','updated');u.searchParams.set('order','desc');u.searchParams.set('per_page','20');const data=await githubSearchJson(u,{env,headers,timeoutMs:15000});return Array.isArray(data?.items)?data.items:[];}
 async function githubReadme(fullName,env){if(!fullName)return'';if(githubAvailable(env)){const r=await githubRequest('/repos/'+fullName+'/readme',{env});return r.ok&&r.value?.encoding==='base64'?Buffer.from(r.value.content,'base64').toString('utf8').slice(0,25000):'';}const headers={accept:'application/vnd.github.raw+json','user-agent':'AutonomOS-FreeMarketScout/1.0'};const token=String(env.GITHUB_TOKEN||'').trim();if(token)headers.authorization=`Bearer ${token}`;const r=await fetch(`https://api.github.com/repos/${fullName}/readme`,{headers,signal:AbortSignal.timeout(12000)});if(!r.ok)return'';return String(await r.text()).slice(0,25000);}
 function parseQueries(value){try{const x=JSON.parse(String(value||''));return Array.isArray(x)?x.map(String).filter(Boolean):null;}catch{return null;}}
 function read(file,fallback){try{return JSON.parse(fs.readFileSync(file,'utf8'));}catch{return structuredClone(fallback);}}
