@@ -266,7 +266,7 @@ function renderPurchaseReview() {
     <div><span>Primary goal</span><b>${escHtml(p.primaryGoal || 'Not specified')}</b></div>
     <div><span>Primary service</span><b>${escHtml(p.primaryService || 'Not specified')}</b></div>
     ${p.sourceLeadId ? '<div><span>Invitation</span><b>Matched to your email</b></div>' : ''}
-    <div class="review-total"><span>Total</span><b>$149 one-time</b></div>
+    <div class="review-total"><span>Total</span><b>${reviewTotal()} one-time</b></div>
   `;
 }
 
@@ -304,10 +304,14 @@ function renderPaymentOptions(options) {
       </button>`);
   }
   if (!methods.length) {
+    // When a method is off because it is misconfigured rather than simply not set up, the
+    // server now says which and why. Showing that beats a generic "in progress" that gives
+    // the owner nothing to act on and the customer nothing to understand.
+    const reason = options.methods?.bankTransfer?.unavailableReason || '';
     paymentOptions.innerHTML = `
       <div class="payment-unavailable">
         <b>Online payment activation is in progress.</b>
-        <span>Your order details are safe. Contact us if you want to continue manually.</span>
+        <span>${reason ? escHtml(reason) : 'Your order details are safe. Contact us if you want to continue manually.'}</span>
         <a href="mailto:${escAttr(options.contactEmail || 'hello@qonvexa.co')}">${escHtml(options.contactEmail || 'hello@qonvexa.co')}</a>
       </div>`;
     return;
@@ -404,6 +408,17 @@ function restorePurchaseDraft() {
     });
   } catch {}
 }
+// The total on the review step -- the last thing shown before the customer chooses how to
+// pay -- was the literal string "$149 one-time" while the amount actually charged comes from
+// AUDIT_PRICE_CENTS on the server. Change the price and the review promises the old one.
+// Prefer what the server said; fall back to the price the page itself was rendered with,
+// which the server substitutes, rather than to a number invented here.
+function reviewTotal() {
+  if (Number.isFinite(purchaseOptions?.priceCents)) return money(purchaseOptions.priceCents, purchaseOptions.currency);
+  const rendered = document.querySelector('.price .count-up')?.dataset?.count;
+  return rendered ? `$${rendered}` : 'the price shown above';
+}
+
 function money(amount,currency='USD') {
   try { return new Intl.NumberFormat('en-US',{style:'currency',currency:String(currency).toUpperCase()}).format(Number(amount||0)/100); }
   catch { return `$${(Number(amount||0)/100).toFixed(2)}`; }

@@ -1,4 +1,5 @@
 import { businessSnapshot } from './src/autonomos/business-snapshot.js';
+import { serializeByKey } from './src/autonomos/serialize-by-key.js';
 import { serveLocalArtifact } from './src/autonomos/local-artifacts.js';
 import 'dotenv/config';
 import express from 'express';
@@ -599,7 +600,11 @@ app.post('/api/find-mini-audit',
         businessType:lead.businessType || '',
         title:lead.miniAuditTitle || 'Your QONVEXA mini-audit',
         summary:lead.miniAuditSummary,
-        findings:String(lead.miniAuditFindings || '').split(/\\r?\\n/).map(x=>x.trim()).filter(Boolean).slice(0,5),
+        // /\\r?\\n/ matches a literal backslash followed by r or n -- not a newline. The admin
+        // writes the findings one per line and clean() preserves those newlines, so this never
+        // split anything: the customer's "find my audit" result showed all five findings
+        // crushed into a single bullet. Every other split in the codebase gets this right.
+        findings:String(lead.miniAuditFindings || '').split(/\r?\n/).map(x=>x.trim()).filter(Boolean).slice(0,5),
         fullAuditPrepared:Boolean(lead.preparedAuditUrl)
       },
       priceCents,
@@ -625,6 +630,9 @@ app.get('/api/purchase-options',
         bankTransfer: {
           available: salesEnabled && manual.enabled,
           label: 'Bank transfer',
+          // A method that is off because of a misconfiguration should say so rather than
+          // simply vanish from the page with no way to tell why.
+          unavailableReason: manual.unavailableReason || '',
           details: salesEnabled && manual.enabled ? manual.details : null
         }
       },
@@ -901,7 +909,17 @@ app.use((req, res) => {
   return res.status(404).json({ error: 'Not found' });
 });
 
+// Two deliveries of the same payment used to race here. The session lookup below awaits, so
+// both calls reached the "already fulfilled?" check before either had written the answer, and
+// both then appended an order: one payment, two rows in orders.ndjson, two entity updates and
+// two admin events. The ledger's own receipt dedup kept the money right; everything counted
+// off orders.ndjson was doubled. Serializing per session id closes the window without
+// changing what fulfilment does.
 async function fulfillPaidSession(session, eventId) {
+  return serializeByKey(`stripe_session:${String(session?.id || '')}`, () => fulfillPaidSessionExclusive(session, eventId));
+}
+
+async function fulfillPaidSessionExclusive(session, eventId) {
   const freshSession = stripe ? await stripe.checkout.sessions.retrieve(session.id) : session;
   if (freshSession.payment_status !== 'paid') return;
   session = freshSession;
@@ -1015,7 +1033,14 @@ function sendHtml(res, filename) {
       '{{DELIVERY_TIMEFRAME}}': escapeHtml(process.env.DELIVERY_TIMEFRAME || 'Paid checkout is not enabled until a delivery timeframe is published.'),
       '{{REFUND_POLICY_TEXT}}': escapeHtml(process.env.REFUND_POLICY_TEXT || 'Paid checkout is not enabled until final refund and cancellation terms are published. For questions, contact hello@qonvexa.co.'),
       '{{LAST_UPDATED}}': escapeHtml(process.env.LEGAL_LAST_UPDATED || new Date().toISOString().slice(0, 10)),
-      '{{LEGAL_ROBOTS}}': escapeHtml(isLiveLaunch ? 'index,follow' : 'noindex,nofollow')
+      '{{LEGAL_ROBOTS}}': escapeHtml(isLiveLaunch ? 'index,follow' : 'noindex,nofollow'),
+      // The audit price is configurable (AUDIT_PRICE_CENTS) and the server charges whatever
+      // it is set to -- but the page carried "149" hardcoded in seven places, including the
+      // schema.org offer that search engines read and the total shown on the review step,
+      // one click before payment. Raise the price and the site advertises the old one while
+      // charging the new one. One source, substituted here like every other fact on the page.
+      '{{PRICE_AMOUNT}}': escapeHtml(priceCents % 100 === 0 ? String(priceCents / 100) : (priceCents / 100).toFixed(2)),
+      '{{PRICE_CURRENCY}}': 'USD'
     };
     let output = html;
     for (const [token, value] of Object.entries(replacements)) output = output.split(token).join(value);
@@ -1273,6 +1298,10 @@ function toCsv(headers, rows) {
 }
 
 
+// AUDIT_PRICE_CENTS is a USD amount: the schema.org offer, /api/purchase-options and the
+// Stripe session all say USD, and the whole page is written in dollars.
+const PRICE_CURRENCY = 'USD';
+
 function manualPaymentConfig() {
   const details = {
     beneficiary: clean(process.env.BANK_BENEFICIARY || '', 300),
@@ -1284,8 +1313,19 @@ function manualPaymentConfig() {
     note: clean(process.env.BANK_PAYMENT_NOTE || 'Use your QONVEXA order reference in the payment memo.', 500)
   };
   const hasDestination = Boolean(details.iban || details.account);
+  // The bank-transfer order recorded amountTotal = priceCents with currency = BANK_CURRENCY.
+  // Those are two different things: the price is in dollars, BANK_CURRENCY is whatever the
+  // receiving account is denominated in. Set the account to UAH and the customer was told to
+  // transfer 149 UAH for a $149 audit; set it to EUR and they were overcharged. Nothing here
+  // knows an exchange rate, so quoting one price in another currency is inventing a number.
+  // Fail closed and say why, rather than put a wrong figure on someone's invoice.
+  const currencyMismatch = hasDestination && details.currency !== PRICE_CURRENCY;
   return {
-    enabled: manualPaymentEnabled && Boolean(details.beneficiary) && hasDestination,
+    enabled: manualPaymentEnabled && Boolean(details.beneficiary) && hasDestination && !currencyMismatch,
+    currencyMismatch,
+    unavailableReason: currencyMismatch
+      ? `BANK_CURRENCY is ${details.currency} but the audit price is set in ${PRICE_CURRENCY}. Nothing here can convert between them, so bank transfer stays off until the account currency matches the price currency.`
+      : '',
     details
   };
 }
