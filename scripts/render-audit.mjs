@@ -18,6 +18,36 @@ if ([rootRoute, robotsRoute, adminRoute, staticMiddleware].some(x => x < 0)) {
 if (!(rootRoute < staticMiddleware && robotsRoute < staticMiddleware && adminRoute < staticMiddleware)) {
   throw new Error('Route ordering invalid: explicit routes must be registered before express.static.');
 }
+
+// Not a style rule here but a security one. AutonomOS writes the global work feed and the
+// daily money report -- revenue, fees, costs, net profit, the owner/agent split and the whole
+// job pipeline -- as files inside publicDir. If their authenticated route is ever registered
+// after express.static, the static handler answers first and the owner's books go back to
+// being readable by anyone who guesses the filename.
+const privateViewRoute = server.indexOf('autonomos-(?:global-feed|money-report)');
+if (privateViewRoute < 0) {
+  throw new Error('The authenticated route for the generated money/feed views is missing: those files sit in publicDir and would be served to anyone.');
+}
+if (!(privateViewRoute < staticMiddleware)) {
+  throw new Error('The money/feed views must be routed before express.static, or the static handler serves them unauthenticated.');
+}
+if (!/autonomos-\(\?:global-feed\|money-report\)[^\n]*requireAdmin/.test(server)) {
+  throw new Error('The money/feed views must be behind requireAdmin.');
+}
+
+// Two deploys were lost to code that behaved differently on the build machine than on mine.
+// The Node version is the remaining difference nothing else would surface: render.yaml pins
+// what actually runs the build, and a local run on another major is testing something else.
+// A warning, not a failure -- local work on another version is legitimate, being unaware of
+// it is what is not.
+try {
+  const renderYaml = fs.readFileSync(path.join(root, 'render.yaml'), 'utf8');
+  const pinned = /NODE_VERSION[\s\S]{0,40}?value:\s*"?(\d+)/.exec(renderYaml)?.[1];
+  const running = process.versions.node.split('.')[0];
+  if (pinned && pinned !== running) {
+    console.warn(`WARNING: this run is on Node ${running}; the deploy builds on Node ${pinned} (render.yaml). Anything version-specific will not be caught here.`);
+  }
+} catch {}
 if (!server.includes("app.listen(port, '0.0.0.0'")) {
   throw new Error('Server must bind explicitly to 0.0.0.0 on Render.');
 }
