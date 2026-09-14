@@ -159,7 +159,7 @@ export function latestStatuses(jobs){
 // one further down the list still gets a chance to fit.
 export function selectBudgetAwareCandidates(rankedRows,cycleConfig,earnedBudgetUsd,onSkip=()=>{}){
   const capSpend=!cycleConfig.zeroSpendMode&&cycleConfig.earnedFundsOnly&&!cycleConfig.allowExternalSpending;
-  const maxJobs=Math.max(1,Number(cycleConfig.maxJobsPerCycle||1));
+  const maxJobs=Math.max(1,Number(cycleConfig.maxJobsPerCycle || DEFAULT_AUTONOMOS_CONFIG.maxJobsPerCycle));
   const picked=[];
   let cumulativeUsd=0;
   for(const row of rankedRows){
@@ -573,7 +573,7 @@ async refreshTreasury(){
       // These were `.catch(()=>{})`. Startup recovery is exactly where a silent failure
       // hurts most: a job already claimed on a marketplace stays unfinished and nobody
       // learns why.
-      if(config.enabled)await recoverInFlightJobs({max:Math.max(1,Math.min(3,Number(config.maxConcurrentJobs||4)))}).catch(error=>event('in_flight_recovery_failed',{error:String(error?.message||error).slice(0,200)}));
+      if(config.enabled)await recoverInFlightJobs({max:Math.max(1,Math.min(3,Number(config.maxConcurrentJobs || DEFAULT_AUTONOMOS_CONFIG.maxConcurrentJobs)))}).catch(error=>event('in_flight_recovery_failed',{error:String(error?.message||error).slice(0,200)}));
       await retryPendingArtifactPersistence({max:5}).catch(error=>event('artifact_retry_failed',{error:String(error?.message||error).slice(0,200)}));
 
       const boot=await bootstrapMarketCredentials({env,credentials,ownerWallet:wallet,storeCredential:(id,value)=>{credentials={...credentials,[id]:value};store.writeSecretJson('credentials.private.json',credentials);}});
@@ -637,7 +637,7 @@ async refreshTreasury(){
         .sort((a,b)=>(Number(b.intelligence?.score||0)-Number(a.intelligence?.score||0)) || (scoreCandidate(b)-scoreCandidate(a))),cycleConfig,cycleConfig.availableSpendUsd,detail=>event('candidate_skipped_cycle_budget',detail));
       candidates=applyCommissioningCandidateGate(candidates,config,{ledger:cycleLedger,activeCount:activeJobs.size});
 
-      const processed=await mapLimit(config.enabled?candidates:[],Number(config.maxConcurrentJobs||4),async opportunity=>{
+      const processed=await mapLimit(config.enabled?candidates:[],Number(config.maxConcurrentJobs || DEFAULT_AUTONOMOS_CONFIG.maxConcurrentJobs),async opportunity=>{
         const leaseId=crypto.randomUUID();
         const durableOpportunity={...opportunity,__dispatchLeaseId:leaseId};
         if(triggerEnabled(env)){
@@ -667,7 +667,7 @@ async refreshTreasury(){
       }
       setAgent('evolution-agent','working');state.lastEvolution=boundedEvolution(normalized);setAgentMetric('evolution-agent',{tasks:1});
       state.cycles=Number(state.cycles||0)+1;state.lastCycleAt=new Date().toISOString();state.lastCycleMs=Date.now()-started;state.updatedAt=new Date().toISOString();state.lastCycleId=cycleId;state.lastCycleTrigger=trigger;
-      state.lastCycleSummary={opportunities:normalized.length,candidates:candidates.length,claimed,delivered,durableDispatched,triggerDispatched,concurrency:Number(config.maxConcurrentJobs||4),elasticChildren:children.filter(c=>c.status==='alive').length};store.writeJson('state.json',state);
+      state.lastCycleSummary={opportunities:normalized.length,candidates:candidates.length,claimed,delivered,durableDispatched,triggerDispatched,concurrency:Number(config.maxConcurrentJobs || DEFAULT_AUTONOMOS_CONFIG.maxConcurrentJobs),elasticChildren:children.filter(c=>c.status==='alive').length};store.writeJson('state.json',state);
       event('cycle_completed',{cycleId,trigger,ms:state.lastCycleMs,opportunities:normalized.length,candidates:candidates.length,claimed,delivered,durableDispatched,triggerDispatched});
       logDiagnostics('cycle_diagnostics');
       return{ok:true,cycleId,ms:state.lastCycleMs,opportunities:normalized.length,candidates:candidates.length,claimed,delivered,durableDispatched,triggerDispatched};
@@ -818,8 +818,8 @@ async refreshTreasury(){
     if(!preCommittedOrder&&!op.economics?.allowed)reasons.push(`economics_blocked:${op.economics?.reason||'unknown'}`);
     if(!preCommittedOrder&&op.payoutRoute&&op.payoutRoute.ok===false)reasons.push(`payout_blocked:${op.payoutRoute.reason||'unknown'}`);
     if(!preCommittedOrder&&config.cryptoOnlyEarnings&&!isCryptoNativeEarning(op))reasons.push('crypto_only_payout_required');
-    const apiCostCeiling=Number(op.budgetUsd||0)*(Number(config.maxApiCostPercentOfPayout||25)/100);
-    if(!preCommittedOrder&&Number(op.capability?.estimatedModelCostUsd||0)>apiCostCeiling)reasons.push(`estimated_model_cost_${op.capability?.estimatedModelCostUsd}_exceeds_${Math.round(Number(config.maxApiCostPercentOfPayout||25))}pct_of_payout_ceiling_${apiCostCeiling.toFixed(4)}`);
+    const apiCostCeiling=Number(op.budgetUsd||0)*(Number(config.maxApiCostPercentOfPayout || DEFAULT_AUTONOMOS_CONFIG.maxApiCostPercentOfPayout)/100);
+    if(!preCommittedOrder&&Number(op.capability?.estimatedModelCostUsd||0)>apiCostCeiling)reasons.push(`estimated_model_cost_${op.capability?.estimatedModelCostUsd}_exceeds_${Math.round(Number(config.maxApiCostPercentOfPayout || DEFAULT_AUTONOMOS_CONFIG.maxApiCostPercentOfPayout))}pct_of_payout_ceiling_${apiCostCeiling.toFixed(4)}`);
     if(!['open','active','available','posted',''].includes(String(op.status||'')))reasons.push(`status_not_open:${op.status}`);
     return { isCandidate:reasons.length===0, reasons };
   }
@@ -971,8 +971,8 @@ async refreshTreasury(){
     let deliverable; // hoisted so the catch block below can still see partial tool spend
     try{
       if((op.requiresWorkOrder===true&&!claim.workOrder)){throw new Error('work_order_unavailable_refusing_blind_delivery');}
-      const execOp={...op,jobId,acceptanceContract:op.acceptanceContract||buildAcceptanceContract(op),executionBudgetUsd:Number(op.executionBudgetUsd||config.availableSpendUsd||config.seedSpendBudgetUsd||0),jobSpendCeilingUsd:Number(op.budgetUsd||0)*(Number(config.maxApiCostPercentOfPayout||25)/100),...(claim.workOrder?{__workOrderRaw:claim.workOrder,description:`${op.description}\n\n[${op.source} authoritative work order]\n${typeof claim.workOrder==='string'?claim.workOrder:JSON.stringify(claim.workOrder).slice(0,4000)}`}:{})};
-      deliverable=await orchestrateJob(execOp,{llm,memory,taskAgents,jobId,env,store,maxTaskAgents:Number(config.maxChildren||12),abortSignal:abortController.signal,onEvent:(type,detail)=>event(type,{jobId,source:op.source,...detail}),execute:(plannedOp,execOpts={})=>executeExternalOpportunity(plannedOp,op.capability,{llm,siteUrl,env,config,abortSignal:abortController.signal,memoryContext:plannedOp.__memoryContext||'',...execOpts})});
+      const execOp={...op,jobId,acceptanceContract:op.acceptanceContract||buildAcceptanceContract(op),executionBudgetUsd:Number(op.executionBudgetUsd||config.availableSpendUsd||config.seedSpendBudgetUsd||0),jobSpendCeilingUsd:Number(op.budgetUsd||0)*(Number(config.maxApiCostPercentOfPayout || DEFAULT_AUTONOMOS_CONFIG.maxApiCostPercentOfPayout)/100),...(claim.workOrder?{__workOrderRaw:claim.workOrder,description:`${op.description}\n\n[${op.source} authoritative work order]\n${typeof claim.workOrder==='string'?claim.workOrder:JSON.stringify(claim.workOrder).slice(0,4000)}`}:{})};
+      deliverable=await orchestrateJob(execOp,{llm,memory,taskAgents,jobId,env,store,maxTaskAgents:Number(config.maxChildren || DEFAULT_AUTONOMOS_CONFIG.maxChildren),abortSignal:abortController.signal,onEvent:(type,detail)=>event(type,{jobId,source:op.source,...detail}),execute:(plannedOp,execOpts={})=>executeExternalOpportunity(plannedOp,op.capability,{llm,siteUrl,env,config,abortSignal:abortController.signal,memoryContext:plannedOp.__memoryContext||'',...execOpts})});
       setAgent('qa-evaluator','working'); validateExternalDeliverable(deliverable,execOp);
       deliverable=await ensureMarketplaceArtifact(jobId,op,deliverable);
       await persistDurableJobArtifacts(jobId,op,deliverable);
@@ -1154,8 +1154,8 @@ async refreshTreasury(){
       let deliverable;
       try{
         if((op.requiresWorkOrder===true&&!claim.workOrder))throw new Error('work_order_unavailable_refusing_blind_delivery');
-        const execOp={...op,jobId,acceptanceContract:op.acceptanceContract||buildAcceptanceContract(op),executionBudgetUsd:Number(op.executionBudgetUsd||config.availableSpendUsd||config.seedSpendBudgetUsd||0),jobSpendCeilingUsd:Number(op.budgetUsd||0)*(Number(config.maxApiCostPercentOfPayout||25)/100),...(claim.workOrder?{__workOrderRaw:claim.workOrder,description:`${op.description}\n\n[${op.source} authoritative work order]\n${typeof claim.workOrder==='string'?claim.workOrder:JSON.stringify(claim.workOrder).slice(0,4000)}`}:{})};
-        deliverable=await orchestrateJob(execOp,{llm,memory,taskAgents,jobId,env,store,maxTaskAgents:Number(config.maxChildren||12),abortSignal:abortController.signal,onEvent:(type,detail)=>event(type,{jobId,source:op.source,...detail}),execute:(plannedOp,execOpts={})=>executeExternalOpportunity(plannedOp,op.capability,{llm,siteUrl,env,config,abortSignal:abortController.signal,memoryContext:plannedOp.__memoryContext||'',...execOpts})});
+        const execOp={...op,jobId,acceptanceContract:op.acceptanceContract||buildAcceptanceContract(op),executionBudgetUsd:Number(op.executionBudgetUsd||config.availableSpendUsd||config.seedSpendBudgetUsd||0),jobSpendCeilingUsd:Number(op.budgetUsd||0)*(Number(config.maxApiCostPercentOfPayout || DEFAULT_AUTONOMOS_CONFIG.maxApiCostPercentOfPayout)/100),...(claim.workOrder?{__workOrderRaw:claim.workOrder,description:`${op.description}\n\n[${op.source} authoritative work order]\n${typeof claim.workOrder==='string'?claim.workOrder:JSON.stringify(claim.workOrder).slice(0,4000)}`}:{})};
+        deliverable=await orchestrateJob(execOp,{llm,memory,taskAgents,jobId,env,store,maxTaskAgents:Number(config.maxChildren || DEFAULT_AUTONOMOS_CONFIG.maxChildren),abortSignal:abortController.signal,onEvent:(type,detail)=>event(type,{jobId,source:op.source,...detail}),execute:(plannedOp,execOpts={})=>executeExternalOpportunity(plannedOp,op.capability,{llm,siteUrl,env,config,abortSignal:abortController.signal,memoryContext:plannedOp.__memoryContext||'',...execOpts})});
         validateExternalDeliverable(deliverable,execOp);deliverable=await ensureMarketplaceArtifact(jobId,op,deliverable);await persistDurableJobArtifacts(jobId,op,deliverable);
         const delivery=await deliverOnce(jobId,op,claim,deliverable);if(!delivery.ok)throw new Error(`delivery_failed:${delivery.reason||'unknown'}`);
         writeInFlightJob(jobId,{...inFlightJobs[jobId],jobId,op,claim,workerId:worker.id,status:'delivery_accepted',deliveryTransactionId:String(delivery.transactionId||claim.transactionId||''),deliverableHash:String(deliverable.hash||''),deliveryAcceptedAt:new Date().toISOString()});
@@ -1570,7 +1570,7 @@ async refreshTreasury(){
       const fastLedger=store.readNdjson('ledger.ndjson',-1);
       candidates=applyCommissioningCandidateGate(candidates,config,{ledger:fastLedger,activeCount:activeJobs.size});
       const fastCommissioningProved=fastLedger.some(row=>row?.type==='revenue'&&Number(row?.amountUsd||row?.grossUsd||0)>0&&!isRetiredMarket(row));
-      const rows=await mapLimit(candidates,Number(config.maxConcurrentJobs||4),async op=>{const leaseId=crypto.randomUUID();const durableOp={...op,__dispatchLeaseId:leaseId};if(triggerEnabled(env)){const dispatched=await dispatchTriggerPaidOpportunity(durableOp,env);if(dispatched.ok){jobRegistry.markDispatchPending(op,{provider:'trigger',runId:dispatched.runId||'',leaseId,retryAfter:new Date(Date.now()+6*60*60_000).toISOString()});event('trigger_job_dispatched',{source:op.source,externalId:op.externalId,runId:dispatched.runId||'',leaseId,fastLane:true});return{durable:true,provider:'trigger'};}event('trigger_dispatch_fallback',{source:op.source,externalId:op.externalId,reason:dispatched.reason||'',fastLane:true});}return processMarketplaceOpportunity(op);});
+      const rows=await mapLimit(candidates,Number(config.maxConcurrentJobs || DEFAULT_AUTONOMOS_CONFIG.maxConcurrentJobs),async op=>{const leaseId=crypto.randomUUID();const durableOp={...op,__dispatchLeaseId:leaseId};if(triggerEnabled(env)){const dispatched=await dispatchTriggerPaidOpportunity(durableOp,env);if(dispatched.ok){jobRegistry.markDispatchPending(op,{provider:'trigger',runId:dispatched.runId||'',leaseId,retryAfter:new Date(Date.now()+6*60*60_000).toISOString()});event('trigger_job_dispatched',{source:op.source,externalId:op.externalId,runId:dispatched.runId||'',leaseId,fastLane:true});return{durable:true,provider:'trigger'};}event('trigger_dispatch_fallback',{source:op.source,externalId:op.externalId,reason:dispatched.reason||'',fastLane:true});}return processMarketplaceOpportunity(op);});
       return{ok:true,found:normalized.length,processed:rows.filter(x=>!x?.durable).length,durableDispatched:rows.filter(x=>x?.durable).length,triggerDispatched:rows.filter(x=>x?.provider==='trigger').length};
     }catch(error){event('fast_cycle_failed',{error:String(error?.message||error)});return{ok:false,reason:String(error?.message||error).slice(0,200)};}
     finally{fastCycleRunning=false;}

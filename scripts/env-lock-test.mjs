@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { DEFAULT_AUTONOMOS_CONFIG } from '../src/autonomos/policy-engine.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -53,5 +54,39 @@ ok(/const forced=a\.config\?\.envForced\|\|\{\}/.test(admin),'the form reads the
 ok(/field\.disabled=Boolean\(hold\)/.test(admin),'a held field is disabled, not silently ignored');
 ok(/env-lock-note/.test(admin)&&/hold\.variable/.test(admin),'and the note names the variable');
 ok(/\.env-lock-note/.test(read('public/admin.css')),'the note is styled rather than invisible');
+
+
+// A fallback written beside a config read is a second copy of that setting's default, and
+// they had drifted: the api-cost gate fell back to 25% where the real default is 60%, so a
+// config missing that key would have refused work at under half the intended ceiling, with
+// nothing in either place saying which number was real. Falling back to 0 is different and
+// allowed -- that is "no budget, no cap", which fails safe. Any OTHER disagreement is two
+// answers to one question.
+{
+  const root=new URL('../src/', import.meta.url);
+  const sources=[];
+  (function walk(dir){
+    for(const entry of fs.readdirSync(dir,{withFileTypes:true})){
+      const child=new URL(entry.name+(entry.isDirectory()?'/':''),dir);
+      if(entry.isDirectory())walk(child); else if(/\.m?js$/.test(entry.name))sources.push(child);
+    }
+  })(root);
+  sources.push(new URL('../server.js', import.meta.url));
+
+  const contradictions=[];
+  for(const file of sources){
+    const body=fs.readFileSync(file,'utf8').replace(/\/\*[\s\S]*?\*\//g,'').replace(/^\s*\/\/.*$/gm,'');
+    for(const [key,real] of Object.entries(DEFAULT_AUTONOMOS_CONFIG)){
+      if(typeof real!=='number')continue;
+      for(const m of body.matchAll(new RegExp(`\\.${key}\\s*(?:\\?\\?|\\|\\|)\\s*(-?[0-9.]+)`,'g'))){
+        const written=Number(m[1]);
+        if(written!==0&&written!==Number(real))
+          contradictions.push(`${file.pathname.split('/').pop()}: ${key} falls back to ${written}, the default is ${real}`);
+      }
+    }
+  }
+  assert.deepEqual(contradictions,[],'no inline fallback contradicts the config default it stands in for');
+  checks++;
+}
 
 console.log('env-lock-test OK ('+checks+' checks)');

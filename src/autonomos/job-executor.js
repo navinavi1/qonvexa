@@ -1,4 +1,9 @@
 import { coordinateExecution } from './execution-coordinator.js';
+// One source for what a setting defaults to. Fallbacks written beside each read were a
+// second copy, and they had drifted: the api-cost gate fell back to 25% where the real
+// default is 60%, so a config missing that key refused work at under half the intended
+// ceiling, and nothing in either place said which number was the real one.
+import { DEFAULT_AUTONOMOS_CONFIG } from './policy-engine.js';
 import { isRetiredMarket } from './retired-markets.js';
 import { unifiedCapabilityContext, refreshCapabilities } from './capability-registry.js';
 import { prepareExecutionTools } from './free-tool-recovery.js';
@@ -58,7 +63,7 @@ async function executeOpportunity(opportunity, capability, { llm, siteUrl='', en
     ? {...config,maxPaidProcurementUsd:Math.max(Number(config?.maxPaidProcurementUsd||0),availableBudget)}
     : config;
   const spendAuthorized = Boolean(executionConfig) && validateAction({ kind:'spend', amountUsd:0.0001 }, executionConfig).allowed;
-  const jobSpendCeilingUsd = Number(opportunity?.jobSpendCeilingUsd ?? 0) || (Number(opportunity?.budgetUsd || 0) * (Number(config?.maxApiCostPercentOfPayout ?? 25) / 100));
+  const jobSpendCeilingUsd = Number(opportunity?.jobSpendCeilingUsd ?? 0) || (Number(opportunity?.budgetUsd || 0) * (Number(config?.maxApiCostPercentOfPayout ?? DEFAULT_AUTONOMOS_CONFIG.maxApiCostPercentOfPayout) / 100));
   const effectiveJobCeiling = acceptedSurvivalJob
     ? availableBudget
     : Math.max(0, Math.min(
