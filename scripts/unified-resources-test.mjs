@@ -33,5 +33,20 @@ await test('CodeRabbit outage selects actual independent review while preserving
 await test('persistent local artifact fallback produces a retrievable real file and rejects traversal',async()=>{const saved=await putLocalArtifact('output.txt',Buffer.from('completed output'),'text/plain',env);assert.equal(saved.ok,true);const u=new URL(saved.url);const pieces=u.pathname.split('/');let file='';const res={set(){},sendFile(p){file=p;},sendStatus(code){return code;}};serveLocalArtifact({params:{id:pieces[3],name:pieces[4]}},res,env);assert.equal(fs.readFileSync(file,'utf8'),'completed output');assert.equal(serveLocalArtifact({params:{id:'../config',name:'output.txt'}},res,env),404);});
 await test('new job floor is at least five even with persisted old commissioning settings',()=>{const c=normalizeConfig({minJobPayoutUsd:.5,clawlancerMinJobPayoutUsd:.5,dealworkMinJobPayoutUsd:.5,commissioningMinPayoutUsd:.5});for(const k of ['minJobPayoutUsd','commissioningMinPayoutUsd'])assert.equal(c[k],5);assert.equal(minimumJobPayoutUsd({AUTONOMOS_MIN_JOB_PAYOUT_USD:'.5'}),5);assert.equal(minimumJobPayoutUsd({AUTONOMOS_MIN_JOB_PAYOUT_USD:'30'}),30);});
 await test('one authorized launch preserves subsequent stop across restarts and keeps 50/50',()=>{const e={...env,AUTONOMOS_ENABLED:'true'};migrateUnifiedRelease(e);const f=path.join(root,'autonomos/config.json');const c=JSON.parse(fs.readFileSync(f));assert.equal(c.enabled,true);assert.equal(c.ownerRevenuePercent,50);assert.equal(c.agentTreasuryPercent,50);fs.writeFileSync(f,JSON.stringify({...c,enabled:false,killSwitch:true}));migrateUnifiedRelease(e);assert.equal(JSON.parse(fs.readFileSync(f)).killSwitch,true);});
+await test('a refused reservation gives back the shared units it took',()=>{
+  // reserveResource takes the shared Redis reservation first and checks the local counter
+  // second, so a local refusal used to leave those units counted against the fleet forever:
+  // the shared ceiling drifted down with every rejection and nothing said why. Structural,
+  // deliberately: the behaviour needs a live Redis, and the ordering is the whole fix.
+  const body=fs.readFileSync(new URL('../src/autonomos/resource-control.js',import.meta.url),'utf8');
+  const reserveAt=body.indexOf('await reserveShared(');
+  const releaseFn=body.indexOf('async function releaseSharedReservation');
+  assert.ok(reserveAt>0&&releaseFn>0,'both the reservation and its release exist');
+  const gate=body.slice(reserveAt,body.indexOf('async function releaseSharedReservation'));
+  assert.ok(/releaseShared\s*=\s*\(\)\s*=>/.test(gate),'the release is armed the moment the reservation is taken');
+  assert.match(gate,/if\(!result\.ok\)\{await releaseShared\?\.\(\);/,'a refused local check releases it');
+  assert.match(gate,/catch\(error\)\{await releaseShared\?\.\(\);/,'and so does a thrown one');
+  assert.match(body.slice(releaseFn),/INCRBYFLOAT.*-d/s,'the release decrements the shared counter');
+});
 console.log(`UNIFIED RESOURCES: ${count}/${count} passed`);
 }finally{fs.rmSync(root,{recursive:true,force:true});}

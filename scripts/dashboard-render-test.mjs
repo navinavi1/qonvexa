@@ -165,5 +165,38 @@ for(const name of ['autonomos-money-report.json','autonomos-global-feed.json']){
   } finally { try{fs.rmSync(path.join(publicDir,name));}catch{} }
 }
 
+// The settings form: five controls the owner can change that no test had ever saved and read
+// back. A field the server silently drops looks identical to one that worked.
+{
+  const settings={ownerDisplayName:'Owner Name',domainEmail:'domain@example.com',
+    notificationEmail:'alerts@example.com',defaultLeadStatus:'reviewing',defaultOrderStatus:'queued'};
+  const saved=await jsonOf(B+'/api/admin/settings',{method:'PATCH',
+    headers:{'content-type':'application/json',cookie,origin:B},body:JSON.stringify(settings)});
+  eq(saved.status,200,'the settings form saves');
+  const readBack=(await jsonOf(B+'/api/admin/settings',{headers:{cookie}})).body;
+  for(const [key,value] of Object.entries(settings))
+    eq(readBack?.[key]??readBack?.settings?.[key],value,`${key} survives the round trip`);
+
+  // And the validation actually refuses bad values rather than storing them.
+  for(const [bad,why] of [[{notificationEmail:'not-an-email'},'an invalid notification email'],
+      [{domainEmail:'also-not'},'an invalid domain email'],
+      [{defaultLeadStatus:'nonsense'},'a lead status that is not in the list'],
+      [{defaultOrderStatus:'nonsense'},'an order status that is not in the list']]){
+    const rejected=await fetch(B+'/api/admin/settings',{method:'PATCH',
+      headers:{'content-type':'application/json',cookie,origin:B},body:JSON.stringify(bad)});
+    eq(rejected.status,400,why+' is refused');
+  }
+}
+
+// A control the environment holds must not send a value the server will overwrite: storing
+// one thing and running another is the confusion the disabled state exists to end.
+{
+  const submit=script.slice(script.indexOf("el('#autonomos-config-form')"));
+  ok(/envHeld=new Set\(Object\.keys\(autonomosData\?\.config\?\.envForced/.test(submit),
+    'the form reads which fields the environment holds');
+  ok(/for\(const key of envHeld\) delete payload\[key\]/.test(submit),
+    'and drops them from the payload instead of sending values that will be ignored');
+}
+
 stop();
 console.log('dashboard-render-test OK ('+checks+' checks, '+tiles.length+' tiles, live server, no JS errors)');

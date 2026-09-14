@@ -386,6 +386,12 @@ el('#autonomos-config-form')?.addEventListener('submit',async e=>{
   // reservePercent and growthPercent are derived server-side from the owner/agent split;
   // sending them back only invited the round trip that made them look editable.
   delete raw.reservePercent; delete raw.growthPercent;
+  // Fields the environment holds are rendered disabled, but the checkbox values below are read
+  // off f.elements directly, so a disabled control still travelled in the payload. The server
+  // then stored what was sent and normalizeConfig overrode it from the environment a moment
+  // later -- so config.json disagreed with what actually ran, which is the exact confusion the
+  // disabled state exists to end. Do not send what we already know will be ignored.
+  const envHeld=new Set(Object.keys(autonomosData?.config?.envForced||{}));
   const payload={...raw,autoReplication:f.elements.autoReplication.checked,autoClaimJobs:f.elements.autoClaimJobs.checked,autoCompetitiveSubmissions:f.elements.autoCompetitiveSubmissions.checked,commissioningMode:f.elements.commissioningMode.checked,cryptoOnlyEarnings:f.elements.cryptoOnlyEarnings.checked,requireEscrowForAutoClaim:f.elements.requireEscrowForAutoClaim.checked,rejectDemoAndTestJobs:f.elements.rejectDemoAndTestJobs.checked,zeroSpendMode:f.elements.zeroSpendMode.checked,earnedFundsOnly:f.elements.earnedFundsOnly.checked,allowExternalSpending:f.elements.allowExternalSpending.checked};
   // Only coerce fields the form actually submitted. experimentPercent,
   // maxApiCostPercentOfPayout and commissioningMinPayoutUsd have no inputs, so
@@ -398,6 +404,7 @@ el('#autonomos-config-form')?.addEventListener('submit',async e=>{
     const value=Number(raw[key]);
     if(Number.isFinite(value))payload[key]=value; else delete payload[key];
   }
+  for(const key of envHeld) delete payload[key];
   try{await api('/api/admin/autonomos/config',{method:'PATCH',body:JSON.stringify(payload)});status.textContent='Saved.';await loadDashboard()}catch(err){status.textContent=err.message}
 });
 

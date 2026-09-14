@@ -71,15 +71,33 @@ export async function reserveResource(provider,units=1,env=process.env,{purpose=
   if(ready.mode==='owner_capped')return{ok:true,resource:provider,mode:ready.mode};
   // Third-party free allowances are shared across all machines. A local estimate is
   // insufficient: an operator-provided remaining allowance requires a shared Redis cap.
+  // The shared reservation is taken before the local counter is checked, so a local rejection
+  // used to leave the Redis count incremented for units nobody ever used. Every such rejection
+  // burned shared allowance permanently, and the fleet locked itself out of a free resource
+  // earlier than it had to -- with nothing in the logs to say why the ceiling kept dropping.
+  let releaseShared=null;
   if(!DIRECT_FREE.has(provider)){
     if(!env.REDIS_URL)return{ok:false,error:'shared_free_quota_counter_unavailable',resource:provider,replacementRequired:true};
     const result=await reserveShared(provider,n,ready,env);if(!result.ok)return result;
+    releaseShared=()=>releaseSharedReservation(provider,n,ready,env);
   }
   try{const result=mutate(env,state=>{
     const row=state.resources[provider]||{};const period=periodKey(ready);const used=row.period===period?Number(row.used||0):0;
     if(used+n>ready.limit){state.resources[provider]={...row,period,used,reason:'free_resource_limit_reached',unavailableUntil:resetDate(ready)};return{ok:false,error:'free_resource_limit_reached',resource:provider,replacementRequired:true};}
     state.resources[provider]={...row,period,used:used+n,lastUseAt:new Date().toISOString()};return{ok:true,resource:provider,mode:ready.mode,remaining:ready.limit-used-n};
-  });if(!result.ok)notify(provider,{reason:result.error},env);return result;}catch(error){return{ok:false,error:String(error.message),resource:provider,replacementRequired:true};}
+  });if(!result.ok){await releaseShared?.();notify(provider,{reason:result.error},env);}return result;}
+  catch(error){await releaseShared?.();return{ok:false,error:String(error.message),resource:provider,replacementRequired:true};}
+}
+// Give back units that were reserved and then not granted. Best effort on purpose: failing to
+// release must not turn a refusal into a thrown error, and the key expires with the period
+// anyway, so the worst case is the old behaviour rather than something new.
+async function releaseSharedReservation(provider,units,policy,env){
+  try{
+    const client=await redisClients.get(env.REDIS_URL);
+    if(!client)return;
+    await client.eval('local k=KEYS[1]; if redis.call("EXISTS",k)==1 then local n=tonumber(redis.call("GET",k) or "0"); local d=tonumber(ARGV[1]); if n-d<0 then redis.call("SET",k,"0") else redis.call("INCRBYFLOAT",k,-d) end end; return 1',
+      {keys:[`autonomos:free-quota:${provider}:${periodKey(policy)}`],arguments:[String(units)]});
+  }catch{}
 }
 const redisClients=new Map();
 async function reserveShared(provider,units,policy,env){
