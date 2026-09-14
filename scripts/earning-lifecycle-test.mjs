@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {AutonomOSStore} from '../src/autonomos/store.js';
-import {JobRegistry,classifyFailure} from '../src/autonomos/job-registry.js';
+import {JobRegistry,classifyJobFailure} from '../src/autonomos/job-registry.js';
 import {classifyOpportunity} from '../src/autonomos/capabilities.js';
 import {evaluateDeliverable} from '../src/autonomos/qa-engine.js';
 import {buildAcceptanceContract,validateAcceptanceContract} from '../src/autonomos/acceptance-engine.js';
@@ -17,8 +17,8 @@ const store=new AutonomOSStore(root);
 const job={source:'dealwork',externalId:'one',title:'Fix bug',description:'Fix addition and run tests',budgetUsd:10,currency:'USDC'};
 try{
 await test('Tool, auth, stop and connection errors never bury a marketplace job',()=>{
-  for(const error of ['tool_not_found','tool_not_available','sandbox expired','connection closed','token expired','job_cancelled_by_emergency_stop','delivery_failed:http_404'])assert.equal(classifyFailure(error).permanent,false,error);
-  assert.equal(classifyFailure('job closed',{phase:'claim'}).permanent,true);
+  for(const error of ['tool_not_found','tool_not_available','sandbox expired','connection closed','token expired','job_cancelled_by_emergency_stop','delivery_failed:http_404'])assert.equal(classifyJobFailure(error).permanent,false,error);
+  assert.equal(classifyJobFailure('job closed',{phase:'claim'}).permanent,true);
 });
 await test('Retry backoff survives changed metadata and process restart',()=>{
  const r=new JobRegistry({store});r.observe(job);r.markRetry(job,{retryAfter:'2099-01-01T00:00:00Z'});

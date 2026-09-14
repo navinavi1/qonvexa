@@ -40,7 +40,7 @@ import { ledgerEntry, appendUniqueLedgerEntry } from './financial-ledger.js';
 import { TaskAgentRuntime } from './task-agent-runtime.js';
 import { buildAcceptanceContract, validateAcceptanceContract, buildEvidencePack } from './acceptance-engine.js';
 import { buildLearningSnapshot, recommendActions, scoreOpportunity, createJobIdentity, canTransition, nextTrackedJobStatus } from './agency-intelligence.js';
-import { JobRegistry, classifyFailure } from './job-registry.js';
+import { JobRegistry, classifyJobFailure } from './job-registry.js';
 
 // Whether a processMarketplaceOpportunity() result should be reported as ok:true to a
 // durable dispatcher (Trigger.dev), whose own retry only makes sense before
@@ -927,7 +927,7 @@ async refreshTreasury(){
       claimAttempts[key]={count:attempts,lastAttemptAt:new Date().toISOString(),reason:claim.reason||''};store.writeJson('claim-attempts.json',claimAttempts);
       if(terminal){
         delete claimAttempts[key];store.writeJson('claim-attempts.json',claimAttempts);
-        const failure=classifyFailure(claim.reason||'claim_failed',{phase:'claim'});
+        const failure=classifyJobFailure(claim.reason||'claim_failed',{phase:'claim'});
         if(failure.permanent&&failure.owner!=='our_system'){
           handled.add(key);persistSet('handled-opportunities.json',handled);
           jobRegistry.markPermanent(op,{owner:failure.owner,reasonCode:failure.reasonCode,reason:claim.reason||'claim_failed'});
@@ -942,7 +942,7 @@ async refreshTreasury(){
           jobRegistry.markPolicyHold(op,{owner:failure.owner||'market',reasonCode:failure.reasonCode||'claim_failure_hold',reason:claim.reason||'claim_failed',retryAfter:new Date(Date.now()+6*60*60_000).toISOString()});
         }
       }else{
-        const failure=classifyFailure(claim.reason||'claim_failed',{phase:'claim'});
+        const failure=classifyJobFailure(claim.reason||'claim_failed',{phase:'claim'});
         jobRegistry.markRetry(op,{owner:failure.owner,reasonCode:failure.reasonCode,reason:claim.reason||'claim_failed',attempts,retryAfter:new Date(Date.now()+retryDelayMs(CLAIM_RETRY_BACKOFF_MS,attempts,6*60*60_000)).toISOString()});
       }
       appendJobStatus({id:jobId,source:op.source,externalId:op.externalId,title:op.title,budgetUsd:op.budgetUsd,currency:op.currency,status:'claim_failed',attempts,terminal,at:new Date().toISOString(),reason:claim.reason||''});
@@ -1015,7 +1015,7 @@ async refreshTreasury(){
       executionAttempts[key]={count:Number(previous.count||0)+1,lastAttemptAt:new Date().toISOString(),reason:String(error?.message||error).slice(0,220)};
       recordIfPlatformSideFailure(key,error?.message||error);
       store.writeJson('execution-attempts.json',executionAttempts);
-      const failure=classifyFailure(error,{phase:'execution'});
+      const failure=classifyJobFailure(error,{phase:'execution'});
       if(failure.permanent&&failure.owner!=='our_system'){
         jobRegistry.markPermanent(op,{owner:failure.owner,reasonCode:failure.reasonCode,reason:String(error?.message||error)});
         clearInFlightJob(jobId);
@@ -1166,7 +1166,7 @@ async refreshTreasury(){
         store.writeJson('learning-pending.json',pendingLearning);
         event('market_job_delivered',{jobId,source:op.source,externalId:op.externalId,transactionId:delivery.transactionId||'',recovered:true});jobRegistry.setState(op,'delivered',{reasonCode:'delivery_accepted',transactionId:delivery.transactionId||'',deliveredAt:new Date().toISOString(),recovered:true});clearInFlightJob(jobId);delete executionAttempts[key];store.writeJson('execution-attempts.json',executionAttempts);recovered++;
       }catch(error){
-        failed++;const nextCount=Number(attempt.count||0)+1;executionAttempts[key]={count:nextCount,lastAttemptAt:new Date().toISOString(),reason:String(error?.message||error).slice(0,220)};store.writeJson('execution-attempts.json',executionAttempts);recordIfPlatformSideFailure(key,error?.message||error);const failure=classifyFailure(error,{phase:'execution'});const externalPermanent=failure.permanent&&failure.owner!=='our_system';const manual=nextCount>=MAX_EXECUTION_ATTEMPTS&&!externalPermanent;if(externalPermanent){jobRegistry.markPermanent(op,{owner:failure.owner,reasonCode:failure.reasonCode,reason:String(error?.message||error)});clearInFlightJob(jobId);}else{if(manual&&failure.owner==='our_system')jobRegistry.markSystemBlocked(op,{reasonCode:failure.reasonCode||'execution_retry_limit_attention',reason:String(error?.message||error),attempts:nextCount,capabilityVersion:capabilityVersion()});else jobRegistry.markRetry(op,{owner:failure.owner,reasonCode:failure.reasonCode,reason:String(error?.message||error),attempts:nextCount,retryAfter:manual?'':new Date(Date.now()+retryDelayMs(EXECUTION_RETRY_BACKOFF_MS,nextCount,24*60*60_000)).toISOString(),phase:'execution'});writeInFlightJob(jobId,{...record,lastError:String(error?.message||error).slice(0,220),retryCount:nextCount,lastFailedAt:new Date().toISOString(),status:manual?'system_blocked':'retry_pending',...(manual?{manualAttentionAt:new Date().toISOString()}:{})});}
+        failed++;const nextCount=Number(attempt.count||0)+1;executionAttempts[key]={count:nextCount,lastAttemptAt:new Date().toISOString(),reason:String(error?.message||error).slice(0,220)};store.writeJson('execution-attempts.json',executionAttempts);recordIfPlatformSideFailure(key,error?.message||error);const failure=classifyJobFailure(error,{phase:'execution'});const externalPermanent=failure.permanent&&failure.owner!=='our_system';const manual=nextCount>=MAX_EXECUTION_ATTEMPTS&&!externalPermanent;if(externalPermanent){jobRegistry.markPermanent(op,{owner:failure.owner,reasonCode:failure.reasonCode,reason:String(error?.message||error)});clearInFlightJob(jobId);}else{if(manual&&failure.owner==='our_system')jobRegistry.markSystemBlocked(op,{reasonCode:failure.reasonCode||'execution_retry_limit_attention',reason:String(error?.message||error),attempts:nextCount,capabilityVersion:capabilityVersion()});else jobRegistry.markRetry(op,{owner:failure.owner,reasonCode:failure.reasonCode,reason:String(error?.message||error),attempts:nextCount,retryAfter:manual?'':new Date(Date.now()+retryDelayMs(EXECUTION_RETRY_BACKOFF_MS,nextCount,24*60*60_000)).toISOString(),phase:'execution'});writeInFlightJob(jobId,{...record,lastError:String(error?.message||error).slice(0,220),retryCount:nextCount,lastFailedAt:new Date().toISOString(),status:manual?'system_blocked':'retry_pending',...(manual?{manualAttentionAt:new Date().toISOString()}:{})});}
         appendJobStatus({id:jobId,source:op.source,externalId:op.externalId,title:op.title,budgetUsd:op.budgetUsd,currency:op.currency,status:manual?'manual_attention':'execution_failed',workerId:worker.id,error:String(error?.message||error).slice(0,300),at:new Date().toISOString(),recovered:true,retryCount:nextCount});incrementWorkerError(worker);event(manual?'market_job_manual_attention':'market_job_failed',{jobId,source:op.source,externalId:op.externalId,error:String(error?.message||error).slice(0,220),recovered:true,retryCount:nextCount});if(manual)manualAttention++;
       }finally{activeJobs.delete(jobId);setWorkerStatus(worker,'idle');}
     }

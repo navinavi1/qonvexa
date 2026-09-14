@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { AutonomOSStore } from '../src/autonomos/store.js';
-import { JobRegistry, classifyFailure } from '../src/autonomos/job-registry.js';
+import { JobRegistry, classifyJobFailure } from '../src/autonomos/job-registry.js';
 
 const root=fs.mkdtempSync(path.join(os.tmpdir(),'autonomos-job-registry-'));
 try{
@@ -120,8 +120,8 @@ try{
   const paidRestarted=new JobRegistry({store:repairStore});
   assert.equal(paidRestarted.get(paid)?.status,'paid','paid state must survive restart without a stale tombstone overriding it');
 
-  assert.deepEqual(classifyFailure('http_409 already claimed',{phase:'claim'}),{owner:'market',permanent:true,reasonCode:'market_job_no_longer_available'});
-  assert.equal(classifyFailure('llm_empty_response',{phase:'execution'}).owner,'our_system');
-  assert.equal(classifyFailure('network timeout',{phase:'claim'}).permanent,false);
+  assert.deepEqual(classifyJobFailure('http_409 already claimed',{phase:'claim'}),{owner:'market',permanent:true,reasonCode:'market_job_no_longer_available'});
+  assert.equal(classifyJobFailure('llm_empty_response',{phase:'execution'}).owner,'our_system');
+  assert.equal(classifyJobFailure('network timeout',{phase:'claim'}).permanent,false);
   console.log('job-registry-test: PASS');
 } finally { fs.rmSync(root,{recursive:true,force:true}); }

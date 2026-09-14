@@ -273,7 +273,7 @@ export class JobRegistry {
       if(['delivered','paid','settled','completed','bid_submitted','claimed'].includes(latestStatus)){
         this.setState(legacyOpportunity(latest),latestStatus,{reasonCode:`legacy_${latestStatus}_job`,reason:'Preserved legacy ownership; never claim again.'});continue;
       }
-      const failure=classifyFailure(latest.error||latest.reason||latest.status||'',{phase:'execution'});
+      const failure=classifyJobFailure(latest.error||latest.reason||latest.status||'',{phase:'execution'});
       if(failure.owner==='our_system'){
         const op=legacyOpportunity(latest);this.observe(op);this.markSystemBlocked(op,{reasonCode:failure.reasonCode,reason:latest.error||latest.reason||latest.status||'legacy system failure'});systemBlocked++;
       }else if(!failure.permanent){
@@ -312,7 +312,12 @@ function refreshMetadata(row,opportunity){return {...row,title:String(opportunit
 function legacyOpportunity(row={}){return {source:String(row.source||'unknown'),externalId:String(row.externalId||row.id||''),title:String(row.title||''),budgetUsd:Number(row.budgetUsd||0),currency:String(row.currency||''),claimMode:String(row.claimMode||''),deadline:String(row.deadline||''),description:String(row.description||'')};}
 export function jobIdentity(opportunity={}){return `${String(opportunity.source||'unknown')}:${String(opportunity.externalId||'')}`;}
 export function jobFingerprint(opportunity={}){const stable=[opportunity.source,opportunity.externalId,opportunity.title,opportunity.description,Number(opportunity.budgetUsd||0).toFixed(6),opportunity.currency,opportunity.deadline,opportunity.claimMode].map(v=>String(v??'').trim()).join('\u241f');return crypto.createHash('sha256').update(stable).digest('hex').slice(0,24);}
-export function classifyFailure(errorLike,{phase='execution'}={}){
+// Named for what it classifies. There were two exported `classifyFailure` functions in this
+// codebase with incompatible shapes -- action-journal's returns {type,retryable} from an HTTP
+// status, this one returns {owner,reasonCode,permanent} from an error and a phase. Every
+// importer happened to take the right one, but importing the wrong one fails silently:
+// undefined properties, no error, wrong decisions about who owns a failure.
+export function classifyJobFailure(errorLike,{phase='execution'}={}){
   const text=String(errorLike?.message||errorLike||'').toLowerCase();
   const result=(owner,reasonCode,permanent=false)=>({owner,reasonCode,permanent});
   if(/execution_checkpoint_uncertain|submission_uncertain|ack_missing/.test(text))return result('our_system','external_effect_requires_reconciliation');

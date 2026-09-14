@@ -1,5 +1,5 @@
 import { isRetiredMarket } from './retired-markets.js';
-import {classifyFailure} from './job-registry.js';
+import {classifyJobFailure} from './job-registry.js';
 
 // Only operational counters/codes go to provider logs. Job content, credentials,
 // wallet addresses, callback signatures and provider response bodies stay out.
@@ -9,7 +9,7 @@ const FAILURE_CODES=['job_spend_limit','too_short','refusal_or_placeholder','llm
 export function executionFailureCodes(value){
   const message=String(value?.message||value||'').toLowerCase();
   const codes=FAILURE_CODES.filter(key=>message.includes(key));
-  return codes.length?codes:[classifyFailure(message).reasonCode];
+  return codes.length?codes:[classifyJobFailure(message).reasonCode];
 }
 const TOOL_NAMES=new Set(['run_python','run_shell','web_search','web_scrape','browser_task','store_artifact','open_pull_request','app_tool_search','app_action','coderabbit_review','deploy_webhook']);
 export function executionEvidenceSummary(deliverable={}){
@@ -82,7 +82,7 @@ export function executionDiagnostics({config={},state={},registry=[],inFlight=[]
         add(blockers,reason);
         if(String(reason).startsWith('skill_mismatch:'))for(const tool of String(reason).slice(15).split(','))add(missingTools,tool);
       }
-      if(['system_blocked','retry','uncertain'].includes(row.status))add(blockers,row.reasonCode||classifyFailure(row.reason).reasonCode);
+      if(['system_blocked','retry','uncertain'].includes(row.status))add(blockers,row.reasonCode||classifyJobFailure(row.reason).reasonCode);
     }
     return {source:code(source),enabled:Boolean(settings.enabled),mode:code(settings.mode),walletConfirmed:Boolean(settings.walletConfirmed),
       authenticated:Boolean(health.authenticated),healthy:health.ok===true,signals:Number(health.count||0),
@@ -106,7 +106,7 @@ export function logExecutionEvent(logger,type,detail={}){
     if(typeof detail[field]==='number'||typeof detail[field]==='boolean')row[field]=detail[field];
   }
   if(detail.error||detail.reason){
-    const failure=classifyFailure(detail.error||detail.reason);
+    const failure=classifyJobFailure(detail.error||detail.reason);
     row.failureCode=failure.reasonCode;row.failureOwner=failure.owner;
     row.failureDetails=executionFailureCodes(detail.error||detail.reason);
     const http=String(detail.error||detail.reason).match(/(?:http[_ :]|status[= :]+)([45]\d\d)/i);

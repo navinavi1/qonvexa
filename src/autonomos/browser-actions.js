@@ -24,10 +24,20 @@ export async function browserAction(args,env,signal,sandboxSession){
   const r=await e2bRunShell({command:'node /home/user/browser-workflow.cjs',files,collectPaths},env,signal,sandboxSession);
   if(!r.ok){if(intent)journal.finish(intent.id,'uncertain');return{...r,uncertain:effect};}
   const result={...JSON.parse(r.stdout.trim().split('\n').at(-1)),artifacts:r.artifacts||[],provider:'current_chromium'};
-  // Session state is private runtime data, never an artifact or model tool response.
-  const sbx=await sandboxSession.get(signal),state=JSON.parse(await sbx.files.read('/home/user/browser-session.json'));
-  store.writeSecretJson(file,{state,expiresAt:Date.now()+7*86400000});
+  // Confirm the action FIRST. Reading the saved cookies back is an optimisation for the next
+  // run; it used to sit between the successful workflow and the confirmation, so any hiccup
+  // reading that one file -- a closed sandbox, a read timeout -- threw into the catch below,
+  // discarded the result, and marked as 'uncertain' an action that had already happened on
+  // someone else's site. Worse, the intent stayed open, so every later browser action against
+  // that host refused with browser_action_requires_reconciliation until a human intervened.
+  // A cache miss must never rewrite what we know about an external effect.
   if(intent)journal.finish(intent.id,'confirmed',{url:result.url,result});
+  // Session state is private runtime data, never an artifact or model tool response.
+  try{
+    const sbx=await sandboxSession.get(signal);
+    const state=JSON.parse(await sbx.files.read('/home/user/browser-session.json'));
+    store.writeSecretJson(file,{state,expiresAt:Date.now()+7*86400000});
+  }catch{/* next run starts without the cookie jar; the action itself stands */}
   return result;
  }catch(e){if(intent)journal.finish(intent.id,'uncertain');return{ok:false,error:String(e.message).slice(0,180),uncertain:effect};}
 }

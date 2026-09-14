@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { JobRegistry, classifyFailure } from '../src/autonomos/job-registry.js';
+import { JobRegistry, classifyJobFailure } from '../src/autonomos/job-registry.js';
 import { buildAcceptanceContract, buildPhaseAcceptanceContract } from '../src/autonomos/acceptance-engine.js';
 import { runHandoffChain } from '../src/autonomos/orchestration.js';
 import { normalizeConfig } from '../src/autonomos/policy-engine.js';
@@ -87,10 +87,10 @@ assert.equal(current.maxConcurrentJobs,6);
 assert.equal(current.maxJobsPerCycle,10);
 assert.equal(current.maxPaidProcurementUsd,10);
 
-const buyerUnfunded=classifyFailure('http_422:INSUFFICIENT_BALANCE:Job poster wallet insufficient funds, available 0.00',{phase:'claim'});
+const buyerUnfunded=classifyJobFailure('http_422:INSUFFICIENT_BALANCE:Job poster wallet insufficient funds, available 0.00',{phase:'claim'});
 assert.equal(buyerUnfunded.reasonCode,'buyer_funding_unavailable');
 assert.equal(buyerUnfunded.permanent,false,'buyer funding can change, so it must not create a permanent tombstone');
-const invalidDealwork=classifyFailure('http_400:BAD_REQUEST:budgetMax (50.0000) is less than fixedPrice x maxConcurrent (75.00). Job is under-funded',{phase:'claim'});
+const invalidDealwork=classifyJobFailure('http_400:BAD_REQUEST:budgetMax (50.0000) is less than fixedPrice x maxConcurrent (75.00). Job is under-funded',{phase:'claim'});
 assert.equal(invalidDealwork.reasonCode,'market_job_configuration_invalid');
 assert.equal(invalidDealwork.permanent,false);
 
