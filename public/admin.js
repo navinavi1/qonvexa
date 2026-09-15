@@ -175,6 +175,10 @@ function renderReadiness(){
 
 
 function renderAutonomOS(){
+  // A failed load used to leave the previous cycle's figures standing, looking current. The
+  // status line said otherwise, but nobody reads a status line before they read a number.
+  const panel=document.querySelector('[data-panel="autonomos"]');
+  if(panel)panel.classList.toggle('is-stale',!autonomosData);
   if(!autonomosData)return;
   const a=autonomosData;
   window.renderNewMarketplaces?.(a.newMarketplaces);
@@ -480,7 +484,11 @@ function matches(item,q){
   walk(item,0);
   return haystack.join(' ').toLowerCase().includes(q);
 }
-function pretty(v=''){return String(v).replaceAll('_',' ').replace(/\b\w/g,c=>c.toUpperCase())}
+// Interpolated straight into innerHTML in six places. Every value that reaches it today is
+// set by the server or checked against an allowlist, so nothing is exploitable now -- but a
+// helper that looks like a formatter and behaves like an HTML sink is a trap for whoever adds
+// the next field. It only ever produces display text, so escaping costs nothing.
+function pretty(v=''){return esc(String(v).replaceAll('_',' ').replace(/\b\w/g,c=>c.toUpperCase()))}
 function esc(v=''){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 function link(url=''){return /^https?:\/\//i.test(String(url))?`<a href="${esc(url)}" target="_blank" rel="noopener noreferrer">${esc(url)}</a>`:esc(url)}
 function formatDate(v){if(!v)return'';const d=new Date(v);return Number.isNaN(d.getTime())?v:d.toLocaleString()}

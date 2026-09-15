@@ -84,3 +84,9 @@
    overwritten on the next read. Shown as readings now, not controls. */
 .derived-field input[readonly]{opacity:.6;cursor:default;background:rgba(255,255,255,.02)}
 .derived-note{display:block;margin-top:.3rem;font-size:.7rem;color:#8fa3bf}
+
+/* The AutonomOS panel when its data could not be refreshed. Numbers that are no longer
+   current must not look current: dimmed, non-interactive, and labelled. */
+[data-panel="autonomos"].is-stale{opacity:.45;filter:grayscale(.6)}
+[data-panel="autonomos"].is-stale::before{content:"These figures could not be refreshed and may be out of date.";display:block;margin-bottom:12px;padding:10px 14px;border-radius:8px;background:#5a1d1d;color:#ffd9d9;font-weight:600}
+[data-panel="autonomos"].is-stale button,[data-panel="autonomos"].is-stale input,[data-panel="autonomos"].is-stale select{pointer-events:none}

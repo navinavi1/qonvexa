@@ -198,5 +198,29 @@ for(const name of ['autonomos-money-report.json','autonomos-global-feed.json']){
     'and drops them from the payload instead of sending values that will be ignored');
 }
 
+// pretty() is interpolated straight into innerHTML in six places. Nothing routed through it
+// today is attacker-controlled, but a formatter that is also an HTML sink is a trap for the
+// next field someone adds, and the cost of closing it is one function call.
+{
+  const rendered=window.eval('pretty("<img src=x onerror=alert(1)>")');
+  ok(!/<img/.test(rendered),'pretty() escapes what it formats: '+rendered);
+  ok(/&lt;/i.test(rendered),'and escapes it the usual way (it also title-cases, hence the loose match)');
+  eq(window.eval('pretty("awaiting_payment")'),'Awaiting Payment','while still formatting ordinary values');
+}
+
+// When the AutonomOS data cannot be refreshed the panel used to keep the previous cycle's
+// numbers on screen, looking current. The status line said otherwise; nobody reads a status
+// line before they read a number.
+{
+  const panel=doc.querySelector('[data-panel="autonomos"]');
+  ok(panel,'the AutonomOS panel exists');
+  window.autonomosData=null;
+  window.eval('renderAutonomOS()');
+  ok(panel.classList.contains('is-stale'),'a failed refresh marks the panel stale');
+  const css=fs.readFileSync(path.join(publicDir,'admin.css'),'utf8');
+  ok(/\[data-panel="autonomos"\]\.is-stale/.test(css),'and the stylesheet dims it');
+  ok(/could not be refreshed/.test(css),'and says so in words, not just in colour');
+}
+
 stop();
 console.log('dashboard-render-test OK ('+checks+' checks, '+tiles.length+' tiles, live server, no JS errors)');
