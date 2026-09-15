@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
 import { evaluateDeliverable } from '../src/autonomos/qa-engine.js';
+import { parseLlmJson } from '../src/autonomos/llm-json.js';
+import fs from 'node:fs';
 
 const unavailable={enabled:false};
 let qa=await evaluateDeliverable({title:'Translate this paragraph to Spanish',description:'Return the translated text.'},{content:'Este es un texto traducido suficientemente largo para ser una entrega real.',evidence:{toolCalls:[]}},{llm:unavailable,env:{AUTONOMOS_QA_INFRA_FALLBACK:'true'}});
@@ -44,6 +46,34 @@ assert.equal(qa.ok,false);
   const rejected=await evaluateDeliverable(task,delivered,{llm:failing,env:{}});
   assert.equal(rejected.ok,false,'a rejection inside a bare fence is still a rejection');
   assert.deepEqual(rejected.reasons,['fabricated claims'],'and its reasons survive');
+}
+
+// Unwrapping a model's JSON was written three times in three different ways, and two were
+// wrong in the same manner. One implementation now, and it has to survive what models
+// actually send.
+{
+  const verdict={score:0.9,pass:true};
+  for(const [label,text] of [
+    ['plain','{"score":0.9,"pass":true}'],
+    ['tagged fence','```json\n{"score":0.9,"pass":true}\n```'],
+    ['bare fence','```\n{"score":0.9,"pass":true}\n```'],
+    ['preamble','Sure — here you go:\n```\n{"score":0.9,"pass":true}\n```'],
+    ['trailing prose','{"score":0.9,"pass":true}\n\nLet me know if you need more.'],
+    ['array','[1,2,3]']
+  ]){
+    const parsed=parseLlmJson(text);
+    assert.ok(parsed,`${label} parses`);
+    if(label!=='array')assert.equal(parsed.score,verdict.score,`${label} keeps its values`);
+  }
+  assert.deepEqual(parseLlmJson('[1,2,3]'),[1,2,3],'an array answer is not mangled into an object');
+  for(const empty of ['','   ','not json at all',null,undefined])
+    assert.equal(parseLlmJson(empty),null,'unparsable input returns null rather than throwing');
+
+  // And there is exactly one implementation left.
+  const copies=fs.readdirSync(new URL('../src/autonomos/', import.meta.url))
+    .filter(f=>/\.m?js$/.test(f)&&f!=='llm-json.js')
+    .filter(f=>/replace\(\/\^```/.test(fs.readFileSync(new URL('../src/autonomos/'+f, import.meta.url),'utf8')));
+  assert.deepEqual(copies,[],'no module strips a code fence by hand any more');
 }
 
 console.log('QA RESILIENCE: PASS');

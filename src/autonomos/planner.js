@@ -1,4 +1,5 @@
 import { resolveLlmEndpoint } from './llm-router.js';
+import { parseLlmJson } from './llm-json.js';
 
 export async function planJob(opportunity,{llm=null,env=process.env,abortSignal=null,memoryContext=''}={}){
   const fallback=()=>({goal:String(opportunity.title||'Complete job'),steps:[{id:'inspect',role:'planner',doneWhen:'requirements and acceptance criteria understood'},{id:'execute',role:roleFor(opportunity),doneWhen:'deliverable produced and verified with real tools when needed'},{id:'qa',role:'qa-evaluator',doneWhen:'quality gate passes'},{id:'deliver',role:'job-router',doneWhen:'marketplace accepts submission'}],source:'deterministic'});
@@ -26,4 +27,4 @@ export async function planJob(opportunity,{llm=null,env=process.env,abortSignal=
   if(abortSignal?.aborted)throw new Error('job_cancelled_by_emergency_stop');return fallback();
 }
 function roleFor(op){const h=`${op.category||''} ${op.title||''}`.toLowerCase();return /code|bug|repo|api|javascript|python/.test(h)?'code-worker':/research|analysis|data|website/.test(h)?'research-worker':/write|content|translate/.test(h)?'content-worker':'automation-worker'}
-function parseJson(value){try{return JSON.parse(String(value||'').replace(/^```json\s*|```$/g,''))}catch{return null}}
+const parseJson=value=>parseLlmJson(value);
