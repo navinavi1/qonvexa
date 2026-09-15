@@ -5,6 +5,15 @@ const ARTIFACT_REQUIRED=/\b(pdf|docx|xlsx|csv|zip|pptx|downloadable|attachment|d
 
 // A compact, QA-readable proof record: which tools were actually called and what really
 // happened — separate from the deliverable's own prose CLAIMS about what it did.
+// Models wrap JSON in a fence with or without a language tag, and sometimes add a sentence
+// before it. Take the outermost balanced object rather than trusting the wrapper.
+function unfence(text){
+  const raw=String(text||'').trim().replace(/^```[a-z]*\s*/i,'').replace(/\s*```$/,'').trim();
+  if(raw.startsWith('{'))return raw;
+  const start=raw.indexOf('{'),end=raw.lastIndexOf('}');
+  return start>=0&&end>start?raw.slice(start,end+1):raw;
+}
+
 export function buildProofLog(toolCalls){
   if(!Array.isArray(toolCalls)||!toolCalls.length)return 'No tools were called during execution — the deliverable is unsupported prose only.';
   return toolCalls.map((call,i)=>{
@@ -43,7 +52,11 @@ export async function evaluateDeliverable(opportunity,deliverable,{llm=null,abor
       return failOpen?{ok:true,score:.7,reasons:['llm_qa_unavailable_fail_open'],mode:'policy_fail_open'}:{ok:false,score:0,reasons:['llm_qa_unavailable'],mode:'fail_closed'};
     }
     try{
-      const parsed=JSON.parse(String(result.text||'').replace(/^```json\s*|```$/g,''));
+      // The old strip only removed a fence tagged ```json. A bare ``` fence -- which models
+      // emit constantly -- left the opening backticks in place, JSON.parse threw, the grader
+      // was called a second time, and the job fell through to the infrastructure fallback.
+      // Two paid completions spent, and the real verdict discarded, over three characters.
+      const parsed=JSON.parse(unfence(result.text));
       const score=Math.max(0,Math.min(1,Number(parsed.score||0)));
       return{ok:parsed.pass===true&&Number.isFinite(score)&&score>=0.72,score,reasons:Array.isArray(parsed.reasons)?parsed.reasons.slice(0,8):[],mode:'llm_evaluator'};
     }catch{
