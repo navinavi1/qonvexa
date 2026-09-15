@@ -19,4 +19,3 @@ export function buildAgentState(previous = {}) {
     return {...agent,status:old.status||'idle',tasksCompleted:Number(old.tasksCompleted||0),revenueUsd:Number(old.revenueUsd||0),costUsd:Number(old.costUsd||0),errors:Number(old.errors||0),lastActiveAt:old.lastActiveAt||'',createdAt:old.createdAt||now};
   });
 }
-export function agentMap(agents) {return Object.fromEntries((agents || []).map(agent => [agent.id, agent]));}

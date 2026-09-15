@@ -39,7 +39,6 @@ export async function prepareExecutionTools(opportunity,capability,env,options={
 export function startResourceRecovery(env=process.env,logger=console){
   let pending=false;return onResourceUnavailable(event=>{if(event.root!==resourceRoot(env)||pending)return;pending=true;queueMicrotask(async()=>{try{const gaps=event.provider==='r2'?['artifact_storage']:event.provider==='composio'?['web_search','artifact_storage']:event.provider==='coderabbit'?[]:['web_search'];const results=[];for(const gap of gaps)results.push({gap,...await recoverFreeCapability(gap,env)});logger.info?.('[ResourceRecovery] '+JSON.stringify({provider:event.provider,reason:event.reason,alternatives:results,keepOtherJobsRunning:true}));}catch(error){logger.warn?.('[ResourceRecovery] '+String(error.message));}finally{pending=false;}});});
 }
-export function recoveryRecipes(){return Object.keys(RECIPES);}
 
 async function discoverFreeReplacements(gap,env,signal){
   const file=path.join(resourceRoot(env),'free-replacement-candidates.json');let saved={};try{saved=JSON.parse(fs.readFileSync(file,'utf8'));}catch{}

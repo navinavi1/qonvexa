@@ -379,12 +379,18 @@ export async function executeCodingJob(
                   );
                 else await run(`rm -f -- ${quote("/home/user/repo/" + p)}`);
               }
-              let baseline;
+              // A sandbox hiccup during the baseline run left `baseline` undefined, and the
+              // very next line read .stdout off it: the job died with a TypeError instead of
+              // saying the regression could not be verified. The restore in `finally` ran
+              // either way, so the only thing lost was the explanation.
+              let baseline = null;
               try {
                 baseline = await run(
                   `cd /home/user/repo && CI=1 ${regressionCommand} ${regression.map(quote).join(" ")}`,
                   300000,
                 );
+              } catch (error) {
+                baseline = { exitCode: -1, stdout: "", stderr: String(error?.message || error) };
               } finally {
                 for (const [p, content] of changed)
                   await sandbox.files.write("/home/user/repo/" + p, content);
@@ -395,7 +401,8 @@ export async function executeCodingJob(
                 String(baseline.stderr || "");
               if (
                 baseline.exitCode === 0 ||
-                !/AssertionError|AssertionError|Expected:|Assertion|assert |FAIL|FAILED/.test(
+                // AssertionError was listed twice; `Assertion` and `assert ` already cover it.
+                !/AssertionError|Expected:|Assertion|assert |FAIL|FAILED/.test(
                   text,
                 ) ||
                 /Cannot find module|ModuleNotFoundError|SyntaxError/.test(text)

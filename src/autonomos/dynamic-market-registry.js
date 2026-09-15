@@ -1,7 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { isRetiredMarket } from './retired-markets.js';
-export const MARKET_STATES=Object.freeze(['DISCOVERED','INSPECTING','REGISTRATION_READY','REGISTERED','DISCOVER_READY','APPLICATION_READY','CLAIM_READY','DELIVERY_READY','PAYOUT_READY','FULL_AUTO_READY','OWNER_ACTION_REQUIRED','NO_REAL_WORK','PAID_ONLY','AUTOMATION_FORBIDDEN','BROKEN','RETIRED']);
 const REQUIRED=['authentication','jobs','details','application','execution','delivery','status','payout'];
 export function deriveMarketState(row={}){
  if(isRetiredMarket(row))return 'RETIRED';

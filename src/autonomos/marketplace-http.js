@@ -129,21 +129,6 @@ export function arrayEnvelope(body, keys) {
   }
   throw new Error("schema_drift:list_missing");
 }
-export function objectEnvelope(body) {
-  const value = body?.data ?? body;
-  if (!value || typeof value !== "object" || Array.isArray(value))
-    throw new Error("schema_drift:object_missing");
-  return value;
-}
-export function requireFields(row, fields) {
-  if (
-    fields.some(
-      (k) => row?.[k] === undefined || row?.[k] === null || row?.[k] === "",
-    )
-  )
-    throw new Error("schema_drift:required_fields");
-  return row;
-}
 export function publicUrl(value) {
   try {
     const u = new URL(String(value));
@@ -151,7 +136,4 @@ export function publicUrl(value) {
   } catch {
     return "";
   }
-}
-export function solanaAddress(value) {
-  return /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(String(value || ""));
 }

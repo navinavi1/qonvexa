@@ -38,6 +38,3 @@ export function readNdjsonCached(file) {
   return rows.slice();
 }
 
-export function invalidateNdjsonCache(file) {
-  if (file) cache.delete(file); else cache.clear();
-}

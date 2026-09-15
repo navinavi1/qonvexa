@@ -86,10 +86,6 @@ export async function readTreasuryBalances({address,env=process.env,timeoutMs=80
   };
 }
 
-export async function readBaseBalances({address,rpcUrl='https://mainnet.base.org',timeoutMs=8000}={}){
-  const env={...process.env,AUTONOMOS_BASE_RPC_URL:rpcUrl,AUTONOMOS_EVM_CHAINS_JSON:''};
-  return readTreasuryBalances({address,env,timeoutMs});
-}
 
 async function readChain({address,chain,timeoutMs}){
   try{

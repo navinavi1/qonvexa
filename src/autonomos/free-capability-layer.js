@@ -3,9 +3,6 @@ import { unifiedCapabilityContext } from './capability-registry.js';
 // This module does not buy tools, enable subscriptions, or bypass identity/security gates.
 // It expands what agents may attempt using already-connected hard-capped/free resources.
 
-export const FREE_CONNECTED_APPS=Object.freeze([
-  'gmail','google_drive','google_sheets','google_calendar','github','slack','notion','figma','canva','vercel','netlify'
-]);
 
 export const FREE_SKILL_MATRIX=Object.freeze({
   'code-analysis': ['e2b_python','e2b_shell','github_pr'],
@@ -45,30 +42,5 @@ const CATEGORY_TO_SKILL=Object.freeze({
 
 export function freeCapabilityContext(env=process.env){return unifiedCapabilityContext(env);}
 
-export function normalizeOpportunityForFreeSkills(op={}){
-  const category=String(op.category||'').toLowerCase().trim();
-  const mapped=CATEGORY_TO_SKILL[category]||category||'general-digital';
-  const description=String(op.description||'');
-  const title=String(op.title||'');
-  const hay=`${category} ${title} ${description}`.toLowerCase();
-  let normalizedCategory=mapped;
-  if(/\b(?:logo|banner|thumbnail|simple graphic|resize image|crop image|image cleanup)\b/i.test(hay))normalizedCategory='document-generation';
-  if(/\b(?:video trim|cut video|merge video|audio cleanup|convert audio|convert video|subtitle burn)\b/i.test(hay))normalizedCategory='code-analysis';
-  if(/\b(?:seo audit|keyword list|on-page seo|meta description)\b/i.test(hay))normalizedCategory='web-research';
-  if(/\b(?:dashboard|reporting|data visualization|chart|analytics report)\b/i.test(hay))normalizedCategory='data-transform';
-  if(/\b(?:customer support|email support|reply to customers|inbox triage)\b/i.test(hay))normalizedCategory='app-automation';
-  if(/\b(?:browser automation|web app testing|screenshot|navigate (?:the )?(?:site|dashboard))\b/i.test(hay))normalizedCategory='browser-ops';
-  if(/\b(?:deploy|deployment|publish (?:the )?(?:site|app)|release to production)\b/i.test(hay))normalizedCategory='deploy';
-  return {...op,category:normalizedCategory,skills:[...(Array.isArray(op.skills)?op.skills:[]),mapped]};
-}
 
-export function freeSkillPlan(op={}){
-  const normalized=normalizeOpportunityForFreeSkills(op);
-  const skill=String(normalized.skills?.at(-1)||normalized.category||'general-digital');
-  return {skill,tools:FREE_SKILL_MATRIX[skill]||FREE_SKILL_MATRIX['general-digital'],normalized};
-}
 
-export function paidToolForbidden(name=''){
-  const n=String(name).toLowerCase();
-  return /premium|paid_search|paid_browser|purchase|subscription|connects|credits_purchase/.test(n);
-}
