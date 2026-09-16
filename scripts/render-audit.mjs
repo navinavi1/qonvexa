@@ -35,6 +35,19 @@ if (!/autonomos-\(\?:global-feed\|money-report\)[^\n]*requireAdmin/.test(server)
   throw new Error('The money/feed views must be behind requireAdmin.');
 }
 
+// CI installs the version in .node-version; Render builds with NODE_VERSION from render.yaml.
+// Two files, one answer -- and the whole reason a deploy can go red on a machine where the
+// tests were green is a difference nobody was looking at. They have to say the same thing.
+try {
+  const pinnedInYaml = /NODE_VERSION[\s\S]{0,40}?value:\s*"?([0-9.]+)/.exec(fs.readFileSync(path.join(root, 'render.yaml'), 'utf8'))?.[1];
+  const pinnedForCi = fs.readFileSync(path.join(root, '.node-version'), 'utf8').trim();
+  if (pinnedInYaml && pinnedForCi && pinnedInYaml !== pinnedForCi) {
+    throw new Error(`Node version split: .node-version says ${pinnedForCi}, render.yaml says ${pinnedInYaml}. CI would test one and the deploy would build the other.`);
+  }
+} catch (error) {
+  if (/Node version split/.test(String(error.message))) throw error;
+}
+
 // Two deploys were lost to code that behaved differently on the build machine than on mine.
 // The Node version is the remaining difference nothing else would surface: render.yaml pins
 // what actually runs the build, and a local run on another major is testing something else.
