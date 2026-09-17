@@ -52,9 +52,5 @@ async function loadOrder() {
     refresh.disabled = false;
   }
 }
-function pretty(v=''){ return String(v).replaceAll('_',' ').replace(/\b\w/g,c=>c.toUpperCase()); }
-function money(amount,currency='usd'){ try{return new Intl.NumberFormat('en-US',{style:'currency',currency:String(currency).toUpperCase()}).format(Number(amount||0)/100)}catch{return `$${Number(amount||0)/100}`}}
-function esc(v=''){return String(v).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
-function escAttr(v=''){return esc(v)}
 refresh?.addEventListener('click',loadOrder);
 loadOrder();

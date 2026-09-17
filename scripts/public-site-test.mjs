@@ -115,6 +115,9 @@ window.HTMLElement.prototype.scrollIntoView = function () {};
 // Stubbing them is about the test environment, not about the page: in a browser they exist.
 window.IntersectionObserver = class { observe() {} unobserve() {} disconnect() {} takeRecords() { return []; } };
 window.matchMedia = window.matchMedia || (query => ({ matches: false, media: query, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {} }));
+// The browser loads common.js before the page script; so must this, or the test runs
+// against a window the browser never produces.
+window.eval(fs.readFileSync(path.join(repo, 'public', 'common.js'), 'utf8'));
 window.eval(fs.readFileSync(path.join(repo, 'public', 'app.js'), 'utf8'));
 eq(errors.length, 0, `the page script runs clean: ${errors.join(' | ')}`);
 
@@ -203,6 +206,35 @@ eq(errors.length, 0, `nothing threw while driving the checkout: ${errors.join(' 
   eq(found.miniAudit.findings[0], 'Weak call to action', 'and the first one is intact');
   eq(found.miniAudit.findings[2], 'Slow contact form', 'and so is the last');
   eq(found.priceCents, charged, 'the price quoted here is the price charged');
+}
+
+// These helpers lived in three files as four implementations and had already drifted: pretty()
+// was made to escape in admin.js after it was found being interpolated into innerHTML, while
+// the identical copy in order.js -- feeding the order status card a customer sees -- was left
+// as it was. One implementation each, or the next fix reaches one page out of three.
+{
+  const shared = ['esc', 'escHtml', 'escAttr', 'pretty', 'money', 'formatMoney', 'formatDate', 'link'];
+  const scripts = ['app.js', 'admin.js', 'order.js', 'success.js', 'marketplaces.js']
+    .filter(name => fs.existsSync(path.join(repo, 'public', name)));
+  for (const name of shared) {
+    const owners = scripts.filter(file =>
+      new RegExp(`^(?:function ${name}\\(|const ${name}\\s*=)`, 'm')
+        .test(fs.readFileSync(path.join(repo, 'public', name === '' ? '' : file), 'utf8')));
+    eq(owners.length, 0, `${name}() is defined only in common.js, not in ${owners.join(', ')}`);
+  }
+  const common = fs.readFileSync(path.join(repo, 'public', 'common.js'), 'utf8');
+  for (const name of shared)
+    ok(new RegExp(`function ${name}\\(`).test(common), `${name}() lives in common.js`);
+  ok(!/^const \w+ = esc;/m.test(common),
+    'and is declared as a function, since a classic script const is not visible to an eval the way it is to a browser');
+
+  // Every page that runs a script must load the shared one first.
+  for (const page of ['index.html', 'admin.html', 'order.html', 'success.html']) {
+    const markup = fs.readFileSync(path.join(repo, 'public', page), 'utf8');
+    ok(markup.includes('common.js'), `${page} loads common.js`);
+    ok(markup.indexOf('common.js') < markup.search(/src="(?:app|admin|order|success)\.js"/),
+      `${page} loads it before its own script`);
+  }
 }
 
 stop();

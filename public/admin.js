@@ -488,12 +488,7 @@ function matches(item,q){
 // set by the server or checked against an allowlist, so nothing is exploitable now -- but a
 // helper that looks like a formatter and behaves like an HTML sink is a trap for whoever adds
 // the next field. It only ever produces display text, so escaping costs nothing.
-function pretty(v=''){return esc(String(v).replaceAll('_',' ').replace(/\b\w/g,c=>c.toUpperCase()))}
-function esc(v=''){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
-function link(url=''){return /^https?:\/\//i.test(String(url))?`<a href="${esc(url)}" target="_blank" rel="noopener noreferrer">${esc(url)}</a>`:esc(url)}
-function formatDate(v){if(!v)return'';const d=new Date(v);return Number.isNaN(d.getTime())?v:d.toLocaleString()}
 function formatDuration(ms){const m=Math.floor(ms/60000);if(m<1)return'<1m';const d=Math.floor(m/1440),h=Math.floor((m%1440)/60),mm=m%60;const parts=[];if(d)parts.push(`${d}d`);if(h)parts.push(`${h}h`);if(!d&&mm)parts.push(`${mm}m`);return parts.join(' ')||'<1m'}
-function formatMoney(amount,currency='usd'){if(typeof amount!=='number')return'';try{return new Intl.NumberFormat('en-US',{style:'currency',currency:String(currency||'usd').toUpperCase()}).format(amount/100)}catch{return`${amount/100} ${currency}`}}
 function emptyRow(cols,text){return `<tr class="empty-row"><td colspan="${cols}">${esc(text)}</td></tr>`}
 
 (async()=>{

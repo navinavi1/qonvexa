@@ -419,16 +419,6 @@ function reviewTotal() {
   return rendered ? `$${rendered}` : 'the price shown above';
 }
 
-function money(amount,currency='USD') {
-  try { return new Intl.NumberFormat('en-US',{style:'currency',currency:String(currency).toUpperCase()}).format(Number(amount||0)/100); }
-  catch { return `$${(Number(amount||0)/100).toFixed(2)}`; }
-}
-function escHtml(value='') {
-  return String(value).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-}
-function escAttr(value='') { return escHtml(value); }
-
-
 const yearEl = document.querySelector('#year'); if (yearEl) yearEl.textContent = new Date().getFullYear();
 
 const revealItems = document.querySelectorAll('.reveal');

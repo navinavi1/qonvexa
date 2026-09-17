@@ -74,7 +74,8 @@ window.fetch=async()=>({ok:true,status:200,json:async()=>({}),text:async()=>''})
 const script=fs.readFileSync(path.join(publicDir,'admin.js'),'utf8');
 const errors=[];
 window.addEventListener('error',e=>errors.push(String(e.message)));
-try{ window.eval(script); }catch(e){ errors.push('load: '+e.message); }
+try{ window.eval(fs.readFileSync(path.join(publicDir, 'common.js'), 'utf8'));
+window.eval(script); }catch(e){ errors.push('load: '+e.message); }
 
 // Drive the renderer the page itself uses.
 let rendered=0;

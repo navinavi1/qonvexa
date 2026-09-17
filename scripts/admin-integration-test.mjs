@@ -21,7 +21,7 @@ try{
   const errors=[];const virtualConsole=new VirtualConsole();virtualConsole.on('jsdomError',e=>errors.push(e.message));virtualConsole.on('error',e=>errors.push(String(e)));
   dom=new JSDOM(await(await fetch(base+'/admin')).text(),{url:base+'/admin#autonomos',runScripts:'outside-only',virtualConsole});
   dom.window.fetch=(url,opts={})=>fetch(new URL(url,base),{...opts,headers:{...opts.headers,cookie,origin:base}});dom.window.alert=()=>{};dom.window.confirm=()=>false;
-  dom.window.eval(await fs.readFile('public/marketplaces.js','utf8'));dom.window.eval(await fs.readFile('public/admin.js','utf8'));
+  dom.window.eval(await fs.readFile('public/common.js','utf8'));dom.window.eval(await fs.readFile('public/marketplaces.js','utf8'));dom.window.eval(await fs.readFile('public/admin.js','utf8'));
   for(let i=0;i<50;i++){if(dom.window.document.getElementById('autonomos-global-work-feed'))break;await new Promise(r=>setTimeout(r,50));}
   assert(dom.window.document.getElementById('autonomos-global-work-feed'),'clean global work feed must render');
   assert.equal(dom.window.document.querySelectorAll('[data-market]').length,0,'legacy marketplace control cards must stay deleted');
