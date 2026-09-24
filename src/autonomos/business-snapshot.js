@@ -7,7 +7,53 @@ import { unifiedCapabilityContext } from './capability-registry.js';
 import { isRetiredMarket } from './retired-markets.js';
 import { retiredResources } from './retired-resources.js';
 import { readNdjsonCached } from './ndjson-cache.js';
+// Every field below is derived from eight state files and the ledger, and deriving it means
+// classifying every discovered lead: at five thousand leads that was 532ms of synchronous
+// work. This function is called once per GET /api/admin/autonomos, on the same thread that
+// serves the public site, so one open dashboard polling in a loop made the landing page
+// 131x slower for paying visitors -- measured, not guessed. The answer it recomputed was
+// byte-identical nearly every time.
+//
+// Keyed on (size, mtimeMs) of each input, the same way readNdjsonCached is keyed and for the
+// same reason: a write always moves one of the two, so a stale answer cannot be served after
+// a state change. The clock is the part a fingerprint cannot see -- eligibility() ages jobs
+// out and a worker counts as active only while its heartbeat is under thirty minutes old --
+// so a TTL bounds that separately. Fifteen seconds is far finer than either threshold and
+// coarser than the dashboard's poll, which is the whole point.
+const SNAPSHOT_CACHE=new Map();
+const SNAPSHOT_TTL_MS=15000;
+const SNAPSHOT_CACHE_MAX=4;
+const SNAPSHOT_INPUTS=['global-work-hunter.json','global-lead-actioner.json','taskforce-worker.json',
+  'agrenting-worker.json','native-market-jobs.json','dynamic-market-registry.json',
+  'execution-workforce.json','accepted-task-squads.json','ledger.ndjson','config.json'];
+
+function inputFingerprint(root){
+  const parts=[];
+  for(const name of SNAPSHOT_INPUTS){
+    try{const st=fs.statSync(path.join(root,name));parts.push(`${name}:${st.size}:${st.mtimeMs}`);}
+    catch{parts.push(`${name}:-`);}
+  }
+  // The pid is in the key because active workers and squads are only counted as ours when
+  // their recorded pid matches this process, so a snapshot computed under another pid is not
+  // this process's answer.
+  return parts.join('|')+'|pid:'+process.pid;
+}
+
 export function businessSnapshot(storageDir,env=process.env){
+ const cacheKey=String(storageDir||env.STORAGE_DIR||'data');
+ const fingerprint=inputFingerprint(path.join(cacheKey,'autonomos'));
+ const hit=SNAPSHOT_CACHE.get(cacheKey);
+ if(hit&&hit.fingerprint===fingerprint&&Date.now()-hit.at<SNAPSHOT_TTL_MS)return structuredClone(hit.value);
+ const value=computeBusinessSnapshot(storageDir,env);
+ SNAPSHOT_CACHE.set(cacheKey,{fingerprint,at:Date.now(),value});
+ if(SNAPSHOT_CACHE.size>SNAPSHOT_CACHE_MAX)SNAPSHOT_CACHE.delete(SNAPSHOT_CACHE.keys().next().value);
+ // Callers get their own copy. server.js spreads this into a JSON response today and mutates
+ // nothing, but a cached object handed out by reference is a trap, and readNdjsonCached beside
+ // it already made the same call for the same reason.
+ return structuredClone(value);
+}
+
+function computeBusinessSnapshot(storageDir,env=process.env){
  const root=path.join(storageDir||env.STORAGE_DIR||'data','autonomos');
  const read=(name,f={})=>{try{return JSON.parse(fs.readFileSync(path.join(root,name),'utf8'));}catch{return f;}};
  const hunter=read('global-work-hunter.json'),actions=read('global-lead-actioner.json').actions||{},tf=read('taskforce-worker.json'),agrenting=read('agrenting-worker.json');

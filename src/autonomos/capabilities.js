@@ -16,7 +16,17 @@ const RULES=[
   {skill:'web-research',categories:['research','analysis','seo'],words:['research','analyze','analysis','compare','website','web','public','headers','endpoint','market','report','sources','seo','keyword','competitor']},
   {skill:'copywriting',categories:['writing','content','marketing'],words:['write','rewrite','copy','summary','summarize','description','intro','landing','headline','content','blog','article','email marketing','product description']}
 ];
-function containsWord(hay,phrase){const escaped=String(phrase).replace(/[.*+?^${}()|[\]\\]/g,'\\$&');return new RegExp(`\\b${escaped}\\b`,'i').test(hay);}
+// Every word in RULES is a fixed string written above, and this used to compile a fresh
+// RegExp for each one on every call -- nine rules, about a hundred and thirty words, so a
+// hundred and thirty compilations to classify one opportunity. The owner's dashboard
+// classifies every discovered lead on every poll, which at five thousand leads is 650,000
+// RegExp compilations per request: 388ms of the 530ms the request took, spent rebuilding
+// byte-identical patterns. They are constants, so compile them once at load.
+//
+// A pattern with the i flag and no g or y carries no lastIndex, so a shared instance is
+// safe to .test() from anywhere, repeatedly.
+const MATCHERS=RULES.map(rule=>({rule,categories:new Set(rule.categories),
+  patterns:rule.words.map(word=>new RegExp(`\\b${String(word).replace(/[.*+?^${}()|[\]\\]/g,'\\$&')}\\b`,'i'))}));
 const REQUIRES_SHELL=/\b(docker(file)?|kubernetes|k8s|ci\/cd|shell access|terminal access|npm install|yarn install|pnpm install|pip install|build the (app|project)|run (the )?tests?|compile|package (the )?(app|project)|ffmpeg|imagemagick|image conversion|audio conversion|video conversion)\b/i;
 const REQUIRES_BROWSER=/\b(browser automation|headless browser|screenshot of the (site|app|page)|fill (out )?(the )?form|navigate (the )?(site|dashboard)|web app testing|click through|log in to (the )?(site|dashboard))\b/i;
 const REQUIRES_DEPLOY=/\b(?:deploy\s+(?:the |this |a )?(?:app|application|site|service|project|contract)|release to production|trigger (?:a )?deployment|access (?:the )?production server)\b/i;
@@ -29,10 +39,72 @@ const REQUIRES_HUMAN_IDENTITY=/\b(kyc|selfie|government id|passport verification
 const REQUIRES_DESIGN_MEDIA=/\b(logo design|podcast cover|cover art|illustration|brand identity|graphic design|figma design|canva design|video edit|motion graphics|3d render)\b/i;
 const REQUIRES_ONCHAIN_TX=/\b(?:deploy\w*\b[\s\S]{0,40}?\b(?:mainnet|testnet|sepolia|goerli|mumbai|polygon|base|arbitrum|optimism|devnet|solana)\b|sign(?:ed|ing)?\s+(?:a\s+|the\s+)?transaction|broadcast\s+(?:a\s+|the\s+)?transaction|mint\w*\b[\s\S]{0,20}?\bfunded\s+wallet|funded\s+(?:deployer\s+)?wallet)\b/i;
 
-export function classifyOpportunity(opportunity,{llmEnabled=false,hasGithubPrTool=false,hasShellTool=false,hasBrowserTool=false,hasDeployTool=false,hasArtifactTool=false,hasAppTool=false,connectedApps=[],hasWebSearchTool=false,hasDesignMediaTool=false,strictCapabilityProof=false}={}){
+// classifyOpportunity reads exactly four fields of the opportunity -- category, title,
+// description and skills -- and nothing else about it. Two opportunities that agree on those
+// four classify identically, forever. The owner's dashboard re-classifies every discovered
+// lead on every poll, and a lead's text does not change between polls even though its
+// lastSeenAt does, so the same answer was recomputed from scratch thousands of times per
+// request. Key a memo on precisely the inputs the function reads, and every poll after the
+// first costs a map lookup.
+//
+// The tool context and the two env vars estimateLlmCost reads are part of the key: they are
+// stable within a process, but a caller that changes them must not be served a stale answer.
+const CLASSIFY_MEMO=new Map();
+const CLASSIFY_MEMO_LIMIT=50000;
+
+// Fifteen of the key's parts describe the tool context and the environment, not the job, so
+// they are the same for every lead in one dashboard request. Building them per lead cost more
+// than the memo saved. A caller hands the identical context object to all five thousand
+// classifications, so the fingerprint is cached against that object and computed once.
+const CONTEXT_KEYS=new WeakMap();
+function contextKey(context){
+  const cached=CONTEXT_KEYS.get(context);
+  if(cached!==undefined)return cached;
+  const key=[context.llmEnabled,context.hasGithubPrTool,context.hasShellTool,context.hasBrowserTool,
+    context.hasDeployTool,context.hasArtifactTool,context.hasAppTool,context.hasWebSearchTool,
+    context.hasDesignMediaTool,context.strictCapabilityProof,
+    Array.isArray(context.connectedApps)?context.connectedApps.join(','):'',
+    process.env.E2B_API_KEY?1:0,process.env.COMPOSIO_API_KEY?1:0,
+    process.env.AUTONOMOS_LLM_INPUT_USD_PER_MILLION,process.env.AUTONOMOS_LLM_OUTPUT_USD_PER_MILLION
+  ].join('\u0000');
+  CONTEXT_KEYS.set(context,key);
+  return key;
+}
+
+export function classifyOpportunity(opportunity,context={}){
+  const skills=Array.isArray(opportunity?.skills)?opportunity.skills.join(','):'';
+  const key=`${contextKey(context)}\u0000${opportunity?.category}\u0000${opportunity?.title}\u0000${opportunity?.description}\u0000${skills}`;
+  const hit=CLASSIFY_MEMO.get(key);
+  if(hit)return copyVerdict(hit);
+  const result=classifyOpportunityUncached(opportunity,context);
+  // A plain cap rather than a real LRU: the entries are cheap and a fleet that has seen fifty
+  // thousand distinct briefs in one process is better served starting over than growing without
+  // bound on a 512MB box.
+  if(CLASSIFY_MEMO.size>=CLASSIFY_MEMO_LIMIT)CLASSIFY_MEMO.clear();
+  CLASSIFY_MEMO.set(key,result);
+  return copyVerdict(result);
+}
+
+// Callers get their own copy, so the cache cannot be seen from outside it. Nothing mutates a
+// verdict today, but the hunter stores capability.missingTools straight into persisted state,
+// and the day someone pushes onto that array a cached entry would be quietly poisoned for
+// every later lead. A copy costs about a microsecond against the twenty-seven the classification
+// costs, which is not a trade worth thinking about twice.
+function copyVerdict(v){
+  return {...v,missingTools:[...v.missingTools],requiredCapabilities:[...v.requiredCapabilities],
+    requiredApps:[...v.requiredApps],freeFallbacks:{...v.freeFallbacks}};
+}
+
+function classifyOpportunityUncached(opportunity,{llmEnabled=false,hasGithubPrTool=false,hasShellTool=false,hasBrowserTool=false,hasDeployTool=false,hasArtifactTool=false,hasAppTool=false,connectedApps=[],hasWebSearchTool=false,hasDesignMediaTool=false,strictCapabilityProof=false}={}){
   const category=String(opportunity?.category||'').toLowerCase(),title=String(opportunity?.title||''),description=String(opportunity?.description||'');
   const hay=`${category} ${title} ${description} ${(Array.isArray(opportunity.skills)?opportunity.skills:[]).join(' ')}`.toLowerCase();
-  const safety=safetyCheck(hay);const matched=RULES.map(rule=>({rule,score:(rule.categories.includes(category)?4:0)+rule.words.reduce((n,w)=>n+(containsWord(hay,w)?1:0),0)})).sort((a,b)=>b.score-a.score)[0];
+  const safety=safetyCheck(hay);
+  let matched=null,bestScore=-1;
+  for(const entry of MATCHERS){
+    let score=entry.categories.has(category)?4:0;
+    for(const pattern of entry.patterns)if(pattern.test(hay))score++;
+    if(score>bestScore){bestScore=score;matched={rule:entry.rule,score};}
+  }
   const skill=matched?.score>0?matched.rule.skill:'general-digital',recognized=Boolean(matched?.score>0),deterministic=canDoDeterministically(opportunity,skill);
   const connected=new Set((Array.isArray(connectedApps)?connectedApps:[]).map(x=>String(x).toLowerCase().trim()).filter(Boolean));
   // Free-first bridge: an E2B shell can run Playwright/Puppeteer, public HTTP/API clients,
@@ -50,11 +122,13 @@ export function classifyOpportunity(opportunity,{llmEnabled=false,hasGithubPrToo
   const needsUnavailableTooling=missing.length>0,generalDigitalFallback=!recognized&&llmEnabled&&!needsUnavailableTooling&&safety.safe;
   return{skill,confidence:recognized?Math.min(1,(matched?.score||0)/6):generalDigitalFallback?0.35:0,safe:safety.safe,permanentlyUnsupported:needs.physical||needs.onchainTx,safetyReason:safety.reason,executable:safety.safe&&!needsUnavailableTooling&&(recognized?(deterministic||llmEnabled):generalDigitalFallback),mode:needsUnavailableTooling?'unsupported_missing_tooling':!recognized?(generalDigitalFallback?'llm_general_digital':'unsupported_unrecognized'):needs.github?'llm_with_github_pr':deterministic?'deterministic':llmEnabled?'llm_with_tools':'unsupported_without_llm',missingTooling:needsUnavailableTooling,missingTools:missing,requiresArtifact:needs.artifact,requiredCapabilities:[...Object.entries(needs).filter(([,value])=>value).map(([key])=>key),...requiredApps.map(x=>`app:${x}`)],requiredApps,estimatedModelCostUsd:deterministic?0:llmEnabled?estimateLlmCost(opportunity):0,freeFallbacks:{browser:effectiveBrowser&&!hasBrowserTool,webResearch:effectiveWebResearch&&!hasWebSearchTool,designMedia:effectiveDesignMedia&&!hasDesignMediaTool,deploy:effectiveDeploy&&!hasDeployTool}};
 }
-function inferRequiredApps(hay=''){const apps=[];const tests=[['reddit',/\breddit\b/i],['x',/\b(?:x\.com|twitter|tweet|post to x|publish on x|post on x|x post)\b|\bpost\s*[—\-→:]\s*x\b/i],['linkedin',/\blinkedin\b/i],['discord',/\bdiscord\b/i],['telegram',/\btelegram\b/i],['gmail',/\b(?:gmail|send (?:an )?email|customer support|email support|reply to (?:a )?customer|inbox triage)\b/i],['slack',/\bslack\b/i],['notion',/\bnotion\b/i],['google_sheets',/\bgoogle sheets?\b/i],['google_drive',/\bgoogle drive\b/i],['google_calendar',/\b(?:google calendar|calendar event)\b/i]];for(const [id,re] of tests)if(re.test(hay))apps.push(id);return[...new Set(apps)];}
+const APP_TESTS=[['reddit',/\breddit\b/i],['x',/\b(?:x\.com|twitter|tweet|post to x|publish on x|post on x|x post)\b|\bpost\s*[—\-→:]\s*x\b/i],['linkedin',/\blinkedin\b/i],['discord',/\bdiscord\b/i],['telegram',/\btelegram\b/i],['gmail',/\b(?:gmail|send (?:an )?email|customer support|email support|reply to (?:a )?customer|inbox triage)\b/i],['slack',/\bslack\b/i],['notion',/\bnotion\b/i],['google_sheets',/\bgoogle sheets?\b/i],['google_drive',/\bgoogle drive\b/i],['google_calendar',/\b(?:google calendar|calendar event)\b/i]];
+function inferRequiredApps(hay=''){const apps=[];for(const [id,re] of APP_TESTS)if(re.test(hay))apps.push(id);return[...new Set(apps)];}
 function canDoDeterministically(op,skill){const hay=`${op?.title||''} ${op?.description||''}`.toLowerCase();if(skill==='translation')return translationInDictionary(hay);if(skill==='web-research')return(hay.match(/https?:\/\/\S+/g)||[]).length===1&&/\b(?:headers?|robots(?:\.txt)?|sitemap(?:\.xml)?|reachability|http status)\b/i.test(hay)&&!/\b(?:compare|research|competitor|market|conversion|comprehensive|in-depth|extract)\b/i.test(hay);return false;}
 const TRANSLATION_DICTIONARY={spanish:['agents hiring agents','hello world'],ukrainian:['agents hiring agents','hello world'],english:['агенти наймають агентів','hola mundo']};
 function translationInDictionary(hay){const match=hay.match(/translate\s+["“']?([^"”'\n]{1,100})["”']?\s+(?:to|into)\s+(spanish|ukrainian|english|french|german|italian|polish)/i);if(!match)return false;const phrase=match[1].trim().toLowerCase().replace(/[“”"']/g,'');return Boolean(TRANSLATION_DICTIONARY[match[2].toLowerCase()]?.includes(phrase));}
 function estimateLlmCost(op){const chars=String(op?.title||'').length+String(op?.description||'').length,inputTokens=Math.max(500,Math.ceil(chars/4)),outputTokens=1200,toolOverheadMultiplier=(process.env.E2B_API_KEY||process.env.COMPOSIO_API_KEY)?3:1,inPerM=Number(process.env.AUTONOMOS_LLM_INPUT_USD_PER_MILLION||0.25),outPerM=Number(process.env.AUTONOMOS_LLM_OUTPUT_USD_PER_MILLION||2);return Number((((inputTokens*toolOverheadMultiplier)/1e6)*inPerM+((outputTokens*toolOverheadMultiplier)/1e6)*outPerM).toFixed(6));}
-function safetyCheck(hay){const blocked=[[/\b(?:steal|dump|harvest|exfiltrate|reveal)\b.{0,40}\b(?:passwords?|credentials?|private keys?|seed phrase|api keys?)\b|\b(?:give|send|provide|export|share)\b.{0,25}\b(?:your|owner|user)\b.{0,20}\b(?:password|private key|seed phrase)\b|\b(?:create|build|run)\b.{0,25}\bphishing\s+(?:campaign|site|page)\b/i,'credential_or_secret_request'],[/\b(?:create|build|deploy|spread|install)\b.{0,30}\b(?:malware|ransomware|keylogger|botnet)\b|credential theft|exploit\s+(?:a|the)\s+server|launch.{0,20}ddos/i,'malicious_or_intrusive_work'],[/\b(?:write|post|create|buy)\b.{0,30}\bfake reviews?\b|\b(?:send|post|generate)\b.{0,20}\bspam\b|mass dm|mass message|impersonat|fake metric|astroturf/i,'spam_or_deceptive_work'],[/launder|mix(?:er|ing)\s+funds|hide source of funds|evade sanctions/i,'financial_evasion_request']];for(const [re,reason] of blocked)if(re.test(hay))return{safe:false,reason};return{safe:true,reason:'allowed_digital_service'};}
+const BLOCKED=[[/\b(?:steal|dump|harvest|exfiltrate|reveal)\b.{0,40}\b(?:passwords?|credentials?|private keys?|seed phrase|api keys?)\b|\b(?:give|send|provide|export|share)\b.{0,25}\b(?:your|owner|user)\b.{0,20}\b(?:password|private key|seed phrase)\b|\b(?:create|build|run)\b.{0,25}\bphishing\s+(?:campaign|site|page)\b/i,'credential_or_secret_request'],[/\b(?:create|build|deploy|spread|install)\b.{0,30}\b(?:malware|ransomware|keylogger|botnet)\b|credential theft|exploit\s+(?:a|the)\s+server|launch.{0,20}ddos/i,'malicious_or_intrusive_work'],[/\b(?:write|post|create|buy)\b.{0,30}\bfake reviews?\b|\b(?:send|post|generate)\b.{0,20}\bspam\b|mass dm|mass message|impersonat|fake metric|astroturf/i,'spam_or_deceptive_work'],[/launder|mix(?:er|ing)\s+funds|hide source of funds|evade sanctions/i,'financial_evasion_request']];
+function safetyCheck(hay){for(const [re,reason] of BLOCKED)if(re.test(hay))return{safe:false,reason};return{safe:true,reason:'allowed_digital_service'};}
 export function capabilityCatalog(context={}){const examples=[['JavaScript / TypeScript / Node / React / Next','coding','Fix a repository bug, run tests and provide a patch.'],['Python','coding','Fix a Python function and run tests.'],['GitHub PR','coding','Fix the bug and open a pull request.'],['Regression testing / API integration','coding','Implement an API integration and run regression tests.'],['Scraping / technical research','research','Research current public sources and extract findings.'],['CSV / JSON / spreadsheets','data','Transform a CSV dataset and deliver a spreadsheet file.'],['PDF / document processing','document','Extract a PDF and create a downloadable document.'],['Translation / localization','translation','Translate and localize the provided text.'],['SEO / analytics','seo','Audit supplied URLs/data and produce a structured report.'],['Customer support / inbox','customer-support','Reply to customer emails using connected Gmail.'],['Presentation / reports','presentation','Create a presentation/report artifact.'],['Basic image/media processing','graphic-design','Resize/compose simple assets or process media with open-source tools.'],['Browser QA / automation','browser','Navigate the dashboard and perform web app testing.']];return examples.map(([name,category,description])=>{const cap=classifyOpportunity({title:name,category,description},context);return{name,available:cap.executable,skill:cap.skill,missingTools:cap.missingTools,mode:cap.mode};});}
 
