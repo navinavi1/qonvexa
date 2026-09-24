@@ -90,7 +90,14 @@ assert.equal(actioner.capabilityContext().hasWebSearchTool,true);
   }
   hunter.persist();
 
-  const publisher=new GlobalFeedPublisher({env,storageDir:storage,logger:{info(){},warn(){},error(){}}});
+  // publicDir() falls back to the repository's own public/ when AUTONOMOS_PUBLIC_DIR is unset,
+  // so this published the feed straight over the tracked public/autonomos-global-feed.json --
+  // overriding .root moves where it reads from, not where it writes to. Every `npm run verify`
+  // left that file changed, on Render's build tree as much as here.
+  const publicOut=path.join(storage,'public');
+  fs.mkdirSync(publicOut,{recursive:true});
+  const publisher=new GlobalFeedPublisher({env:{...env,AUTONOMOS_PUBLIC_DIR:publicOut},
+    storageDir:storage,logger:{info(){},warn(){},error(){}}});
   publisher.root=path.join(storage,'autonomos');
   assert.notEqual(publisher.publish(),false,'the first tick builds the feed');
   assert.equal(publisher.publish(),false,'a tick with no source change rebuilds nothing');

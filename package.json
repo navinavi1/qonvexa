@@ -86,6 +86,7 @@
     "browser-tools-test": "node scripts/browser-tools-test.mjs",
     "corrupt-state-test": "node scripts/corrupt-state-test.mjs",
     "dashboard-latency-test": "node scripts/dashboard-latency-test.mjs",
+    "render-build-repro": "node scripts/render-build-repro.mjs",
     "shared-treasury-test": "node scripts/shared-treasury-test.mjs"
   },
   "dependencies": {

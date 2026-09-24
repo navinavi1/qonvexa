@@ -156,14 +156,30 @@ eq(inherited.length,0,'no test boots the server on an inherited environment: '+i
 // as files in the directory express.static serves to the whole internet. The money report
 // carries gross revenue, fees, costs, net profit and the owner/agent split. Anyone who
 // guessed the filename could read the owner's books. Only the admin page ever loads them.
+//
+// The third bug of this family in this very file, and the same shape as the other two: a test
+// reaching out of its sandbox into the real checkout. Both names are tracked files, and this
+// used to delete them outright in the finally, so `npm run verify` removed two tracked files
+// from every tree it ran in -- the build tree on Render among them -- and in the window before
+// that, the repository's own feed file held a fabricated $1234.56 of revenue. server.js
+// resolves its public directory from __dirname with no override, so the test cannot be pointed
+// somewhere harmless; it has to put back exactly what it found, and prove it did.
 for(const name of ['autonomos-money-report.json','autonomos-global-feed.json']){
-  fs.writeFileSync(path.join(publicDir,name),JSON.stringify({today:{grossRevenueUsd:1234.56}}));
+  const target=path.join(publicDir,name);
+  const original=fs.existsSync(target)?fs.readFileSync(target):null;
+  fs.writeFileSync(target,JSON.stringify({today:{grossRevenueUsd:1234.56}}));
   try{
     eq((await fetch(B+'/'+name)).status,401,name+' is not readable without logging in');
     const mine=await fetch(B+'/'+name,{headers:{cookie}});
     eq(mine.status,200,name+' is still readable by the owner');
     eq((await mine.json())?.today?.grossRevenueUsd,1234.56,'and still carries the real figures');
-  } finally { try{fs.rmSync(path.join(publicDir,name));}catch{} }
+  } finally {
+    if(original===null){try{fs.rmSync(target);}catch{}}
+    else fs.writeFileSync(target,original);
+  }
+  const restored=fs.existsSync(target)?fs.readFileSync(target):null;
+  ok(original===null?restored===null:(restored!==null&&restored.equals(original)),
+    name+' is left byte for byte as the repository had it');
 }
 
 // The settings form: five controls the owner can change that no test had ever saved and read
