@@ -179,7 +179,7 @@ for (let attempt = 0; attempt < 120 && !health; attempt++) {
 stop();
 if (!health) {
   fail(`the build passed but the service never answered /health, which is a red deploy too.\n` +
-    `Render would retry, fail the health check and roll back.\n\nIt said:\n${log.trim().slice(0, 3000) || '(nothing)'}`);
+    `Render would retry, fail the health check and roll back.\n\nIt said (the tail, where a dying process writes its error):\n${log.trim().slice(-3000) || '(nothing)'}`);
 }
 if (health.ok !== true) fail(`/health answered but not ok: ${JSON.stringify(health)}`);
 fs.rmSync(work, { recursive: true, force: true });

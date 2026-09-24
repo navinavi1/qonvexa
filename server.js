@@ -26,6 +26,17 @@ const launchMode = clean(process.env.LAUNCH_MODE || (isProduction ? 'staging' : 
 const isLiveLaunch = launchMode === 'live';
 const siteUrl = normalizeSiteUrl(process.env.SITE_URL || process.env.RENDER_EXTERNAL_URL || `http://localhost:${port}`);
 const priceCents = safeInteger(process.env.AUDIT_PRICE_CENTS, 14900, 50, 10000000);
+// AUDIT_PRICE_CENTS is a USD amount: the schema.org offer, /api/purchase-options and the
+// Stripe session all say USD, and the whole page is written in dollars.
+//
+// This has to be initialised here, beside priceCents, and not further down beside the function
+// that reads it. validateProductionConfig() runs at the top of this file and reaches
+// manualPaymentConfig(), which compares BANK_CURRENCY against this value -- so while the
+// declaration sat below, that comparison hit a const still in its temporal dead zone and threw
+// `Cannot access 'PRICE_CURRENCY' before initialization` at module load. Only when NODE_ENV is
+// production, because validateProductionConfig returns early otherwise: the build stayed green,
+// every local run stayed green, and the deployed service could not boot at all.
+const PRICE_CURRENCY = 'USD';
 const allowStagingPayments = /^(1|true|yes|on)$/i.test(String(process.env.ALLOW_STAGING_PAYMENTS || 'false'));
 const salesEnabled = !isProduction || isLiveLaunch || allowStagingPayments;
 const paymentMode = clean(process.env.PAYMENT_MODE || (process.env.STRIPE_SECRET_KEY ? 'stripe' : 'manual'), 20).toLowerCase();
@@ -1040,7 +1051,7 @@ function sendHtml(res, filename) {
       // one click before payment. Raise the price and the site advertises the old one while
       // charging the new one. One source, substituted here like every other fact on the page.
       '{{PRICE_AMOUNT}}': escapeHtml(priceCents % 100 === 0 ? String(priceCents / 100) : (priceCents / 100).toFixed(2)),
-      '{{PRICE_CURRENCY}}': 'USD'
+      '{{PRICE_CURRENCY}}': PRICE_CURRENCY
     };
     let output = html;
     for (const [token, value] of Object.entries(replacements)) output = output.split(token).join(value);
@@ -1297,10 +1308,6 @@ function toCsv(headers, rows) {
   return lines.join('\r\n');
 }
 
-
-// AUDIT_PRICE_CENTS is a USD amount: the schema.org offer, /api/purchase-options and the
-// Stripe session all say USD, and the whole page is written in dollars.
-const PRICE_CURRENCY = 'USD';
 
 function manualPaymentConfig() {
   const details = {
