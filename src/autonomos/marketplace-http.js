@@ -31,9 +31,6 @@ export class MarketplaceHttp {
         reason: this.state.reason || "marketplace_cooldown",
         retryAt: this.state.until,
       };
-    // A served cooldown clears the strike count. Without this, failures only ever grew:
-    // this state is persisted, so after three failures every later error immediately
-    // re-parked the lane for another two minutes, for the life of the deployment.
     if (this.state.until) {
       this.state.until = 0;
       this.state.reason = "";
@@ -41,6 +38,11 @@ export class MarketplaceHttp {
       this.persist();
     }
     const read = method === "GET";
+    // Marketplace reads are background work. Keep their latency bounded so a slow
+    // external market cannot monopolize the single web-service process that serves
+    // the Qonvexa dashboard. Writes keep a longer window because their outcome can
+    // be ambiguous and must not be blindly retried.
+    const timeoutMs = read ? 6000 : 12000;
     for (let attempt = 0; attempt < (read ? 2 : 1); attempt++) {
       try {
         const response = await this.fetchImpl(this.origin + path, {
@@ -55,8 +57,8 @@ export class MarketplaceHttp {
           },
           ...(body === undefined ? {} : { body: JSON.stringify(body) }),
           signal: signal
-            ? AbortSignal.any([signal, AbortSignal.timeout(20000)])
-            : AbortSignal.timeout(20000),
+            ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)])
+            : AbortSignal.timeout(timeoutMs),
         });
         const data = await response.json().catch(() => null);
         if (response.ok && data !== null) {
