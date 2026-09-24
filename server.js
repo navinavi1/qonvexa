@@ -1479,6 +1479,9 @@ function validateProductionConfig() {
 function verifyPublicAssets() {
   const required = [
     'index.html', 'styles.css', 'app.js',
+    // common.js holds esc/pretty/money for every page and loads before each page script, so
+    // without it every page throws on its first render. It is as required as styles.css.
+    'common.js',
     'admin.html', 'admin.css', 'admin.js',
     'privacy.html', 'terms.html', 'refund.html',
     'success.html', 'success.js', 'order.html', 'order.js', 'favicon.svg'

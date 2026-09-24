@@ -59,7 +59,7 @@ for (const key of HOST_NETWORK_KEYS) if (process.env[key]) hostNetwork[key] = pr
 const renderEnv = {
   ...hostNetwork,
   PATH: process.env.PATH || '', HOME: work,
-  LAUNCH_MODE: 'live', STORAGE_DIR: disk, SITE_URL: 'https://qonvexa.co',
+  NODE_ENV: 'production', LAUNCH_MODE: 'live', STORAGE_DIR: disk, SITE_URL: 'https://qonvexa.co',
   AUDIT_PRICE_CENTS: '14900', PAYMENT_MODE: 'manual', ALLOW_STAGING_PAYMENTS: 'false',
   MANUAL_PAYMENT_ENABLED: 'true', CONTACT_EMAIL: 'hello@qonvexa.co',
   LEGAL_BUSINESS_NAME: 'Qonvexa', LEGAL_ADDRESS: 'Kyiv, Ukraine', LEGAL_JURISDICTION: 'Ukraine',

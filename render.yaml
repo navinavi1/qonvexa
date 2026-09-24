@@ -18,6 +18,12 @@ services:
     envVars:
       - key: NODE_VERSION
         value: "24.14.1"
+      # Render sets this by default, but two things that must never be left to a platform
+      # default depend on it: the Secure flag on the owner's admin session cookie, and the
+      # startup check that refuses to boot without ADMIN_PASSWORD, ADMIN_SESSION_SECRET and
+      # IP_HASH_SALT (server.js returns early from all of it when NODE_ENV is not production).
+      - key: NODE_ENV
+        value: production
       - key: LAUNCH_MODE
         value: live
       - key: STORAGE_DIR
