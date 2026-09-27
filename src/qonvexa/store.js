@@ -8,7 +8,7 @@ export class Store {
     const file=path.join(directory,'qonvexa-next.sqlite');
     this.db=new DatabaseSync(file);
     fs.chmodSync(file,0o600);
-    this.db.exec('PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000; PRAGMA synchronous=FULL;');
+    this.db.exec('PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;');
     this.db.exec(fs.readFileSync(new URL('../../migrations/001-qonvexa.sql',import.meta.url),'utf8'));
   }
   transaction(fn) {

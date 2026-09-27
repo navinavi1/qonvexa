@@ -1,8 +1,13 @@
 // One persistent disk, separate OS processes: HTTP never runs audit work inline.
 import 'dotenv/config';
 import {spawn} from 'node:child_process';
+import path from 'node:path';
+import {Store} from '../src/qonvexa/store.js';
 import {fileURLToPath} from 'node:url';
 const root=fileURLToPath(new URL('../',import.meta.url));
+// Complete first-time WAL/schema initialization before concurrent children open it.
+const initialStore=new Store(path.resolve(process.env.STORAGE_DIR||path.join(root,'data')));
+initialStore.close();
 let stopping=false,worker,restarts=0,timer;
 const web=spawn(process.execPath,['server.js'],{cwd:root,env:process.env,stdio:'inherit'});
 function shutdown(code=0){if(stopping)return;stopping=true;clearTimeout(timer);web.kill('SIGTERM');worker?.kill('SIGTERM');setTimeout(()=>{web.kill('SIGKILL');worker?.kill('SIGKILL');process.exit(code);},5000).unref();process.exitCode=code;}
