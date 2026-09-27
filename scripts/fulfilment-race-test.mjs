@@ -1,6 +1,6 @@
-// Stripe fulfilment reads a file to see whether a session was already fulfilled, writes the
+// legacy payment fulfilment reads a file to see whether a session was already fulfilled, writes the
 // order, then writes the file back. Between the check and the write there is an await on a
-// session lookup -- so two deliveries of the same payment (Stripe repeats events, pairs
+// session lookup -- so two deliveries of the same payment (legacy payment repeats events, pairs
 // checkout.session.completed with async_payment_succeeded, and retries anything that answered
 // 500) both saw "not fulfilled" and both appended an order. Single-threaded does not mean
 // serialized: it only means two turns never run at the same instant.

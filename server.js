@@ -1,15 +1,15 @@
-import { businessSnapshot } from './src/autonomos/business-snapshot.js';
-import { serializeByKey } from './src/autonomos/serialize-by-key.js';
-import { serveLocalArtifact } from './src/autonomos/local-artifacts.js';
+
+
+
 import 'dotenv/config';
 import express from 'express';
 import helmet from 'helmet';
-import Stripe from 'stripe';
+
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-import { createAutonomOS } from './src/autonomos/runtime.js';
+import { installNext } from './src/qonvexa/routes.js';
 
 
 const __filename = fileURLToPath(import.meta.url);
@@ -27,7 +27,7 @@ const isLiveLaunch = launchMode === 'live';
 const siteUrl = normalizeSiteUrl(process.env.SITE_URL || process.env.RENDER_EXTERNAL_URL || `http://localhost:${port}`);
 const priceCents = safeInteger(process.env.AUDIT_PRICE_CENTS, 14900, 50, 10000000);
 // AUDIT_PRICE_CENTS is a USD amount: the schema.org offer, /api/purchase-options and the
-// Stripe session all say USD, and the whole page is written in dollars.
+// bank-transfer offer both use USD, and the page is written in dollars.
 //
 // This has to be initialised here, beside priceCents, and not further down beside the function
 // that reads it. validateProductionConfig() runs at the top of this file and reaches
@@ -39,7 +39,7 @@ const priceCents = safeInteger(process.env.AUDIT_PRICE_CENTS, 14900, 50, 1000000
 const PRICE_CURRENCY = 'USD';
 const allowStagingPayments = /^(1|true|yes|on)$/i.test(String(process.env.ALLOW_STAGING_PAYMENTS || 'false'));
 const salesEnabled = !isProduction || isLiveLaunch || allowStagingPayments;
-const paymentMode = clean(process.env.PAYMENT_MODE || (process.env.STRIPE_SECRET_KEY ? 'stripe' : 'manual'), 20).toLowerCase();
+const paymentMode = 'manual';
 const manualPaymentEnabled = /^(1|true|yes|on)$/i.test(String(process.env.MANUAL_PAYMENT_ENABLED || 'false'));
 const storageDir = path.resolve(process.env.STORAGE_DIR || path.join(__dirname, 'data'));
 // Live mode requires persistent STORAGE_DIR under /var/lib/qonvexa (deployment invariant).
@@ -55,26 +55,13 @@ const adminSessions = new Map();
 // itself, so this file cannot be replayed as a credential.
 const adminSessionFile = path.join(storageDir, 'admin-sessions.json');
 
-const stripe = process.env.STRIPE_SECRET_KEY
-  ? new Stripe(process.env.STRIPE_SECRET_KEY)
-  : null;
 
 validateProductionConfig();
 verifyPublicAssets();
 fs.mkdirSync(storageDir, { recursive: true });
 loadAdminSessions();
 
-// AutonomOS is embedded into the existing QONVEXA service. It stores only
-// public wallet information and operational state; private keys are never
-// accepted by the browser or persisted by this application.
-const autonomos = createAutonomOS({
-  storageDir,
-  siteUrl,
-  ownerWallet: clean(process.env.AUTONOMOS_OWNER_WALLET || '0x1f674bf085f6fed36fa198287d51edf0fe0bb9e2', 80),
-  env: process.env,
-  logger: console
-});
-
+// Legacy runtime is never imported or instantiated by Qonvexa web.
 const rateBuckets = new Map();
 function rateLimit({ windowMs, max }) {
   return (req, res, next) => {
@@ -102,45 +89,6 @@ setInterval(() => {
 app.set('trust proxy', 1);
 app.disable('x-powered-by');
 
-// Stripe webhook MUST stay before express.json().
-app.post('/stripe/webhook', express.raw({ type: 'application/json', limit: '1mb' }), async (req, res) => {
-  if (!stripe || !process.env.STRIPE_WEBHOOK_SECRET) {
-    return res.status(503).send('Stripe webhook is not configured.');
-  }
-
-  let event;
-  try {
-    event = stripe.webhooks.constructEvent(
-      req.body,
-      req.headers['stripe-signature'],
-      process.env.STRIPE_WEBHOOK_SECRET
-    );
-  } catch (err) {
-    return res.status(400).send(`Webhook Error: ${err.message}`);
-  }
-
-  try {
-    if (event.type === 'checkout.session.completed' ||
-        event.type === 'checkout.session.async_payment_succeeded') {
-      const session = event.data.object;
-      if (session.payment_status === 'paid') {
-        await fulfillPaidSession(session, event.id);
-      }
-    } else if (event.type === 'checkout.session.async_payment_failed') {
-      appendNdjson('payment-failures.ndjson', {
-        receivedAt: new Date().toISOString(),
-        eventId: event.id,
-        sessionId: event.data.object?.id || '',
-        paymentStatus: event.data.object?.payment_status || ''
-      });
-    }
-    res.json({ received: true });
-  } catch (err) {
-    console.error('Webhook processing failed:', err);
-    res.status(500).send('Webhook processing failed.');
-  }
-});
-
 app.use(helmet({
   referrerPolicy: { policy: 'strict-origin-when-cross-origin' },
   contentSecurityPolicy: {
@@ -151,7 +99,7 @@ app.use(helmet({
       fontSrc: ["'self'", 'https://fonts.gstatic.com'],
       imgSrc: ["'self'", 'data:'],
       connectSrc: ["'self'"],
-      formAction: ["'self'", 'https://checkout.stripe.com'],
+      formAction: ["'self'"],
       frameAncestors: ["'none'"],
       baseUri: ["'self'"],
       objectSrc: ["'none'"],
@@ -162,28 +110,8 @@ app.use(helmet({
 app.use(express.json({ limit: '50kb' }));
 app.use(express.urlencoded({ extended: false, limit: '50kb' }));
 
-function stableJsonForSignature(value){
-  if(Array.isArray(value))return `[${value.map(stableJsonForSignature).join(',')}]`;
-  if(value&&typeof value==='object')return `{${Object.keys(value).sort().map(k=>`${JSON.stringify(k)}:${stableJsonForSignature(value[k])}`).join(',')}}`;
-  return JSON.stringify(value);
-}
+app.use(['/api/internal/autonomos','/api/admin/autonomos','/api/autonomos','/.well-known/autonomos.json','/autonomos'], (_req,res)=>res.status(410).json({error:'AutonomOS legacy is disabled in Qonvexa.'}));
 
-app.post('/api/internal/autonomos/trigger/execute', async (req,res)=>{
-  res.setHeader('Cache-Control','no-store');
-  const secret=String(process.env.TRIGGER_SECRET_KEY||'');
-  const issuedAt=Number(req.body?.issuedAt||0);
-  const supplied=String(req.body?.signature||'');
-  const age=Date.now()-issuedAt;
-  const expected=secret&&issuedAt?crypto.createHmac('sha256',secret).update(`${issuedAt}.${stableJsonForSignature(req.body?.opportunity)}`).digest('hex'):'';
-  const maxTriggerCallbackAgeMs=Math.max(15*60_000,Math.min(48*60*60_000,Number(process.env.AUTONOMOS_TRIGGER_CALLBACK_MAX_AGE_MS||24*60*60_000)));
-  const validTime=Number.isFinite(age)&&age>=-60_000&&age<=maxTriggerCallbackAgeMs;
-  const validSig=Boolean(expected&&supplied&&expected.length===supplied.length&&crypto.timingSafeEqual(Buffer.from(expected),Buffer.from(supplied)));
-  if(!validTime||!validSig)return res.status(401).json({ok:false,error:'unauthorized_trigger_callback'});
-  try{return res.json(await autonomos.processDurableOpportunity(req.body?.opportunity));}
-  catch(error){return res.status(500).json({ok:false,error:clean(error?.message||error,300)});}
-});
-
-// Dynamic HTML routes allow production metadata/legal values to come from environment config.
 for (const route of ['/', '/index.html']) {
   app.get(route, (req, res) => {
     if (launchMode !== 'live') console.log(`Homepage request: ${req.method} ${req.originalUrl}`);
@@ -266,7 +194,7 @@ app.get('/api/admin/dashboard', requireAdmin, (_req, res) => {
     system: {
       siteUrl,
       contactEmail,
-      stripeConfigured: Boolean(stripe),
+
       manualPaymentConfigured: manualPaymentConfig().enabled,
       paymentMode,
       salesEnabled,
@@ -353,7 +281,7 @@ app.get('/api/admin/settings', requireAdmin, (_req, res) => {
     system: {
       siteUrl,
       contactEmail,
-      stripeConfigured: Boolean(stripe),
+
       notificationWebhookConfigured: Boolean(process.env.NOTIFICATION_WEBHOOK_URL)
     }
   });
@@ -363,91 +291,6 @@ app.get('/api/admin/settings', requireAdmin, (_req, res) => {
 // ─────────────────────────────────────────────────────────────────────────────
 // AutonomOS owner control plane (same authenticated owner session as QONVEXA).
 // ─────────────────────────────────────────────────────────────────────────────
-app.get('/api/admin/autonomos', requireAdmin, async (_req, res) => {
-  res.json({...await autonomos.snapshot(),business:businessSnapshot(process.env.STORAGE_DIR,process.env)});
-});
-
-app.patch('/api/admin/autonomos/config', requireAdmin, requireSameSiteMutation, (req, res) => {
-  try {
-    const config = autonomos.updateConfig(req.body || {});
-    logAdminEvent('autonomos_config_updated', { heartbeatSeconds:config.heartbeatSeconds, minMarginPercent:config.minMarginPercent });
-    res.json({ ok:true, config });
-  } catch (error) {
-    res.status(400).json({ error:clean(error?.message || 'Invalid AutonomOS configuration.', 400) });
-  }
-});
-
-app.post('/api/admin/autonomos/start', requireAdmin, requireSameSiteMutation, (_req, res) => {
-  const result = autonomos.start();
-  logAdminEvent('autonomos_started', {});
-  res.json(result);
-});
-
-app.post('/api/admin/autonomos/stop', requireAdmin, requireSameSiteMutation, (_req, res) => {
-  const result = autonomos.stop();
-  logAdminEvent('autonomos_stopped', {});
-  res.json(result);
-});
-
-app.post('/api/admin/autonomos/emergency-stop', requireAdmin, requireSameSiteMutation, (_req, res) => {
-  const result = autonomos.emergencyStop();
-  logAdminEvent('autonomos_emergency_stop', {});
-  res.json(result);
-});
-
-app.post('/api/admin/autonomos/clear-emergency', requireAdmin, requireSameSiteMutation, (_req, res) => {
-  const result = autonomos.clearEmergencyStop();
-  logAdminEvent('autonomos_emergency_cleared', {});
-  res.json(result);
-});
-
-app.post('/api/admin/autonomos/cycle', requireAdmin, requireSameSiteMutation, async (_req, res) => {
-  res.json(await autonomos.runCycle());
-});
-
-app.post('/api/admin/autonomos/reset-claim-history', requireAdmin, requireSameSiteMutation, (_req, res) => {
-  res.json(autonomos.resetClaimHistory());
-});
-
-app.post('/api/admin/autonomos/retry-transient', requireAdmin, requireSameSiteMutation, (_req, res) => {
-  res.json(autonomos.retryTransientFailures());
-});
-
-app.post('/api/admin/autonomos/archive-legacy-history', requireAdmin, requireSameSiteMutation, (_req, res) => {
-  const result=autonomos.archiveLegacyHistory();
-  logAdminEvent('autonomos_legacy_history_archived', { archived:result.archived||[] });
-  res.json(result);
-});
-
-app.post('/api/admin/autonomos/live-self-test', requireAdmin, requireSameSiteMutation, async (_req, res) => {
-  res.json(await autonomos.runLiveSelfTest());
-});
-
-app.post('/api/admin/autonomos/reconcile-payments', requireAdmin, requireSameSiteMutation, async (_req, res) => {
-  res.json(await autonomos.reconcilePayments());
-});
-
-app.post('/api/admin/autonomos/treasury/refresh', requireAdmin, requireSameSiteMutation, async (_req, res) => {
-  res.json(await autonomos.refreshTreasury());
-});
-
-// Records working capital the owner provided, so the agents' spend pool can be refilled
-// without waiting for revenue they cannot earn while the pool is empty. Owner-only, and
-// written to ledger.ndjson like every other movement.
-app.post('/api/admin/autonomos/treasury/fund', requireAdmin, requireSameSiteMutation, (req, res) => {
-  const result = autonomos.fundAgentTreasury({
-    amountUsd: Number(req.body?.amountUsd),
-    note: clean(req.body?.note || '', 200),
-    // Supplied by the dashboard and stable across retries, so a repeated submission of the
-    // same click records the funding once instead of raising the agents' spend pool twice.
-    requestId: clean(req.body?.requestId || '', 120)
-  });
-  if (!result.ok) return res.status(400).json(result);
-  logAdminEvent(result.duplicate ? 'autonomos_treasury_funding_duplicate' : 'autonomos_treasury_funded', { amountUsd: result.amountUsd });
-  res.json(result);
-});
-
-
 app.patch('/api/admin/settings', requireAdmin, requireSameSiteMutation, (req, res) => {
   const current = readAdminSettings();
   const next = {
@@ -519,7 +362,7 @@ app.get('/launch-readiness', (_req, res) => {
     legalJurisdiction: Boolean(clean(process.env.LEGAL_JURISDICTION || '', 200)),
     deliveryTimeframe: Boolean(clean(process.env.DELIVERY_TIMEFRAME || '', 300)),
     refundPolicy: Boolean(clean(process.env.REFUND_POLICY_TEXT || '', 2000)),
-    paymentProvider: Boolean(stripe) || manualPaymentConfig().enabled,
+    paymentProvider: manualPaymentConfig().enabled,
     notificationWebhook: Boolean(process.env.NOTIFICATION_WEBHOOK_URL),
     persistentStorage: isPersistentStorage(),
     salesEnabled
@@ -538,9 +381,13 @@ app.get('/version', (_req, res) => {
 
 app.get('/health', (_req, res) => res.json({
   ok: true,
+  runtimeProfile: 'qonvexa-isolated-v1',
+  legacyRuntimeEnabled: false,
+  externalRedisRequired: false,
+  externalPostgresRequired: false,
   environment: isProduction ? 'production' : 'development',
   launchMode,
-  stripeConfigured: Boolean(stripe),
+
   manualPaymentConfigured: manualPaymentConfig().enabled,
   paymentMode,
   salesEnabled,
@@ -548,6 +395,16 @@ app.get('/health', (_req, res) => res.json({
   persistentStorage: isPersistentStorage(),
   publicIndexAvailable: fs.existsSync(path.join(publicDir, 'index.html'))
 }));
+
+const nextPlatform = installNext(app, {
+  storageDir, requireAdmin, requireSameSiteMutation, rateLimit, priceCents, siteUrl,
+  getPaidOrder(raw) {
+    const order=getOrderByAccessToken(raw);
+    if(!order || effectiveOrderState(order).paymentStatus !== 'paid' || ['refunded','cancelled'].includes(effectiveOrderState(order).operationalStatus) || String(order.currency).toLowerCase() !== 'usd' || !Number.isSafeInteger(order.amountTotal) || order.amountTotal < 50) return null;
+    return order;
+  },
+  legacyLead(id) { return withEntityState(readNdjson('preview-requests.ndjson'), 'lead').find(l=>l.id===id); }
+});
 
 app.post('/api/preview-request',
   rateLimit({ windowMs: 15 * 60 * 1000, max: 10 }),
@@ -574,7 +431,12 @@ app.post('/api/preview-request',
     updateEntityState('lead', lead.id, { status: readAdminSettings().defaultLeadStatus || 'new', adminNote:'' });
     logAdminEvent('preview_request_received', { entityId:lead.id, email:lead.email, websiteUrl:lead.websiteUrl });
     await sendOptionalWebhook('preview_request', lead);
-    res.json({ ok: true, requestId: lead.id });
+    let personal = null;
+    if (nextPlatform.cfg.auditEnabled) {
+      try { personal = nextPlatform.createAudit(lead); }
+      catch { personal = { status:'REQUIRES_REVIEW' }; }
+    }
+    res.json({ ok: true, requestId: lead.id, personal });
   }
 );
 
@@ -587,40 +449,9 @@ app.post('/api/find-mini-audit',
       return res.status(400).json({ error:'Please enter a valid email address.' });
     }
 
-    const matches = withEntityState(readNdjson('preview-requests.ndjson'), 'lead')
-      .filter(item => String(item.email || '').trim().toLowerCase() === email)
-      .filter(item => Boolean(item.miniAuditSummary))
-      .sort((a,b) => String(b.statusUpdatedAt || b.receivedAt || '').localeCompare(String(a.statusUpdatedAt || a.receivedAt || '')));
-
-    const lead = matches[0];
-    res.setHeader('Cache-Control', 'no-store');
-
-    if (!lead) {
-      return res.json({
-        found:false,
-        message:'We could not find a ready mini-audit for this email. Use the email from your invitation or contact hello@qonvexa.co.'
-      });
-    }
-
-    res.json({
-      found:true,
-      miniAudit:{
-        leadId:lead.id,
-        email:lead.email,
-        websiteUrl:lead.websiteUrl,
-        businessType:lead.businessType || '',
-        title:lead.miniAuditTitle || 'Your QONVEXA mini-audit',
-        summary:lead.miniAuditSummary,
-        // /\\r?\\n/ matches a literal backslash followed by r or n -- not a newline. The admin
-        // writes the findings one per line and clean() preserves those newlines, so this never
-        // split anything: the customer's "find my audit" result showed all five findings
-        // crushed into a single bullet. Every other split in the codebase gets this right.
-        findings:String(lead.miniAuditFindings || '').split(/\r?\n/).map(x=>x.trim()).filter(Boolean).slice(0,5),
-        fullAuditPrepared:Boolean(lead.preparedAuditUrl)
-      },
-      priceCents,
-      currency:'USD'
-    });
+    const personal = nextPlatform.findMini(String(req.body?.accessKey || ''), email);
+    res.setHeader('Cache-Control','no-store');
+    res.json(personal ? {found:true,...personal,priceCents,currency:'USD'} : {found:false,message:'Enter the personal access key from your preview link. If you have a legacy audit, contact support for a secure link.'});
   }
 );
 
@@ -628,18 +459,13 @@ app.get('/api/purchase-options',
   rateLimit({ windowMs: 5 * 60 * 1000, max: 60 }),
   (_req, res) => {
     const manual = manualPaymentConfig();
-    const stripeAvailable = salesEnabled && Boolean(stripe);
     res.json({
       priceCents,
       currency: 'USD',
       primary: paymentMode,
       methods: {
-        card: {
-          available: stripeAvailable,
-          label: 'Pay securely by card'
-        },
         bankTransfer: {
-          available: salesEnabled && manual.enabled,
+          available: process.env.QONVEXA_PAYMENTS_ENABLED === 'true' && salesEnabled && manual.enabled,
           label: 'Bank transfer',
           // A method that is off because of a misconfiguration should say so rather than
           // simply vanish from the page with no way to tell why.
@@ -655,6 +481,7 @@ app.get('/api/purchase-options',
 app.post('/api/manual-order',
   rateLimit({ windowMs: 15 * 60 * 1000, max: 8 }),
   async (req, res) => {
+    if (process.env.QONVEXA_PAYMENTS_ENABLED !== 'true') return res.status(503).json({error:'Payments disabled in this local-safe release.'});
     if (!salesEnabled) return res.status(503).json({ error: 'Paid checkout is not enabled yet.' });
     const manual = manualPaymentConfig();
     if (!manual.enabled) {
@@ -721,32 +548,11 @@ app.get('/api/order-status',
   rateLimit({ windowMs: 5 * 60 * 1000, max: 60 }),
   async (req, res) => {
     const token = clean(req.query.token || '', 200);
-    const sessionId = clean(req.query.session_id || '', 220);
     if (!/^[a-f0-9]{48}$/i.test(token)) {
       return res.status(400).json({ error: 'Invalid order access token.' });
     }
 
     let order = getOrderByAccessToken(token);
-
-    if (!order && sessionId && stripe) {
-      try {
-        const session = await stripe.checkout.sessions.retrieve(sessionId);
-        const expectedHash = clean(session.metadata?.publicTokenHash || '', 128);
-        if (!expectedHash || !safeCredentialEqual(expectedHash, hashOrderToken(token))) {
-          return res.status(404).json({ error: 'Order not found.' });
-        }
-        if (session.payment_status === 'paid') {
-          await fulfillPaidSession(session, `status:${session.id}`);
-          order = getOrderByAccessToken(token);
-        }
-        if (!order) {
-          res.setHeader('Cache-Control', 'no-store');
-          return res.json(publicStripeSessionPayload(session));
-        }
-      } catch {
-        return res.status(404).json({ error: 'Order not found.' });
-      }
-    }
 
     if (!order) return res.status(404).json({ error: 'Order not found.' });
     res.setHeader('Cache-Control', 'no-store');
@@ -754,115 +560,10 @@ app.get('/api/order-status',
   }
 );
 
-app.post('/api/create-checkout-session',
-  rateLimit({ windowMs: 15 * 60 * 1000, max: 12 }),
-  async (req, res) => {
-    if (!salesEnabled) return res.status(503).json({ error: 'Paid checkout is not enabled yet.' });
-    if (!stripe) {
-      return res.status(503).json({ error: 'Payments are not configured yet.' });
-    }
-
-    const {
-      websiteUrl,
-      businessType = '',
-      primaryGoal = '',
-      primaryService = '',
-      sourceLeadId = '',
-      email = ''
-    } = req.body || {};
-
-    if (!isValidHttpUrl(websiteUrl) || !isValidEmail(email)) {
-      return res.status(400).json({ error: 'Please provide a valid website URL and email.' });
-    }
-
-    try {
-      const publicAccessToken = crypto.randomBytes(24).toString('hex');
-      const session = await stripe.checkout.sessions.create({
-        mode: 'payment',
-        customer_email: clean(email, 320),
-        line_items: [{
-          price_data: {
-            currency: 'usd',
-            product_data: {
-              name: 'QONVEXA Website Conversion Audit',
-              description: 'Human-reviewed, prioritized conversion audit for one public website.'
-            },
-            unit_amount: priceCents
-          },
-          quantity: 1
-        }],
-        metadata: {
-          websiteUrl: clean(websiteUrl, 500),
-          businessType: clean(businessType, 120),
-          primaryGoal: clean(primaryGoal, 120),
-          primaryService: clean(primaryService, 180),
-          sourceLeadId: resolveSourceLeadId(sourceLeadId, email),
-          publicTokenHash: hashOrderToken(publicAccessToken)
-        },
-        success_url: `${siteUrl}/order.html?token=${encodeURIComponent(publicAccessToken)}&session_id={CHECKOUT_SESSION_ID}`,
-        cancel_url: `${siteUrl}/?checkout=cancelled#pricing`,
-        billing_address_collection: 'auto'
-      });
-
-      res.json({ url: session.url });
-    } catch (err) {
-      console.error('Stripe session creation failed:', err);
-      res.status(500).json({ error: 'Could not start secure checkout.' });
-    }
-  }
-);
-
-app.get('/api/checkout-session-status',
-  rateLimit({ windowMs: 5 * 60 * 1000, max: 30 }),
-  async (req, res) => {
-    if (!stripe) return res.status(503).json({ error: 'Payments are not configured.' });
-
-    const sessionId = clean(req.query.session_id || '', 200);
-    if (!/^cs_(test_|live_)?[A-Za-z0-9_]+$/.test(sessionId)) {
-      return res.status(400).json({ error: 'Invalid checkout session.' });
-    }
-
-    try {
-      const session = await stripe.checkout.sessions.retrieve(sessionId);
-      res.json({
-        id: session.id,
-        status: session.status,
-        paymentStatus: session.payment_status,
-        customerEmail: session.customer_details?.email || session.customer_email || '',
-        amountTotal: session.amount_total,
-        currency: session.currency,
-        websiteUrl: session.metadata?.websiteUrl || ''
-      });
-    } catch (err) {
-      res.status(404).json({ error: 'Checkout session not found.' });
-    }
-  }
-);
-
-
 // ─────────────────────────────────────────────────────────────────────────────
 // AutonomOS machine-service surface. Catalog is free; product endpoints are
 // payment-gated by x402 when the selected facilitator/network are configured.
 // ─────────────────────────────────────────────────────────────────────────────
-app.get('/api/autonomos/catalog',
-  rateLimit({ windowMs: 5 * 60 * 1000, max: 120 }),
-  (_req, res) => res.json(autonomos.catalog())
-);
-
-app.get('/.well-known/autonomos.json', (_req, res) => {
-  res.setHeader('Cache-Control', 'public, max-age=300');
-  res.json(autonomos.catalog());
-});
-
-for (const product of autonomos.products) {
-  app.get(product.path,
-    rateLimit({ windowMs: 5 * 60 * 1000, max: 90 }),
-    (req, res) => autonomos.handleProductRequest(product.id, req, res)
-  );
-}
-
-// Do not expose stale deployment/source artifacts that happen to exist under
-// /public in older QONVEXA archives. They are not needed by the browser.
 app.use((req, res, next) => {
   let pathname = '';
   try { pathname = decodeURIComponent(req.path || '').toLowerCase(); } catch { return res.status(400).send('Bad Request'); }
@@ -876,7 +577,7 @@ app.use((req, res, next) => {
 // Serve public assets only after explicit dynamic/admin/SEO/API routes.
 // This prevents /admin, /robots.txt and /sitemap.xml from being intercepted
 // by express.static before their dedicated handlers run.
-app.get('/autonomos/artifacts/:id/:name',(req,res)=>serveLocalArtifact(req,res));
+
 
 // AutonomOS writes two derived views as files -- the global work feed and the daily money
 // report -- into the very directory express.static serves to the whole internet with no
@@ -920,88 +621,9 @@ app.use((req, res) => {
   return res.status(404).json({ error: 'Not found' });
 });
 
-// Two deliveries of the same payment used to race here. The session lookup below awaits, so
-// both calls reached the "already fulfilled?" check before either had written the answer, and
-// both then appended an order: one payment, two rows in orders.ndjson, two entity updates and
-// two admin events. The ledger's own receipt dedup kept the money right; everything counted
-// off orders.ndjson was doubled. Serializing per session id closes the window without
-// changing what fulfilment does.
-async function fulfillPaidSession(session, eventId) {
-  return serializeByKey(`stripe_session:${String(session?.id || '')}`, () => fulfillPaidSessionExclusive(session, eventId));
-}
-
-async function fulfillPaidSessionExclusive(session, eventId) {
-  const freshSession = stripe ? await stripe.checkout.sessions.retrieve(session.id) : session;
-  if (freshSession.payment_status !== 'paid') return;
-  session = freshSession;
-  const sessionId = clean(session.id, 200);
-  const fulfilledFile = path.join(storageDir, 'fulfilled-sessions.json');
-  let fulfilled = {};
-  try {
-    fulfilled = JSON.parse(fs.readFileSync(fulfilledFile, 'utf8'));
-  } catch {}
-
-  if (fulfilled[sessionId]) return;
-
-  const order = {
-    receivedAt: new Date().toISOString(),
-    eventId: clean(eventId, 200),
-    sessionId,
-    paymentMethod: 'card',
-    paymentStatus: session.payment_status,
-    publicTokenHash: session.metadata?.publicTokenHash || '',
-    customerEmail: session.customer_details?.email || session.customer_email || '',
-    websiteUrl: session.metadata?.websiteUrl || '',
-    businessType: session.metadata?.businessType || '',
-    primaryGoal: session.metadata?.primaryGoal || '',
-    primaryService: session.metadata?.primaryService || '',
-    sourceLeadId: session.metadata?.sourceLeadId || '',
-    amountTotal: session.amount_total,
-    currency: session.currency
-  };
-
-  appendNdjson('orders.ndjson', order);
-  const preparedAuditUrl = preparedAuditForLead(order.sourceLeadId, order.customerEmail);
-  updateEntityState('order', order.sessionId, preparedAuditUrl
-    ? { status:'ready', deliveryUrl:preparedAuditUrl, adminNote:'' }
-    : { status: readAdminSettings().defaultOrderStatus || 'paid', adminNote:'' }
-  );
-  logAdminEvent('paid_order_received', { entityId:order.sessionId, email:order.customerEmail, websiteUrl:order.websiteUrl, amountTotal:order.amountTotal, currency:order.currency });
-
-  // Card revenue only ever reached orders.ndjson, so it was invisible to the 50/50 split,
-  // to the agents' spend pool and to every money figure the dashboard reports. Checkout
-  // sessions are created in USD; anything else is recorded as an order but not as USD
-  // revenue, because converting it would mean inventing a rate.
-  if (String(order.currency || '').toLowerCase() === 'usd') {
-    try {
-      autonomos.recordExternalRevenue({
-        id: `stripe_${order.sessionId}`,
-        source: 'stripe',
-        externalId: order.sessionId,
-        amountUsd: Number(order.amountTotal || 0) / 100,
-        currency: 'USD',
-        rail: 'card',
-        note: 'Stripe checkout'
-      });
-    } catch (error) {
-      console.error('Ledger revenue record failed:', error?.message || error);
-    }
-  } else {
-    logAdminEvent('paid_order_currency_unconverted', { entityId:order.sessionId, currency:order.currency });
-  }
-
-  // Mark fulfilled atomically enough for a single-instance MVP.
-  fulfilled[sessionId] = { fulfilledAt: order.receivedAt, eventId: order.eventId };
-  const tmp = `${fulfilledFile}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(fulfilled, null, 2), 'utf8');
-  fs.renameSync(tmp, fulfilledFile);
-
-  await sendOptionalWebhook('paid_order', order);
-}
-
 async function sendOptionalWebhook(type, payload) {
   const url = clean(process.env.NOTIFICATION_WEBHOOK_URL || '', 1000);
-  if (!url) return;
+  if (!url || process.env.QONVEXA_OUTBOUND_ENABLED !== 'true') return;
   try {
     const response = await fetch(url, {
       method: 'POST',
@@ -1353,28 +975,6 @@ function isPersistentStorage() {
   return normalized === '/var/lib/qonvexa/data' || normalized.startsWith('/var/lib/qonvexa/');
 }
 
-function publicStripeSessionPayload(session) {
-  const paid = session.payment_status === 'paid';
-  return {
-    orderId: session.id,
-    paymentMethod: 'card',
-    paymentStatus: session.payment_status || 'pending',
-    status: paid ? 'paid' : 'awaiting_payment',
-    websiteUrl: session.metadata?.websiteUrl || '',
-    customerEmail: session.customer_details?.email || session.customer_email || '',
-    amountTotal: session.amount_total,
-    currency: session.currency || 'usd',
-    createdAt: session.created ? new Date(session.created * 1000).toISOString() : '',
-    delivery: {
-      state: paid ? 'preparing' : 'waiting_for_payment',
-      url: '',
-      message: paid
-        ? 'Payment is confirmed. Your personalized audit is now in preparation.'
-        : 'We are waiting for payment confirmation.'
-    }
-  };
-}
-
 function readAllOrders() {
   return readNdjson('orders.ndjson');
 }
@@ -1473,9 +1073,7 @@ function validateProductionConfig() {
       console.warn('WARNING: STORAGE_DIR is not on persistent storage. Orders/leads will be lost on the next deploy or container restart until a persistent disk is attached.');
     }
     const manual = manualPaymentConfig();
-    const hasStripe = Boolean(process.env.STRIPE_SECRET_KEY && process.env.STRIPE_WEBHOOK_SECRET);
-    if (!hasStripe && !manual.enabled) missing.push('At least one live payment method must be configured');
-    if (hasStripe && /^sk_test_/i.test(process.env.STRIPE_SECRET_KEY || '')) missing.push('STRIPE_SECRET_KEY must be a live key in live mode');
+    if (!manual.enabled) missing.push('At least one live payment method must be configured');
   }
 
   if (missing.length) {
@@ -1550,7 +1148,7 @@ process.on('uncaughtException', (error) => {
 });
 
 app.listen(port, '0.0.0.0', () => {
-  console.log(`QONVEXA + AutonomOS running at ${siteUrl}`);
+  console.log(`QONVEXA web running at ${siteUrl}`);
   console.log(`Storage: ${storageDir}`);
 });
 

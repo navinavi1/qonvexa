@@ -1,0 +1,12 @@
+// Test-only network boundary. Never loaded by production startup.
+const net=require('node:net'),http=require('node:http'),https=require('node:https'),cp=require('node:child_process'),path=require('node:path'),fs=require('node:fs');
+const check=host=>{if(!['localhost','127.0.0.1','::1','[::1]'].includes(String(host)))throw Error('OFFLINE_TEST_EXTERNAL_NETWORK_BLOCKED');};
+const originalConnect=net.Socket.prototype.connect;
+net.Socket.prototype.connect=function(...args){let p=args[0];if(Array.isArray(p))p=p[0];if(typeof p==='object'&&p){if(p.path)throw Error('OFFLINE_TEST_UNIX_SOCKET_BLOCKED');check(p.host||'localhost');}else if(typeof p==='number')check(typeof args[1]==='string'?args[1]:'localhost');return originalConnect.apply(this,args);};
+for(const mod of [http,https])for(const name of ['request','get']){const original=mod[name];mod[name]=function(...args){const p=args[0];if(typeof p==='string'||p instanceof URL)check(new URL(p).hostname);else check(p.hostname||p.host||'localhost');return original.apply(this,args);};}
+const originalFetch=global.fetch;global.fetch=(url,opts)=>{check(new URL(typeof url==='string'?url:url.url||url).hostname);return originalFetch(url,opts);};
+for(const name of ['spawn','spawnSync','execFile','execFileSync']){const original=cp[name];cp[name]=function(file,args,options,...rest){if(/^taskmarket-does-not-exist-\d+$/.test(file)){const child=new(require('node:events').EventEmitter)();child.stdout=new(require('node:stream').PassThrough)();child.stderr=new(require('node:stream').PassThrough)();queueMicrotask(()=>{const e=Object.assign(Error('ENOENT'),{code:'ENOENT'});if(typeof rest[0]==='function')rest[0](e,'','');else child.emit('error',e);});return child;}
+const fixture=/^\/tmp\/tm-(?:e2e|keystore)-[A-Za-z0-9]+\/(?:taskmarket|fake-taskmarket)$/.test(file)&&fs.existsSync(file);
+if(path.resolve(file)!==process.execPath&&file!=='node'&&!fixture)throw Error('OFFLINE_TEST_EXTERNAL_PROCESS_BLOCKED');if(!Array.isArray(args))throw Error('OFFLINE_TEST_PROCESS_ARGS_REQUIRED');options={...options,env:{...(options?.env||process.env),NODE_OPTIONS:`--require=${__filename}`,QONVEXA_OUTBOUND_ENABLED:'false',QONVEXA_PUBLIC_FETCH_ENABLED:process.env.QONVEXA_TEST_ALLOW_FIXTURE_SCANS==='true'?(options?.env?.QONVEXA_PUBLIC_FETCH_ENABLED||'false'):'false',QONVEXA_TEST_ALLOW_FIXTURE_SCANS:process.env.QONVEXA_TEST_ALLOW_FIXTURE_SCANS||'false'}};return original.call(this,file,args,options,...rest);};}
+cp.exec=cp.execSync=()=>{throw Error('OFFLINE_TEST_SHELL_BLOCKED');};
+require('node:module').syncBuiltinESMExports();

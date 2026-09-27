@@ -100,6 +100,10 @@ previewForm?.addEventListener('submit', async (e) => {
     const data = await r.json();
     if (!r.ok) throw new Error(data.error || 'Could not submit request.');
     previewStatus.textContent = 'Request received. Your preview can now be prepared for this website.';
+    if (data.personal?.portalUrl) {
+      const a=document.createElement('a'); a.href=data.personal.portalUrl; a.textContent='Open your private audit workspace'; a.className='button';
+      previewStatus.append(document.createElement('br'),a);
+    }
     previewForm.reset();
   } catch (err) {
     previewStatus.textContent = err.message;
@@ -130,7 +134,7 @@ auditLookupForm?.addEventListener('submit', async event => {
     const response = await fetch('/api/find-mini-audit', {
       method:'POST',
       headers:{'Content-Type':'application/json','Accept':'application/json'},
-      body:JSON.stringify({ email })
+      body:JSON.stringify({ email, accessKey: String(new FormData(auditLookupForm).get('accessKey') || '').trim() })
     });
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || 'Could not search for your audit.');
@@ -140,6 +144,7 @@ auditLookupForm?.addEventListener('submit', async event => {
       return;
     }
 
+    if (data.portalUrl && !data.miniAudit) { location.assign(data.portalUrl); return; }
     foundMiniAudit = data.miniAudit;
     auditLookupStatus.textContent = '';
     miniAuditTitle.textContent = foundMiniAudit.title || 'Your QONVEXA mini-audit';
@@ -287,14 +292,6 @@ async function loadPurchaseOptions() {
 
 function renderPaymentOptions(options) {
   const methods = [];
-  if (options.methods?.card?.available) {
-    methods.push(`
-      <button type="button" class="payment-method" data-pay="card">
-        <span class="payment-icon">↗</span>
-        <span><b>Pay securely by card</b><small>Continue to the secure hosted checkout.</small></span>
-        <strong>${money(options.priceCents, options.currency)}</strong>
-      </button>`);
-  }
   if (options.methods?.bankTransfer?.available) {
     methods.push(`
       <button type="button" class="payment-method" data-pay="bank">
@@ -317,29 +314,7 @@ function renderPaymentOptions(options) {
     return;
   }
   paymentOptions.innerHTML = methods.join('');
-  paymentOptions.querySelector('[data-pay="card"]')?.addEventListener('click', startCardCheckout);
   paymentOptions.querySelector('[data-pay="bank"]')?.addEventListener('click', startBankTransfer);
-}
-
-async function startCardCheckout() {
-  if (!validatePurchaseDetails()) { showPurchaseStep(1); return; }
-  checkoutStatus.textContent = 'Opening secure checkout…';
-  setPaymentButtonsDisabled(true);
-  try {
-    const response = await fetch('/api/create-checkout-session', {
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body:JSON.stringify(purchasePayload())
-    });
-    const data = await response.json();
-    if (!response.ok || !data.url) throw new Error(data.error || 'Could not start secure checkout.');
-    sessionStorage.removeItem(purchaseDraftKey);
-    location.href = data.url;
-  } catch (err) {
-    checkoutStatus.textContent = err.message;
-  } finally {
-    setPaymentButtonsDisabled(false);
-  }
 }
 
 async function startBankTransfer() {

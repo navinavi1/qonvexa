@@ -1,0 +1,1 @@
+{"US":{"eligible":true,"requires":["senderIdentity","postalAddress","unsubscribe","relevance","sourceUrl","sourceDate"]},"UK":{"eligible":true,"legalTypes":["Ltd","LLP"],"requires":["senderIdentity","postalAddress","unsubscribe","relevance","sourceUrl","sourceDate","privacyBasisReviewed"]},"CA":{"eligible":false},"AU":{"eligible":false}}

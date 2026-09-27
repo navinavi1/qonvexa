@@ -14,10 +14,10 @@ const checks=[
   ['progress UI', index.includes('purchase-progress')],
   ['inline purchase tips', index.includes('purchase-tip')],
   ['server purchase options', server.includes("/api/purchase-options")],
-  ['manual fallback order', server.includes("/api/manual-order") && server.includes('BANK_BENEFICIARY')],
+  ['bank-transfer order', server.includes("/api/manual-order") && server.includes('BANK_BENEFICIARY')],
   ['secure public order status', server.includes("/api/order-status") && server.includes('hashOrderToken')],
   ['automatic status refresh', read('public/order.js').includes('15000')],
-  ['card checkout preserved', server.includes("/api/create-checkout-session") && app.includes('startCardCheckout')],
+  ['bank-transfer checkout', server.includes("/api/manual-order") && app.includes('startBankTransfer')],
   ['mobile purchase layout', css.includes('@media(max-width:760px)') && css.includes('.purchase-dialog')],
   ['admin awaiting-payment workflow', admin.includes('awaiting_payment')]
 ];

@@ -25,7 +25,7 @@ for (const row of crypto) assert.equal(isCryptoRevenue(row), true, JSON.stringif
 // 2) Fiat rails must stay out, or the tile stops meaning anything.
 const fiat = [
   { rail: 'agrenting_escrow', network: '', currency: 'USD' },  // agrenting-worker.js
-  { rail: 'card', network: '', currency: 'USD' },              // the Stripe bridge
+  { rail: 'card', network: '', currency: 'USD' },              // the legacy payment bridge
   { rail: '', network: '', currency: 'USD' },                  // native-market-worker.js
   { rail: '', network: '', currency: 'EUR' },
   {}

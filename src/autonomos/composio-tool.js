@@ -1,7 +1,7 @@
 import { reserveResource, observeResourceResult, resourceAvailability } from './resource-control.js';
 import { normalizeApp } from './capability-registry.js';
 const BLOCKED_TOOL = /(^|_)(DELETE|REMOVE|REVOKE|TRANSFER|SEND_MONEY|CREATE_PAYMENT|WITHDRAW|BUY|SELL|TRADE|SWAP|CLOSE_ACCOUNT|SUBSCRIBE|UPGRADE|PURCHASE|RECHARGE|ENABLE_BILLING|CHANGE_PLAN|CHANGE_PASSWORD|RESET_PASSWORD|CREATE_API_KEY|ROTATE_SECRET|EXPORT_SECRET|PRIVATE_KEY|SEED_PHRASE)(_|$)/i;
-const DEFAULT_DENY_TOOLKITS = new Set(['STRIPE','PAYPAL','COINBASE','BINANCE','BANKING','PLAID']);
+const DEFAULT_DENY_TOOLKITS = new Set(['PAYPAL','COINBASE','BINANCE','BANKING','PLAID']);
 
 async function composioSearchImpl({query='',toolkit='',limit=12}={},env=process.env,signal){
   const key=String(env.COMPOSIO_API_KEY||'').trim();if(!key)return{ok:false,error:'composio_api_key_missing'};

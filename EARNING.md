@@ -15,8 +15,7 @@ permitted, the payment is real crypto, and the whole lane is implemented here:
 and fail on the base commit, and `github-job-monitor.js` watches for the merge and the
 payment.
 
-**Can earn: direct clients.** The Stripe checkout on the site is live and its revenue now
-reaches the ledger, the 50/50 split, and the agents' spend pool.
+Direct-client bank-transfer orders belong to Qonvexa. Legacy earning workers are disabled and receive no Qonvexa revenue.
 
 **Cannot earn as things stand: the freelance marketplaces.** Upwork, Freelancer, Guru,
 PeoplePerHour, Workana, Contra, Truelancer and the rest are all marked

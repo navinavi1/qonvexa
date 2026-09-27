@@ -1,16 +1,16 @@
 const title = document.querySelector('#success-title');
 const message = document.querySelector('#success-message');
 const details = document.querySelector('#order-details');
-const sessionId = new URLSearchParams(location.search).get('session_id');
+const token = new URLSearchParams(location.search).get('token');
 
 async function verify() {
-  if (!sessionId) {
+  if (!token) {
     title.textContent = 'Payment not verified';
-    message.textContent = 'This page needs a valid Checkout Session ID.';
+    message.textContent = 'Use the private order link supplied with your bank-transfer instructions.';
     return;
   }
   try {
-    const response = await fetch(`/api/checkout-session-status?session_id=${encodeURIComponent(sessionId)}`, {
+    const response = await fetch(`/api/order-status?token=${encodeURIComponent(token)}`, {
       headers: { 'accept': 'application/json' }
     });
     const data = await response.json();
@@ -26,7 +26,7 @@ async function verify() {
       details.textContent = [data.websiteUrl, data.customerEmail, amount].filter(Boolean).join(' · ');
     } else {
       title.textContent = 'Payment is still processing';
-      message.textContent = 'Your Checkout session exists, but Stripe has not marked the payment as paid yet. Please check again shortly.';
+      message.textContent = 'Your bank transfer has not been confirmed yet. We verify receipt before releasing the paid audit.';
     }
   } catch (err) {
     title.textContent = 'We could not verify this payment';

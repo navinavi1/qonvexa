@@ -33,11 +33,11 @@ check('Trigger.dev dispatch has per-opportunity idempotency',/idempotencyKey/.te
 check('Demo/test filter participates in candidacy',/demo_or_test_opportunity/.test(runtime));
 
 const server=read('server.js');
-check('Signed Trigger.dev callback endpoint exists',/\/api\/internal\/autonomos\/trigger\/execute/.test(server)&&/unauthorized_trigger_callback/.test(server));
+check('Legacy Trigger callback is disabled in Qonvexa',server.includes("'/api/internal/autonomos'")&&server.includes("res.status(410)")&&!server.includes('processDurableOpportunity'));
 const eventBus=read('src/autonomos/event-bus.js');
 check('Event bus uses already-paid Redis Streams',/xAdd\(/.test(eventBus)&&/REDIS_URL/.test(eventBus)&&!/import\(['\"]nats['\"]\)/.test(eventBus));
 
-const env=read('.env.example');
+const env=read('docs/legacy/env.example.txt');
 for(const key of ['OPENAI_API_KEY','DATABASE_URL','REDIS_URL','TRIGGER_SECRET_KEY','COMPOSIO_API_KEY','S3_ENDPOINT','S3_REGION','S3_BUCKET','S3_ACCESS_KEY_ID','S3_SECRET_ACCESS_KEY','LANGFUSE_PUBLIC_KEY','LANGFUSE_SECRET_KEY','LANGFUSE_BASE_URL','E2B_API_KEY']){
   check(`.env.example documents ${key}`,new RegExp(`^${key}=`,`m`).test(env));
 }

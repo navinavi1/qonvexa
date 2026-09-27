@@ -1,0 +1,37 @@
+{
+  "id": "roofing",
+  "product": "Estimate Request + Follow-up Pipeline",
+  "conversions": [
+    "inspection request",
+    "estimate",
+    "call",
+    "form"
+  ],
+  "recommendedModules": [
+    "conversion",
+    "mobile",
+    "local",
+    "analytics",
+    "capture",
+    "booking",
+    "reputation",
+    "clarity"
+  ],
+  "commonServices": [
+    "conversion",
+    "local",
+    "crm",
+    "followup",
+    "booking",
+    "analytics"
+  ],
+  "workflow": [
+    "New inquiry",
+    "Contact attempted",
+    "Qualified",
+    "Booked / Estimate",
+    "Won / Lost"
+  ],
+  "contentPolicy": "Customer-approved facts only; no unapproved medical, legal or financial claims.",
+  "sendPolicy": "Consent, suppression and provider capability must be verified; draft only in this release."
+}

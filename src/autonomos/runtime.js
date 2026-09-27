@@ -491,7 +491,7 @@ export function createAutonomOS({ storageDir, siteUrl, ownerWallet, env = proces
     },
 
     // Revenue that arrived through a rail the runtime does not poll itself — today the
-    // Stripe card checkout. That money used to land only in orders.ndjson, so it was absent
+    // legacy payment card checkout. That money used to land only in orders.ndjson, so it was absent
     // from the 50/50 split, from the agents' spend pool and from every money figure on the
     // dashboard. The ledger id is deterministic, so a replayed webhook cannot double-count.
     recordExternalRevenue({id='',source='',externalId='',amountUsd=0,currency='USD',rail='',note='',status='settled'}={}){

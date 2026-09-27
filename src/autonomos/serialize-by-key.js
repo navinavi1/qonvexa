@@ -2,8 +2,8 @@
 //
 // The pattern this exists for: read a file to see whether something was already done, do it,
 // then write the file to say it was. That is safe only while nothing yields in between --
-// and Stripe fulfilment awaits a session lookup before the check, so two deliveries of the
-// same payment (Stripe repeats events, pairs completed with async_payment_succeeded, and
+// and legacy payment fulfilment awaits a session lookup before the check, so two deliveries of the
+// same payment (legacy payment repeats events, pairs completed with async_payment_succeeded, and
 // retries anything that answered 500) both saw "not done yet" and both wrote the order.
 //
 // Single-threaded is not the same as serialized: it only means two turns cannot run at the

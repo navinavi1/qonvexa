@@ -1,6 +1,5 @@
 const params = new URLSearchParams(location.search);
 const token = params.get('token') || '';
-const sessionId = params.get('session_id') || '';
 const title = document.querySelector('#order-title');
 const message = document.querySelector('#order-message');
 const card = document.querySelector('#order-card');
@@ -15,7 +14,7 @@ async function loadOrder() {
   }
   refresh.disabled = true;
   try {
-    const response = await fetch(`/api/order-status?token=${encodeURIComponent(token)}${sessionId ? `&session_id=${encodeURIComponent(sessionId)}` : ''}`, {
+    const response = await fetch(`/api/order-status?token=${encodeURIComponent(token)}`, {
       headers: { accept:'application/json' },
       cache:'no-store'
     });
@@ -36,6 +35,8 @@ async function loadOrder() {
       ${data.delivery?.url ? `<a class="button full" href="${escAttr(data.delivery.url)}" rel="noopener">Open delivery area</a>` : ''}
     `;
     if (paid) {
+      const open=document.createElement('button');open.className='button';open.textContent='Open Growth Audit workspace';
+      open.addEventListener('click',async()=>{open.disabled=true;try{const r=await fetch('/api/next/from-order',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({orderToken:token})});const d=await r.json();if(!r.ok)throw Error(d.error);location.assign(d.portalUrl);}catch(e){message.textContent=e.message;open.disabled=false;}});card.append(open);
       if (autoRefreshTimer) clearTimeout(autoRefreshTimer);
       autoRefreshTimer = null;
     } else if (!autoRefreshTimer) {

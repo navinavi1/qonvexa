@@ -11,26 +11,26 @@ const proc=spawn(process.execPath,['server.js'],{env:{PATH:process.env.PATH,PORT
 let output='';proc.stdout.on('data',b=>output+=b);proc.stderr.on('data',b=>output+=b);let dom;
 try{
   let ready=false;for(let i=0;i<80;i++){try{ready=(await fetch(base+'/version')).ok}catch{}if(ready)break;await new Promise(r=>setTimeout(r,100));}assert(ready,output);
-  const request=(suffix,body,cookie='',origin=base)=>fetch(base+suffix,{method:suffix==='/api/admin/autonomos/config'?'PATCH':'POST',headers:{'content-type':'application/json',cookie,origin},body:JSON.stringify(body)});
-  assert.equal((await request('/api/admin/autonomos/config',{enabled:false})).status,401);
+  const request=(suffix,body,cookie='',origin=base)=>fetch(base+suffix,{method:suffix==='/api/admin/settings'?'PATCH':'POST',headers:{'content-type':'application/json',cookie,origin},body:JSON.stringify(body)});
+  assert.equal((await request('/api/admin/settings',{ownerDisplayName:"Fixture"})).status,401);
   const login=await request('/api/admin/login',{username:'admin',password:'local-test-only-password'});assert.equal(login.status,200);const cookie=login.headers.get('set-cookie').split(';')[0];
-  assert.equal((await request('/api/admin/autonomos/config',{enabled:false},cookie,'https://evil.example')).status,403);
-  assert.equal((await request('/api/admin/autonomos/config',{enabled:false},cookie)).status,200);
-  for(const source of ['taskbounty','agenthansa'])assert.equal((await request(`/api/admin/autonomos/marketplaces/${source}/canary`,{},cookie)).status,404);
+  assert.equal((await request('/api/admin/settings',{ownerDisplayName:"Fixture"},cookie,'https://evil.example')).status,403);
+  assert.equal((await request('/api/admin/settings',{ownerDisplayName:"Fixture"},cookie)).status,200);
+  for(const source of ['taskbounty','agenthansa'])assert.equal((await request(`/api/admin/autonomos/marketplaces/${source}/canary`,{},cookie)).status,410);
   assert.equal((await request('/api/webhooks/taskbounty',{})).status,404);
   const errors=[];const virtualConsole=new VirtualConsole();virtualConsole.on('jsdomError',e=>errors.push(e.message));virtualConsole.on('error',e=>errors.push(String(e)));
-  dom=new JSDOM(await(await fetch(base+'/admin')).text(),{url:base+'/admin#autonomos',runScripts:'outside-only',virtualConsole});
+  dom=new JSDOM(await(await fetch(base+'/admin')).text(),{url:base+'/admin',runScripts:'outside-only',virtualConsole});
   dom.window.fetch=(url,opts={})=>fetch(new URL(url,base),{...opts,headers:{...opts.headers,cookie,origin:base}});dom.window.alert=()=>{};dom.window.confirm=()=>false;
-  dom.window.eval(await fs.readFile('public/common.js','utf8'));dom.window.eval(await fs.readFile('public/marketplaces.js','utf8'));dom.window.eval(await fs.readFile('public/admin.js','utf8'));
-  for(let i=0;i<50;i++){if(dom.window.document.getElementById('autonomos-global-work-feed'))break;await new Promise(r=>setTimeout(r,50));}
-  assert(dom.window.document.getElementById('autonomos-global-work-feed'),'clean global work feed must render');
+  dom.window.eval(await fs.readFile('public/common.js','utf8'));dom.window.eval(await fs.readFile('public/admin.js','utf8'));
+  for(let i=0;i<50;i++){if(!dom.window.document.getElementById('dashboard-view').hidden)break;await new Promise(r=>setTimeout(r,50));}
+  assert(dom.window.document.querySelector('a[href="/admin-next.html"]'),'growth operations is available');
   assert.equal(dom.window.document.querySelectorAll('[data-market]').length,0,'legacy marketplace control cards must stay deleted');
   assert.equal(dom.window.document.querySelector('.autonomos-workprotocol-card'),null,'legacy WorkProtocol card must not survive dashboard cleanup');
   for(const tab of dom.window.document.querySelectorAll('[data-view]')){tab.click();assert.equal(dom.window.document.querySelector('.admin-view.active').dataset.panel,tab.dataset.view);}
   dom.window.location.hash='leads';await new Promise(r=>setTimeout(r,30));assert.equal(dom.window.document.querySelector('.admin-view.active').dataset.panel,'leads');
-  dom.window.document.querySelector('[data-view="autonomos"]').click();
-  const snapshot=await(await fetch(base+'/api/admin/autonomos',{headers:{cookie}})).json();assert(!snapshot.newMarketplaces,'retired marketplace manager must not run');assert(!snapshot.connectors.some(x=>['agenthansa','taskbounty'].includes(x.id)));assert(!snapshot.connectors.some(x=>x.id==='workprotocol'));assert(!snapshot.connectors.some(x=>x.id==='dealwork'));
+  assert.equal((await fetch(base+'/api/admin/autonomos',{headers:{cookie}})).status,410,'legacy runtime stays disabled even for admin');
+  assert.equal((await fetch(base+'/api/admin/next',{headers:{cookie}})).status,200,'growth admin remains authorized');
   assert.deepEqual(errors,[]);
-  globalThis.console.log('PASS real HTTP server: auth, cross-origin rejection, removed provider routes, cleaned admin rendering and remaining connectors');
+  globalThis.console.log('PASS real HTTP server: auth, cross-origin rejection, removed provider routes, cleaned admin rendering and disabled legacy runtime');
 }finally{dom?.window.close();proc.kill('SIGTERM');await Promise.race([once(proc,'exit'),new Promise(r=>setTimeout(r,3000))]);await fs.rm(dir,{recursive:true,force:true});}
 

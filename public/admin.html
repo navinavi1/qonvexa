@@ -43,7 +43,7 @@
         <button class="admin-tab" data-view="leads">Leads</button>
         <button class="admin-tab" data-view="orders">Orders</button>
         <button class="admin-tab" data-view="clients">Clients</button>
-        <button class="admin-tab autonomos-tab" data-view="autonomos">AutonomOS</button>
+        <a class="admin-tab" href="/admin-next.html">Growth operations</a>
         <button class="admin-tab" data-view="activity">Activity</button>
         <button class="admin-tab" data-view="settings">Settings</button>
       </nav>
@@ -235,7 +235,7 @@
           <section class="admin-panel">
             <div class="admin-panel-head"><div><small>INTEGRATIONS</small><h2>System configuration</h2></div></div>
             <div id="system-settings" class="system-list"></div>
-            <p class="settings-note">Secrets such as Stripe keys and the admin password are intentionally never shown or editable in the browser. They stay in server environment variables.</p>
+            <p class="settings-note">Secrets such as integration credentials and the admin password are intentionally never shown or editable in the browser. They stay in server environment variables.</p>
           </section>
         </div>
       </section>
@@ -274,7 +274,7 @@
     <small>JOB / RUN DETAIL</small><h2 id="autonomos-job-dialog-title">Job detail</h2>
     <div id="autonomos-job-dialog-body" class="autonomos-job-detail"></div>
   </dialog>
-  <script src="marketplaces.js?v=clean15" defer></script>
+  
 <script src="common.js" defer></script><script src="admin.js" defer></script>
 </body>
 </html>

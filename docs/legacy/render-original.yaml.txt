@@ -1,0 +1,182 @@
+services:
+  - type: web
+    name: qonvexa
+    runtime: node
+    plan: starter
+    region: oregon
+    buildCommand: npm ci --include=dev && npm run verify && npm prune --omit=dev
+    startCommand: npm start
+    healthCheckPath: /health
+    maxShutdownDelaySeconds: 30
+    autoDeployTrigger: commit
+    domains:
+      - qonvexa.co
+    disk:
+      name: qonvexa-data
+      mountPath: /var/lib/qonvexa/data
+      sizeGB: 1
+    envVars:
+      - key: NODE_VERSION
+        value: "24.14.1"
+      # Render sets this by default, but two things that must never be left to a platform
+      # default depend on it: the Secure flag on the owner's admin session cookie, and the
+      # startup check that refuses to boot without ADMIN_PASSWORD, ADMIN_SESSION_SECRET and
+      # IP_HASH_SALT (server.js returns early from all of it when NODE_ENV is not production).
+      - key: NODE_ENV
+        value: production
+      - key: LAUNCH_MODE
+        value: live
+      - key: STORAGE_DIR
+        value: /var/lib/qonvexa/data
+      - key: AUDIT_PRICE_CENTS
+        value: "14900"
+      - key: PAYMENT_MODE
+        value: manual
+      - key: ALLOW_STAGING_PAYMENTS
+        value: "false"
+      - key: MANUAL_PAYMENT_ENABLED
+        value: "true"
+      - key: CONTACT_EMAIL
+        value: hello@qonvexa.co
+      - key: SITE_URL
+        value: https://qonvexa.co
+      - key: LEGAL_BUSINESS_NAME
+        sync: false
+      - key: LEGAL_ADDRESS
+        sync: false
+      - key: LEGAL_JURISDICTION
+        value: Ukraine
+      - key: DELIVERY_TIMEFRAME
+        value: "1–24 hours after payment confirmation"
+      - key: REFUND_POLICY_TEXT
+        value: "If we have not started preparing your personalized audit, you may request a full refund within 24 hours of payment by contacting us. Once delivery has started, refunds are considered case by case."
+      - key: BANK_BENEFICIARY
+        sync: false
+      - key: BANK_NAME
+        sync: false
+      - key: BANK_IBAN
+        sync: false
+      - key: BANK_SWIFT
+        sync: false
+      - key: BANK_CURRENCY
+        sync: false
+      - key: BANK_PAYMENT_NOTE
+        sync: false
+      - key: ADMIN_USERNAME
+        value: owner
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: ADMIN_SESSION_SECRET
+        generateValue: true
+      - key: IP_HASH_SALT
+        generateValue: true
+      - key: AUTONOMOS_ZERO_SPEND_MODE
+        value: "false"
+      - key: AUTONOMOS_EARNED_FUNDS_ONLY
+        value: "true"
+      - key: AUTONOMOS_MAX_PAID_PROCUREMENT_USD
+        value: "3"
+      - key: AUTONOMOS_TRIGGER_PROJECT_REF
+        sync: false
+      - key: AUTONOMOS_OWNER_WALLET
+        value: "0x1f674bf085f6fed36fa198287d51edf0fe0bb9e2"
+      # TaskForce settles USDC on Solana. While this is unset the payout router answers
+      # no_compatible_wallet_for_currency_or_network and those jobs are refused before
+      # they are ever claimed.
+      - key: AUTONOMOS_PHANTOM_WALLET
+        sync: false
+      - key: AUTONOMOS_BITCOIN_WALLET
+        sync: false
+      - key: AUTONOMOS_ENABLED
+        value: "true"
+      - key: AUTONOMOS_BASE_RPC_URL
+        value: "https://mainnet.base.org"
+      - key: AUTONOMOS_X402_ENABLED
+        value: "true"
+      - key: AUTONOMOS_X402_NETWORK
+        value: "eip155:8453"
+      - key: AUTONOMOS_X402_FACILITATOR_URL
+        value: "https://facilitator.xpay.sh"
+      - key: AUTONOMOS_X402_FACILITATOR_HEADERS_JSON
+        sync: false
+      - key: AUTONOMOS_X402_ACCEPTS_JSON
+        sync: false
+      - key: AUTONOMOS_TASKMARKET_ENABLED
+        value: "true"
+      # The CLI hardcodes its keystore at $HOME/.taskmarket/keystore.json with no override
+      # of its own, and $HOME is in the container's ephemeral layer. Without this the agent
+      # wallet is destroyed on every deploy and any settled USDC becomes unrecoverable.
+      - key: AUTONOMOS_TASKMARKET_HOME
+        value: "/var/lib/qonvexa/data/taskmarket-home"
+      - key: TASKMARKET_API_URL
+        value: "https://api.taskmarket.dev"
+      - key: AUTONOMOS_TASKMARKET_INTERVAL_MS
+        value: "180000"
+      - key: AUTONOMOS_SECURITY_RESEARCH_ENABLED
+        value: "false"
+      - key: AUTONOMOS_SECURITY_RESEARCH_INTERVAL_MS
+        value: "3600000"
+      - key: AUTONOMOS_SECURITY_FILES_PER_PROGRAM
+        value: "12"
+      - key: AUTONOMOS_ARBITRUM_RPC_URL
+        sync: false
+      - key: AUTONOMOS_POLYGON_RPC_URL
+        sync: false
+      - key: AUTONOMOS_EVM_CHAINS_JSON
+        sync: false
+      - key: AUTONOMOS_LLM_BASE_URL
+        sync: false
+      - key: AUTONOMOS_LLM_API_KEY
+        sync: false
+      - key: AUTONOMOS_LLM_MODEL
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: E2B_API_KEY
+        sync: false
+      - key: GITHUB_TOKEN
+        sync: false
+      - key: AUTONOMOS_GITHUB_EXPECTED_LOGIN
+        value: navinavi1
+      - key: TRIGGER_SECRET_KEY
+        sync: false
+      - key: AUTONOMOS_TRIGGER_TASK_ID
+        value: autonomos-paid-job
+      - key: DATABASE_URL
+        sync: false
+      - key: REDIS_URL
+        sync: false
+      - key: COMPOSIO_API_KEY
+        sync: false
+      - key: S3_ENDPOINT
+        sync: false
+      - key: S3_REGION
+        value: auto
+      - key: S3_PUBLIC_BASE_URL
+        sync: false
+      - key: S3_BUCKET
+        sync: false
+      - key: S3_ACCESS_KEY_ID
+        sync: false
+      - key: S3_SECRET_ACCESS_KEY
+        sync: false
+      - key: LANGFUSE_PUBLIC_KEY
+        sync: false
+      - key: LANGFUSE_SECRET_KEY
+        sync: false
+      - key: LANGFUSE_BASE_URL
+        value: https://cloud.langfuse.com
+      - key: CODERABBIT_API_KEY
+        sync: false
+      - key: AUTONOMOS_VERIFIED_PAYOUT_INTERMEDIARIES_JSON
+        value: "[]"
+      - key: AUTONOMOS_PAYOUT_NETWORKS_JSON
+        value: '["base"]'
+      - key: AUTONOMOS_PAYOUT_CRYPTO_JSON
+        value: '["USDC","USDT"]'
+
+      # Concurrency is config.maxConcurrentJobs (admin dashboard), not an env var. The
+      # AUTONOMOS_MARKETPLACE_MAX_CONCURRENT_JOBS key that used to sit here was read by no
+      # code at all; so were AUTONOMOS_BAZAAR_URL and AUTONOMOS_SECRETS_REQUIRED.
+
+

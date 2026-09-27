@@ -1,175 +1,60 @@
-[README.md](https://github.com/user-attachments/files/31746040/README.md)
-# QONVEXA — Launch-prepared build
+# Qonvexa Next — local implementation package
 
-## What this build includes
-- Existing approved redesign preserved.
-- Stripe Checkout session creation.
-- Server-side payment verification for the success page.
-- Webhook handling for immediate and delayed successful payments.
-- Idempotent paid-order fulfillment for a single-instance MVP.
-- Preview/checkout rate limiting and preview honeypot.
-- Persistent-storage path configurable via `STORAGE_DIR`.
-- Optional notification webhook for Make/Zapier/n8n.
-- Production config guard: the server refuses to start if required legal/payment values are missing.
-- Dynamic canonical/OG metadata and generated social preview image.
-- Keyboard-accessible industry tabs and reduced-motion support.
-- Legal pages converted from visible drafts into configurable templates.
+**This is a tested local foundation, not a production-ready implementation agency.** Public audit and quote planning work; live implementation checkout, CRM OAuth lifecycle, production writes and provider-level QA are not shipped. Read `IMPLEMENTATION_STATUS.md` and `KNOWN_LIMITATIONS.md` before enabling anything.
 
-## Local check
-1. Copy `.env.example` to `.env`.
-2. Keep `NODE_ENV=development`.
-3. Add Stripe test keys if you want to test checkout.
-4. Run:
-   `npm install`
-   `npm run check`
-   `npm start`
+## Product
 
-Open `http://localhost:3000`.
+Free website preview → personal audit workspace → configurable paid Growth Audit → evidence-linked recommendations → capability preflight → scoped estimate → dry-run implementation plan → plan approval. The customer owns CRM, CMS, email/SMS, AI/API and other SaaS accounts. Their recurring bills are separate from Qonvexa's one-time fee.
 
-## Before production
-Set `NODE_ENV=production` and fill every required value in `.env`:
-- `SITE_URL` — final HTTPS domain.
-- `STRIPE_SECRET_KEY`
-- `STRIPE_WEBHOOK_SECRET`
-- `CONTACT_EMAIL`
-- `LEGAL_BUSINESS_NAME`
-- `LEGAL_ADDRESS`
-- `LEGAL_JURISDICTION`
-- `DELIVERY_TIMEFRAME`
-- `REFUND_POLICY_TEXT`
-- `IP_HASH_SALT`
+## Runtime
 
-The production server intentionally refuses to start if critical values are missing.
+- `server.js`: existing Express website, leads/orders/admin/payment verification plus new routes.
+- `src/qonvexa/`: evidence/rules, scanner, service catalogue, preflight, quotes, cost ledger, queue, security, adapters and offline runner.
+- `scripts/qonvexa-worker.mjs`: separate Node process; no work is executed inside the public HTTP request.
+- Legacy `src/autonomos/`: retained. No runtime import, worker startup, marketplace polling or treasury revenue split in normal web startup. `scripts/start-autonomos.mjs` is a compatibility alias for web only; original launcher text is preserved in `scripts/start-autonomos.legacy.txt` and is not executed.
+- Existing JSON/NDJSON data remain in place. New SQLite state is additive at `$STORAGE_DIR/qonvexa-next.sqlite`, using Node's built-in `node:sqlite` (no new database server or npm dependency). WAL/transactions provide cross-process claims on one local persistent disk.
 
-## Stripe webhook
-Configure:
-`https://YOUR-DOMAIN/stripe/webhook`
+## Local setup
 
-Listen for:
-- `checkout.session.completed`
-- `checkout.session.async_payment_succeeded`
-- `checkout.session.async_payment_failed`
+Tested with Node 24.19.0, npm 11.9.0. Package engines are preserved: >=22.18.0 <25.0.0. Use Node 24 for parity with the validation.
 
-The code only fulfills an order when `payment_status === "paid"`.
+```sh
+npm ci --ignore-scripts --no-audit --no-fund
+cp .env.example .env
+npm start
+```
 
-## Storage
-This MVP writes:
-- `preview-requests.ndjson`
-- `orders.ndjson`
-- `fulfilled-sessions.json`
-- `payment-failures.ndjson`
+Set a local `ADMIN_PASSWORD`, `ADMIN_SESSION_SECRET`, and `IP_HASH_SALT` yourself. No real credentials are supplied. Public pages are at http://localhost:3000; admin at `/admin`; growth operations at `/admin-next.html`.
 
-Use `STORAGE_DIR` on a persistent disk. If your host has ephemeral/serverless storage, move this data to a real database before taking live orders.
+Default external behavior: public fetching OFF; payments OFF; notification webhooks OFF; outreach sending impossible; implementation writes impossible. `QONVEXA_IMPLEMENTATIONS` enables planning only. Setting `IMPLEMENTATION_DRY_RUN=false` does not unlock a live executor. CRM onboarding returns an explicit unavailable response and the UI does not solicit credentials.
 
-## Notifications
-Set `NOTIFICATION_WEBHOOK_URL` to a webhook from Make, Zapier, n8n, or another system. QONVEXA will POST `preview_request` and `paid_order` events there.
+To run public **read-only** scanning later, deliberately set `QONVEXA_PUBLIC_FETCH_ENABLED=true` and run `npm run worker` in another terminal using the same `STORAGE_DIR`. This documentation does not authorize production actions. No real websites were scanned during validation; tests supply local observations.
 
-## Manual launch items
-This repository cannot know your real:
-- domain,
-- legal entity/address/jurisdiction,
-- operational support email,
-- delivery commitment,
-- refund/cancellation policy,
-- Stripe live credentials,
-- webhook signing secret.
+The free request returns a personal link with a random fragment key. Save that original link. The workspace removes the fragment from the address bar and sends the key only as a bearer header; no localStorage. Find My Audit now requires the key as well as email. Staff can issue a key for a legacy lead after verifying the recipient. Legacy staff-written mini-audits are retained and returned only with that key; they are not relabeled as fresh scanner evidence.
 
-Those must be supplied by the operator before production.
+## Tests
 
-## Admin dashboard
-Open `/admin`.
+```sh
+npm run test:next
+node scripts/verify-existing-offline.mjs
+node scripts/syntax-next.mjs
+```
 
-Configure:
-- `ADMIN_USERNAME`
-- `ADMIN_PASSWORD`
-- `ADMIN_SESSION_SECRET`
-
-The admin dashboard shows recent preview requests and paid orders from the configured storage directory.
-Use a long unique password and a long random session secret in production.
-
-## Production 6.0 Owner Dashboard
-Open `/admin` after configuring the admin credentials.
-
-Views:
-- Overview
-- Leads
-- Orders
-- Clients
-- Activity
-- Settings
-
-The dashboard stores operational statuses, notes, settings and event logs under `STORAGE_DIR`.
-CSV exports are available for leads, orders and clients.
-
-Domain-email fields in Settings are preparation metadata only; actual mailbox creation happens with your domain/email provider.
+The original `verify` command remains available for transparency. It includes legacy earning tests; see the report for the unchanged pre-existing failure and the commit-based fixture that must not run under this task's constraints. The offline runner expands the entire original command chain so one failure does not hide later tests, denies external network and disallowed processes, and records each outcome.
 
 
-## Production 7.0
-Use `GITHUB-RENDER-DEPLOY.md` for the next step. The project is now designed to deploy first in `LAUNCH_MODE=staging`, then switch to `LAUNCH_MODE=live` only after qonvexa.co, legal/contact details and live payments are ready.
+## Data and lifecycle
 
+Queue operations are transactional, leases are fenced, attempts bounded, stale jobs recover. Unknown/ambiguous effects cannot be marked completed. Scans store structured facts, not raw pages. Temporary retention is available through `node scripts/qonvexa-retention.mjs --apply` against a deliberately selected local storage folder after backup. Without `--apply` it does nothing. Scheduling cleanup is an operator responsibility.
 
-## QONVEXA 9.0 Purchase Experience
-The customer checkout is now a four-step flow:
-1. Details
-2. Review
-3. Payment
-4. Confirmation
+No Git push/commit/PR, Render action, live account modification, email or payment was performed. `DEPLOY.md` describes future review only, not a deployment instruction to execute now.
 
-Payment methods are server-driven through `/api/purchase-options`.
+Bank-transfer tests use local fixture bank details and move no money. They verify server-controlled price, pending-by-default status, private-token access and authenticated admin confirmation.
 
-### Card checkout
-The existing hosted Stripe checkout remains available when Stripe credentials are configured.
+## Isolation update — 2026-09-27
 
-### Bank-transfer fallback
-Bank transfer is OFF by default. It becomes visible only when:
-- `MANUAL_PAYMENT_ENABLED=true`
-- `BANK_BENEFICIARY` is set
-- `BANK_IBAN` or `BANK_ACCOUNT` is set
+Qonvexa web/worker require neither external Redis nor PostgreSQL. Active deployment/env configuration and production verification are separated from legacy; original configuration is retained under docs/legacy. Data models are unchanged. Existing resource consumers in Render have NOT been inventoried. See ISOLATION_REPORT_UA.md for conditional shutdown criteria. No infrastructure action was performed.
 
-Optional:
-- `BANK_NAME`
-- `BANK_SWIFT`
-- `BANK_CURRENCY`
-- `BANK_PAYMENT_NOTE`
+## Production launcher (2026-09-27)
 
-Customers receive a private `/order.html?token=...` status link. It refreshes automatically while payment is pending.
-
-### Post-payment handoff
-If `DELIVERY_PORTAL_URL` is configured, the private order page exposes that URL only after confirmed payment status. Otherwise the customer is told that the personalized audit is in preparation.
-
-
-## Production Finalization (9.1.0)
-
-Production Finalization preserves the 9.0 funnel while hardening the release for real customers.
-
-Key additions:
-- responsive mobile navigation;
-- unified private order status for card and bank-transfer flows;
-- per-order secure deliverable URLs;
-- staging payment safety gate;
-- live persistent-storage guard;
-- correct paid-order/revenue metrics;
-- cache revalidation for unfingerprinted JS/CSS;
-- `/version` deployment marker;
-- improved checkout accessibility.
-
-Before live sales, configure the real legal values, approved live payment credentials and persistent storage. See `QONVEXA-PRODUCTION-FINALIZATION-REPORT.md`.
-
-## AutonomOS 1.0 (QONVEXA 12.0)
-
-This build embeds the private AutonomOS owner control plane at `/admin#autonomos` and a background autonomous runtime (a fixed core-role registry plus dynamically scaled, per-job task agents) under the existing QONVEXA server. It includes six x402-v2 machine products, Base/USDC receiver settlement to the configured public owner wallet, persistent market/profit/job state, bounded price optimization, per-job specialist worker spawning, zero-spend policy enforcement and an emergency-stop latch.
-
-See `AUTONOMOS-1.0-REPORT.md` and `AUTONOMOS-DEPLOY.md` for the full architecture and activation notes. Never store a seed phrase/private key in this repository or in QONVEXA environment variables intended for the receive-only seller rail.
-
-## AutonomOS 2.0
-
-
-See `AUTONOMOS-2.0-REPORT.md` and `AUTONOMOS-2.0-DEPLOY.md`.
-Trigger.dev production deployment sync.
-
-
-## AutonomOS 3.0
-AutonomOS 3.0 removes the legacy permanent-worker/child-agent organization. The runtime keeps only a small control plane (orchestration, policy, market radar, economics, routing, QA, treasury, security and learning). Research/code/content/automation workers are ephemeral leases created from an accepted job plan, grouped by specialist role, bounded by capacity, and guaranteed to retire on success or failure.
-
-The orchestration path is now plan-once → execute-once → QA → deliver. LangGraph is used when available for inspectable state/checkpointing, but an infrastructure fallback never replays a failed paid execution. The LLM client also retries the known reasoning-model empty-completion pattern with a larger completion budget and opens a short circuit breaker after repeated provider failures so bad model health cannot burn through a queue of paid jobs.
-
+`npm start` supervises web and audit worker as separate OS processes on the same persistent disk. `npm run start:web` runs web only; `npm run worker` runs only jobs. Worker restart attempts are bounded (3); HTTP stays available if the worker fails. Do not create a second Render worker pointing at an unshared local disk.

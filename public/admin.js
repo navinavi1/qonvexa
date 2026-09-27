@@ -69,8 +69,7 @@ async function loadDashboard(){
   try{
     data=await api('/api/admin/dashboard');
     let autonomosError='';
-    try{autonomosData=await api('/api/admin/autonomos')}
-    catch(err){autonomosError=err.message;console.error('AutonomOS dashboard:',err);autonomosData=null}
+    autonomosData=null; // Legacy runtime intentionally disconnected from this dashboard.
     renderAll();
     setRefreshStatus(autonomosError
       ?`Updated ${new Date().toLocaleTimeString()} · AutonomOS panel unavailable: ${autonomosError}`
@@ -153,7 +152,6 @@ function renderSettings(){
   el('#system-settings').innerHTML=[
     settingRow('Site URL',data.system.siteUrl),
     settingRow('Server contact email',data.system.contactEmail||'Not configured'),
-    settingRow('Card checkout',data.system.stripeConfigured?'Configured':'Not configured',data.system.stripeConfigured),
     settingRow('Bank-transfer fallback',data.system.manualPaymentConfigured?'Configured':'Not configured',data.system.manualPaymentConfigured),
     settingRow('Payment mode',data.system.paymentMode||'Not configured'),
     settingRow('Sales gate',data.system.salesEnabled?'Enabled':'Disabled',data.system.salesEnabled),
@@ -165,7 +163,7 @@ function renderSettings(){
 function settingRow(label,value,ok){return `<div class="system-row"><span>${esc(label)}</span><b>${esc(value)}</b>${typeof ok==='boolean'?`<i class="${ok?'ok':'warn'}">${ok?'READY':'TODO'}</i>`:''}</div>`}
 function renderReadiness(){
   const items=[
-    ['Payment method',Boolean(data.system.stripeConfigured || data.system.manualPaymentConfigured)],
+    ['Payment method',Boolean(data.system.manualPaymentConfigured)],
     ['Persistent storage',data.system.persistentStorage],
     ['Domain email',data.system.domainEmailConfigured],
     ['Notification automation',data.system.notificationWebhookConfigured]

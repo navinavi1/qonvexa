@@ -200,8 +200,10 @@ eq(errors.length, 0, `nothing threw while driving the checkout: ${errors.join(' 
   });
   eq(patched.status, 200, 'the admin can attach a mini-audit');
 
-  const found = await (await post('/api/find-mini-audit', { email: 'findme@example.com' })).json();
-  ok(found.found, 'the customer finds their mini-audit by email');
+  const anonymous = await (await post('/api/find-mini-audit', { email: 'findme@example.com' })).json();
+  eq(anonymous.found, false, 'email alone never reveals a customer audit');
+  const found = await (await post('/api/find-mini-audit', { email: 'findme@example.com', accessKey: created.personal.accessKey })).json();
+  ok(found.found, 'the customer finds their mini-audit with email and the private key');
   eq(found.miniAudit.findings.length, 3, 'each line the admin wrote is its own finding');
   eq(found.miniAudit.findings[0], 'Weak call to action', 'and the first one is intact');
   eq(found.miniAudit.findings[2], 'Slow contact form', 'and so is the last');

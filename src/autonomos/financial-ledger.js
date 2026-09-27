@@ -61,7 +61,7 @@ const CRYPTO_NETWORKS=new Set(['ethereum','mainnet','base','arbitrum','optimism'
 // every other crypto rail was reported as zero. The TaskForce worker settles USDC on Solana
 // into the Phantom wallet and writes rail 'taskforce_solana_wallet' with network 'solana':
 // real money in the owner's wallet, counted as $0. Fiat rails must still be excluded —
-// agrenting escrow and the Stripe card checkout are both USD with no chain.
+// agrenting escrow and the legacy payment card checkout are both USD with no chain.
 export function isCryptoRevenue(row={}){
   const rail=String(row.rail||'').toLowerCase();
   if(rail==='crypto')return true;

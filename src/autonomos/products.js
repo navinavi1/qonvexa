@@ -221,7 +221,6 @@ async function technologyFingerprint(url) {
     ['vue', /data-v-|__vue__|vue\.runtime/],
     ['google analytics', /googletagmanager\.com|google-analytics\.com|gtag\(/],
     ['meta pixel', /connect\.facebook\.net\/.*fbevents|fbq\(/],
-    ['stripe', /js\.stripe\.com|stripe-checkout/],
     ['hubspot', /js\.hs-scripts\.com|hubspot/]
   ].filter(([,pattern])=>pattern.test(html) || pattern.test(headerText)).map(([name])=>name);
   return {

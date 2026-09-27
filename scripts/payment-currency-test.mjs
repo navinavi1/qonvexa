@@ -1,5 +1,5 @@
 // AUDIT_PRICE_CENTS is a dollar amount -- the schema.org offer, /api/purchase-options and the
-// Stripe session all say USD. BANK_CURRENCY is whatever the receiving account happens to be
+// legacy payment session all say USD. BANK_CURRENCY is whatever the receiving account happens to be
 // denominated in. The bank-transfer order recorded amountTotal = priceCents alongside
 // currency = BANK_CURRENCY, which is the same number labelled with a different unit: with the
 // account in UAH a $149 audit was invoiced as 149 UAH, about $3.60, and the customer paid it.
@@ -33,7 +33,7 @@ async function withServer(bankCurrency, run) {
       AUDIT_PRICE_CENTS: '14900',
       SITE_URL: base,
       AUTONOMOS_ENABLED: 'false',
-      MANUAL_PAYMENT_ENABLED: 'true',
+      QONVEXA_PAYMENTS_ENABLED: 'true', MANUAL_PAYMENT_ENABLED: 'true',
       PAYMENT_MODE: 'manual',
       BANK_BENEFICIARY: 'Qonvexa Test',
       BANK_NAME: 'Test Bank',

@@ -42,9 +42,6 @@ for (const marker of [
 const server = fs.readFileSync('server.js','utf8');
 for (const endpoint of [
   '/api/preview-request',
-  '/api/create-checkout-session',
-  '/api/checkout-session-status',
-  '/stripe/webhook',
   '/api/admin/login',
   '/api/admin/dashboard',
   '/api/admin/export/',
@@ -54,7 +51,7 @@ for (const endpoint of [
   '/api/admin/orders/',
   '/api/admin/leads/',
   '/api/admin/autonomos',
-  '/api/autonomos/catalog'
+  '/api/autonomos'
 ]) {
   if (!server.includes(endpoint)) {
     console.error(`SERVER ENDPOINT MISSING: ${endpoint}`);
@@ -62,5 +59,7 @@ for (const endpoint of [
   }
 }
 
+if (server.includes('createAutonomOS')) { console.error('LEGACY RUNTIME MUST NOT START'); failed=true; }
+if (!fs.existsSync('src/qonvexa/routes.js')) { console.error('GROWTH ROUTES MISSING'); failed=true; }
 if (failed) process.exit(1);
 console.log('QONVEXA smoke check passed.');
