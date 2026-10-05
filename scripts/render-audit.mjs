@@ -19,20 +19,13 @@ if (!(rootRoute < staticMiddleware && robotsRoute < staticMiddleware && adminRou
   throw new Error('Route ordering invalid: explicit routes must be registered before express.static.');
 }
 
-// Not a style rule here but a security one. AutonomOS writes the global work feed and the
-// daily money report -- revenue, fees, costs, net profit, the owner/agent split and the whole
-// job pipeline -- as files inside publicDir. If their authenticated route is ever registered
-// after express.static, the static handler answers first and the owner's books go back to
-// being readable by anyone who guesses the filename.
-const privateViewRoute = server.indexOf('autonomos-(?:global-feed|money-report)');
-if (privateViewRoute < 0) {
-  throw new Error('The authenticated route for the generated money/feed views is missing: those files sit in publicDir and would be served to anyone.');
-}
-if (!(privateViewRoute < staticMiddleware)) {
-  throw new Error('The money/feed views must be routed before express.static, or the static handler serves them unauthenticated.');
-}
-if (!/autonomos-\(\?:global-feed\|money-report\)[^\n]*requireAdmin/.test(server)) {
-  throw new Error('The money/feed views must be behind requireAdmin.');
+// AutonomOS used to write its money report and work feed as files into publicDir, behind an
+// authenticated route registered ahead of express.static. AutonomOS is gone and so is that
+// route, so a file of that name reappearing in publicDir -- a restored backup, a stray copy --
+// would now be served to anyone. Refuse to ship one.
+const strayViews = fs.readdirSync(path.join(root, 'public')).filter(name => /^autonomos-.*\.json$/i.test(name));
+if (strayViews.length) {
+  throw new Error(`public/ holds AutonomOS output that nothing protects any more: ${strayViews.join(', ')}`);
 }
 
 // CI installs the version in .node-version; Render builds with NODE_VERSION from render.yaml.

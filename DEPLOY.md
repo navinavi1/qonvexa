@@ -14,7 +14,7 @@ Future steps, only after separate owner authorization:
 4. Decide same-host web/worker supervision versus an explicitly implemented shared durable backend. Two Render services do not share an attached web disk. The current SQLite queue supports one machine, not distributed replicas.
 5. Apply the additive schema only to staging first. Run fresh install, syntax, new suite and relevant legacy regressions.
 7. Verify persistent disk path, permissions, encryption key management, backup restore, rate limits behind the actual reverse proxy, bounded jobs and retention.
-8. Review and explicitly enable only the required live read/payment features. Never enable old AutonomOS workers. Implementation sending/writes remain unavailable until implemented and separately reviewed.
+8. Review and explicitly enable only the required live read/payment features. Implementation sending/writes remain unavailable until implemented and separately reviewed.
 9. Run health, preview, private-link, payment webhook, jobs and disconnect smoke tests. Deploy only after acceptance and explicit authorization; then monitor errors and job lag.
 10. Rollback: stop workers, disable new external actions, restore reviewed release and data snapshot, preserve financial records, reconcile ambiguous effects manually.
 

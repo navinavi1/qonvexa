@@ -32,7 +32,6 @@ async function withServer(bankCurrency, run) {
       ALLOW_STAGING_PAYMENTS: 'true',
       AUDIT_PRICE_CENTS: '14900',
       SITE_URL: base,
-      AUTONOMOS_ENABLED: 'false',
       QONVEXA_PAYMENTS_ENABLED: 'true', MANUAL_PAYMENT_ENABLED: 'true',
       PAYMENT_MODE: 'manual',
       BANK_BENEFICIARY: 'Qonvexa Test',

@@ -52,41 +52,35 @@ const HOST_NETWORK_KEYS = ['HTTPS_PROXY', 'HTTP_PROXY', 'NO_PROXY', 'https_proxy
 const hostNetwork = {};
 for (const key of HOST_NETWORK_KEYS) if (process.env[key]) hostNetwork[key] = process.env[key];
 
-// render.yaml's envVars, with a stand-in for each `sync: false` secret. Built from nothing
-// rather than spread over process.env, because the point is to catch a variable the service
-// needs and render.yaml does not set. This machine has GITHUB_TOKEN and AWS keys in its
-// environment that the application reads; inheriting them would hide exactly that.
+// render.yaml's envVars, read from render.yaml itself. This used to be a hand-written copy,
+// and a copy drifts: it still carried a page of AutonomOS variables after the blueprint had
+// dropped them. Built from nothing rather than spread over process.env, because the point is
+// to catch a variable the service needs and render.yaml does not set -- this machine has
+// GITHUB_TOKEN and AWS keys in its environment, and inheriting them would hide exactly that.
+//
+// `value:` is used as written; `generateValue: true` gets a fresh random value the way Render
+// generates one; `sync: false` is a secret the owner types into the dashboard, so it gets a
+// stand-in that satisfies the same startup checks the real one must.
+const STANDINS = {
+  ADMIN_PASSWORD: 'a-very-long-admin-password-123456',
+  LEGAL_BUSINESS_NAME: 'Qonvexa', LEGAL_ADDRESS: 'Kyiv, Ukraine',
+  BANK_BENEFICIARY: 'Qonvexa', BANK_NAME: 'Bank', BANK_IBAN: 'UA000000000000000000000000000',
+  BANK_SWIFT: 'AAAAUAUX', BANK_CURRENCY: 'USD', BANK_PAYMENT_NOTE: 'note'
+};
+const blueprintEnv = {};
+const yamlText = fs.readFileSync(path.join(repo, 'render.yaml'), 'utf8');
+for (const match of yamlText.matchAll(/- key: (\w+)\n\s+(value|sync|generateValue): ?(.*)/g)) {
+  const [, key, kind, raw] = match;
+  if (kind === 'value') blueprintEnv[key] = raw.trim().replace(/^"(.*)"$/, '$1');
+  else if (kind === 'generateValue') blueprintEnv[key] = crypto.randomBytes(24).toString('hex');
+  else blueprintEnv[key] = STANDINS[key] ?? 'repro-standin';
+}
+if (!blueprintEnv.NODE_ENV || !blueprintEnv.LAUNCH_MODE) fail('could not read the env vars from render.yaml');
 const renderEnv = {
   ...hostNetwork,
+  ...blueprintEnv,
   PATH: process.env.PATH || '', HOME: work,
-  NODE_ENV: 'production', LAUNCH_MODE: 'live', STORAGE_DIR: disk, SITE_URL: 'https://qonvexa.co',
-  AUDIT_PRICE_CENTS: '14900', PAYMENT_MODE: 'manual', ALLOW_STAGING_PAYMENTS: 'false',
-  MANUAL_PAYMENT_ENABLED: 'true', CONTACT_EMAIL: 'hello@qonvexa.co',
-  LEGAL_BUSINESS_NAME: 'Qonvexa', LEGAL_ADDRESS: 'Kyiv, Ukraine', LEGAL_JURISDICTION: 'Ukraine',
-  DELIVERY_TIMEFRAME: '1–24 hours after payment confirmation',
-  REFUND_POLICY_TEXT: 'Refunds are considered case by case once delivery has started.',
-  BANK_BENEFICIARY: 'Qonvexa', BANK_NAME: 'Bank', BANK_IBAN: 'UA000000000000000000000000000',
-  BANK_SWIFT: 'AAAAUAUX', BANK_CURRENCY: 'USD', BANK_PAYMENT_NOTE: 'note',
-  ADMIN_USERNAME: 'owner', ADMIN_PASSWORD: 'a-very-long-admin-password-123456',
-  ADMIN_SESSION_SECRET: 'generated-secret-0123456789abcdef0123456789abcdef',
-  IP_HASH_SALT: 'generated-salt-0123456789abcdef0123',
-  AUTONOMOS_ZERO_SPEND_MODE: 'false', AUTONOMOS_EARNED_FUNDS_ONLY: 'true',
-  AUTONOMOS_MAX_PAID_PROCUREMENT_USD: '3',
-  AUTONOMOS_OWNER_WALLET: '0x1f674bf085f6fed36fa198287d51edf0fe0bb9e2',
-  AUTONOMOS_ENABLED: 'true', AUTONOMOS_BASE_RPC_URL: 'https://mainnet.base.org',
-  AUTONOMOS_X402_ENABLED: 'true', AUTONOMOS_X402_NETWORK: 'eip155:8453',
-  AUTONOMOS_X402_FACILITATOR_URL: 'https://facilitator.xpay.sh',
-  AUTONOMOS_TASKMARKET_ENABLED: 'true',
-  AUTONOMOS_TASKMARKET_HOME: path.join(disk, 'taskmarket-home'),
-  TASKMARKET_API_URL: 'https://api.taskmarket.dev',
-  AUTONOMOS_TASKMARKET_INTERVAL_MS: '180000',
-  AUTONOMOS_SECURITY_RESEARCH_ENABLED: 'false',
-  AUTONOMOS_GITHUB_EXPECTED_LOGIN: 'navinavi1',
-  AUTONOMOS_TRIGGER_TASK_ID: 'autonomos-paid-job', S3_REGION: 'auto',
-  LANGFUSE_BASE_URL: 'https://cloud.langfuse.com',
-  AUTONOMOS_VERIFIED_PAYOUT_INTERMEDIARIES_JSON: '[]',
-  AUTONOMOS_PAYOUT_NETWORKS_JSON: '["base"]',
-  AUTONOMOS_PAYOUT_CRYPTO_JSON: '["USDC","USDT"]'
+  STORAGE_DIR: disk
 };
 
 const run = (label, file, args, options = {}) => {
@@ -112,8 +106,7 @@ if (dirty) console.log(`\nNote: your working tree has uncommitted changes, which
 run('npm ci --include=dev', 'npm', ['ci', '--include=dev']);
 
 // Snapshot the committed files before verify runs, so anything verify changes is verify's
-// doing and not npm's. dashboard-render-test.mjs used to overwrite public/autonomos-money-report.json
-// and public/autonomos-global-feed.json -- both tracked -- and then delete them, because
+// doing and not npm's. a test once overwrote two tracked JSON files in public/ and then deleted them, because
 // server.js resolves its public directory from __dirname and the test had nowhere else to put
 // them. So every `npm run verify` removed two tracked files from the tree it ran in, Render's
 // build tree included, and briefly left a fabricated revenue figure in the repository's own

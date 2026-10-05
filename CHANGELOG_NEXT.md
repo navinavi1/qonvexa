@@ -1,5 +1,9 @@
 # Change inventory
 
+## 2026-10-05
+
+- AutonomOS removed: `src/autonomos/`, `trigger/`, 76 legacy scripts and tests, the dead dashboard panel and its CSS, 19 npm dependencies (LangChain, OpenAI Agents, E2B, Trigger.dev, pg, redis, AWS S3, OpenTelemetry, Langfuse, zod) and their environment variables. Archived on the `archive/autonomos` branch.
+
 No original ZIP modification. No legacy source module deleted or rewritten. Generated runtime caches/data are excluded from the delivery.
 
 ## Modified existing files

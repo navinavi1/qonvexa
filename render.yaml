@@ -70,9 +70,6 @@ services:
         generateValue: true
       - key: IP_HASH_SALT
         generateValue: true
-      # Legacy services are deliberately not referenced by Qonvexa.
-      - key: AUTONOMOS_ENABLED
-        value: "false"
       - key: QONVEXA_PUBLIC_FETCH_ENABLED
         value: "false"
       - key: QONVEXA_PAYMENTS_ENABLED

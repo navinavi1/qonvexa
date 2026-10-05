@@ -11,7 +11,7 @@ Free website preview → personal audit workspace → configurable paid Growth A
 - `server.js`: existing Express website, leads/orders/admin/payment verification plus new routes.
 - `src/qonvexa/`: evidence/rules, scanner, service catalogue, preflight, quotes, cost ledger, queue, security, adapters and offline runner.
 - `scripts/qonvexa-worker.mjs`: separate Node process; no work is executed inside the public HTTP request.
-- Legacy `src/autonomos/`: retained. No runtime import, worker startup, marketplace polling or treasury revenue split in normal web startup. `scripts/start-autonomos.mjs` is a compatibility alias for web only; original launcher text is preserved in `scripts/start-autonomos.legacy.txt` and is not executed.
+- AutonomOS: removed from this repository on 2026-10-05. The full code as it last ran is kept on the `archive/autonomos` branch (`git checkout archive/autonomos`). Its runtime data, if any, remains on the Render disk under `/var/lib/qonvexa/data/autonomos`.
 - Existing JSON/NDJSON data remain in place. New SQLite state is additive at `$STORAGE_DIR/qonvexa-next.sqlite`, using Node's built-in `node:sqlite` (no new database server or npm dependency). WAL/transactions provide cross-process claims on one local persistent disk.
 
 ## Local setup

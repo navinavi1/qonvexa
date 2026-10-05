@@ -32,7 +32,7 @@ test('Application import graph and deployment config have no legacy service depe
  for(const entry of ['server.js','scripts/qonvexa-worker.mjs','scripts/start-autonomos.mjs','scripts/start-qonvexa.mjs'])visit(entry);
  const yaml=fs.readFileSync('render.yaml','utf8');assert(!/key: (REDIS_URL|DATABASE_URL)|autonomos-cache|autonomos-db|fromDatabase|fromService/.test(yaml));assert(!/AUTONOMOS_ENABLED\s*\n\s*value: "true"/.test(yaml));
  for(const f of ['.env.example','.env.production.example'])assert(!/^(REDIS_URL|DATABASE_URL)=/m.test(fs.readFileSync(f,'utf8')));
- const pkg=JSON.parse(fs.readFileSync('package.json'));assert.equal(pkg.scripts.verify,'node scripts/verify-qonvexa.mjs');assert(pkg.scripts['verify:legacy']);assert(!fs.readFileSync('.github/workflows/verify.yml','utf8').includes('src/autonomos'));
+ const pkg=JSON.parse(fs.readFileSync('package.json'));assert.equal(pkg.scripts.verify,'node scripts/verify-qonvexa.mjs');assert(!pkg.scripts['verify:legacy'],'AutonomOS lives on the archive/autonomos branch, not here');assert(!fs.existsSync('src/autonomos'),'the AutonomOS engine must not return to the Qonvexa tree');for(const dep of Object.keys(pkg.dependencies||{}))assert(!/^(pg|redis|@langchain|@openai\/agents|@e2b|@trigger\.dev|@aws-sdk)/.test(dep),'AutonomOS-only dependency: '+dep);assert(!fs.readFileSync('.github/workflows/verify.yml','utf8').includes('src/autonomos'));
 });
 
 test('Production launcher runs isolated web and worker on one disk',t=>launch(t,'scripts/start-qonvexa.mjs'));

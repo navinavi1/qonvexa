@@ -33,7 +33,6 @@ const server = spawn(process.execPath, ['server.js'], {
     LAUNCH_MODE: 'staging',
     AUDIT_PRICE_CENTS: '24900',
     SITE_URL: B,
-    AUTONOMOS_ENABLED: 'false',
     MANUAL_PAYMENT_ENABLED: 'true',
     PAYMENT_MODE: 'manual',
     BANK_IBAN: 'UA000000000000000000000000000',
@@ -216,7 +215,7 @@ eq(errors.length, 0, `nothing threw while driving the checkout: ${errors.join(' 
 // as it was. One implementation each, or the next fix reaches one page out of three.
 {
   const shared = ['esc', 'escHtml', 'escAttr', 'pretty', 'money', 'formatMoney', 'formatDate', 'link'];
-  const scripts = ['app.js', 'admin.js', 'order.js', 'success.js', 'marketplaces.js']
+  const scripts = ['app.js', 'admin.js', 'order.js', 'success.js']
     .filter(name => fs.existsSync(path.join(repo, 'public', name)));
   for (const name of shared) {
     const owners = scripts.filter(file =>

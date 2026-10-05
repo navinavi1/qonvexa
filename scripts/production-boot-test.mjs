@@ -46,7 +46,7 @@ const env = {
   ADMIN_USERNAME: 'owner', ADMIN_PASSWORD: PASSWORD,
   ADMIN_SESSION_SECRET: 'generated-secret-0123456789abcdef0123456789abcdef',
   IP_HASH_SALT: 'generated-salt-0123456789abcdef0123',
-  AUTONOMOS_ENABLED: 'false', npm_lifecycle_event: ''
+  npm_lifecycle_event: ''
 };
 
 const server = spawn(process.execPath, ['server.js'], {
